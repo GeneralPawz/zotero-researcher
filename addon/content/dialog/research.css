@@ -807,3 +807,10 @@ pre.q-code { margin: 0; white-space: pre-wrap; word-break: break-word; font-fami
 .project-info { position: fixed; z-index: 2000; width: 340px; max-width: calc(100vw - 16px); background: var(--bg); border: 1px solid var(--line); border-radius: 10px; box-shadow: var(--shadow); padding: 10px 12px; display: flex; flex-direction: column; gap: 6px; font-size: 12.5px; }
 .project-info .ap-facts { background: transparent; padding: 0; margin: 0; }
 .project-box { justify-content: center; }
+
+/* the keyword query wraps and grows with its text */
+textarea#query { resize: none; overflow: hidden; min-height: 40px; line-height: 1.45; white-space: pre-wrap; overflow-wrap: anywhere; }
+/* the panel header's buttons sit on the subheader's first row, so the collapse toggle
+   keeps its place when the subheader wraps onto two rows (panel open) or not (collapsed) */
+.ap-head, .ap-panel.collapsed .ap-head { align-items: flex-start; padding-top: 6px; }
+.ap-title { margin-top: 1px; }

@@ -48,7 +48,9 @@ const App = (window.App = {
     App.currentTab = name;
     for (const b of document.querySelectorAll(".tab")) b.classList.toggle("active", b.dataset.tab === name);
     for (const p of ["search", "review", "items", "citations"]) $("panel-" + p).hidden = p !== name;
-    App.panels[name]?.onShow?.();
+    const shown = App.panels[name]?.onShow?.();
+    if (name === "search") App.grow($("query"));
+    return shown;
   },
 
   profiles() {
@@ -287,6 +289,13 @@ const App = (window.App = {
     }
     const f = $("rv-funnel");
     if (f?.offsetHeight) root.setProperty("--subheader-h", f.offsetHeight + "px");
+  },
+
+  /** A text area as tall as its text (no scrollbar, no cut-off lines). */
+  grow(t) {
+    if (!t?.offsetParent) return;
+    t.style.height = "auto";
+    t.style.height = t.scrollHeight + 2 + "px";
   },
 
   /** A boolean query as a coloured code block; top-level AND / NOT start a new line. */
@@ -627,7 +636,7 @@ async function init() {
   await App.loadProjects();
   for (const p of Object.values(App.panels)) await p.init?.();
   App.syncLayout();
-  window.addEventListener("resize", () => App.syncLayout());
+  window.addEventListener("resize", () => (App.syncLayout(), App.grow($("query"))));
 
   // Pick up settings changes (new AI profile, research areas, keys) when the window regains focus.
   window.addEventListener("focus", () => {
@@ -687,7 +696,6 @@ App.panels.search = (() => {
     const lastMode = s.mode || ZR.Prefs.get("defaultMode", "structured");
     setMode(lastMode === "structured" ? "structured" : "llm");
     $("query").value = s.query || "";
-    lastCompiled = null;
     $("request").value = s.request || "";
     $("year-from").value = s.yearFrom || "";
     $("year-to").value = s.yearTo || "";
@@ -750,7 +758,11 @@ App.panels.search = (() => {
     applyState(stateForProject());
 
     $("query").addEventListener("input", validateQuery);
-    $("query").addEventListener("keydown", (e) => e.key === "Enter" && !App.busy && run());
+    $("query").addEventListener("keydown", (e) => {
+      if (e.key !== "Enter" || e.shiftKey) return;
+      e.preventDefault(); // Enter searches; the query wraps and grows instead of new lines
+      if (!App.busy) run();
+    });
     $("request").addEventListener("keydown", (e) => e.key === "Enter" && (e.ctrlKey || e.metaKey) && !App.busy && run());
     $("syntax-toggle").addEventListener("click", () => ($("syntax").hidden = !$("syntax").hidden));
     for (const ex of document.querySelectorAll(".example")) ex.addEventListener("click", () => useQueryText(ex.textContent));
@@ -799,7 +811,10 @@ App.panels.search = (() => {
     $("query").hidden = view !== "text";
     $("syntax-toggle").hidden = view !== "text";
     if (view === "builder") builder.render();
-    else $("query").focus();
+    else {
+      App.grow($("query"));
+      $("query").focus();
+    }
   }
 
   /** Put query text into whichever view is active. */
@@ -878,6 +893,7 @@ App.panels.search = (() => {
   const selectedSources = () => [...$("sources").querySelectorAll("input:checked")].map((i) => i.value);
 
   function validateQuery() {
+    App.grow($("query"));
     const fb = $("query-feedback");
     fb.className = "hint";
     fb.title = "";
