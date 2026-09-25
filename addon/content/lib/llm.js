@@ -16,7 +16,7 @@ ZR.LLM = (() => {
       baseURL: "",
       keyURL: "https://docs.anthropic.com/en/docs/claude-code/overview",
       needsKey: false,
-      models: ["sonnet", "opus", "haiku"],
+      models: ["fable", "opus", "sonnet", "haiku"], // aliases for the latest model of each family
     },
     {
       id: "codex-cli",
@@ -208,9 +208,26 @@ ZR.LLM = (() => {
     }
   }
 
-  async function listModels(profile) {
+  // Models that cannot chat (embeddings, speech, images, moderation, …)
+  const NOT_CHAT = /(embed|whisper|tts|dall-e|davinci|babbage|moderation|audio|realtime|transcribe|image|search-preview|computer-use|sora|guard|rerank|ocr)/i;
+  const dateOf = (v) => (typeof v === "number" ? new Date(v * 1000).toISOString().slice(0, 10) : String(v || "").slice(0, 10));
+  const kTokens = (n) => (n >= 1e6 ? `${+(n / 1e6).toFixed(1)}M` : `${Math.round(n / 1000)}k`);
+  const perM = (p) => {
+    const v = Number(p) * 1e6;
+    return v ? `$${v < 1 ? +v.toFixed(3) : +v.toFixed(2)}` : "free";
+  };
+
+  /**
+   * The models a profile can use, from the provider's own model list.
+   *   API providers: their /models endpoint (Anthropic, OpenAI, OpenRouter, Gemini, Mistral, …)
+   *   Codex CLI: the model list Codex itself keeps for your account (~/.codex/models_cache.json)
+   *   Claude Code: its aliases (fable, opus, sonnet, haiku) plus your account's extra models;
+   *                with {resolve: true} each alias is asked once which model it runs.
+   * @returns {Promise<{id: string, name: string, detail: string, isDefault?: boolean}[]>}
+   */
+  async function listModels(profile, { resolve = false } = {}) {
     const provider = getProvider(profile.provider);
-    if (provider.protocol === "cli") return provider.models; // the CLIs have no model-listing command
+    if (provider.protocol === "cli") return ZR.CLI.models(profile, { resolve });
     const baseURL = (profile.baseURL || provider.baseURL || "").replace(/\/+$/, "");
     const apiKey = profile.apiKey ?? ZR.Secrets.get(ZR.Secrets.llmKey(profile.id));
     const headers = Object.assign({}, provider.extraHeaders || {});
@@ -220,16 +237,41 @@ ZR.LLM = (() => {
     } else if (apiKey) {
       headers.Authorization = `Bearer ${apiKey}`;
     }
-    const url = provider.modelsURL && apiKey ? provider.modelsURL(apiKey) : `${baseURL}/models${provider.protocol === "anthropic" ? "?limit=100" : ""}`;
+    if (provider.needsKey && !apiKey && provider.id !== "openrouter") throw new Error("enter the API key first");
+    const url = provider.modelsURL && apiKey ? provider.modelsURL(apiKey) : `${baseURL}/models${provider.protocol === "anthropic" ? "?limit=1000" : ""}`;
     if (provider.modelsURL) delete headers.Authorization;
-    const res = await ZR.http("GET", url, { headers, timeout: 30000, noRetry: true });
-    const data = res.json();
+    const data = (await ZR.http("GET", url, { headers, timeout: 30000, noRetry: true })).json();
     const list = data.data || data.models || [];
-    return list
-      .map((m) => (typeof m === "string" ? m : m.id || m.name))
-      .filter(Boolean)
-      .map((id) => id.replace(/^models\//, ""))
-      .sort();
+    let out;
+    if (provider.protocol === "anthropic") {
+      out = list.map((m) => ({ id: m.id, name: m.display_name || m.id, detail: m.created_at ? "released " + dateOf(m.created_at) : "", order: m.created_at || "" }));
+    } else if (provider.id === "openrouter") {
+      out = list
+        .filter((m) => !m.architecture?.output_modalities || m.architecture.output_modalities.includes("text"))
+        .map((m) => ({
+          id: m.id,
+          name: m.name || m.id,
+          detail: [m.pricing ? `${perM(m.pricing.prompt)} in / ${perM(m.pricing.completion)} out per M tokens` : "", m.context_length ? kTokens(m.context_length) + " context" : ""].filter(Boolean).join(" · "),
+          order: m.created || 0,
+        }));
+    } else if (provider.modelsURL) {
+      // Gemini native API
+      out = list
+        .filter((m) => !m.supportedGenerationMethods || m.supportedGenerationMethods.includes("generateContent"))
+        .map((m) => ({ id: String(m.name).replace(/^models\//, ""), name: m.displayName || m.name, detail: [m.inputTokenLimit ? kTokens(m.inputTokenLimit) + " context" : "", U.truncate(m.description || "", 90)].filter(Boolean).join(" · "), order: 0 }));
+    } else {
+      out = list
+        .map((m) => (typeof m === "string" ? { id: m } : m))
+        .filter((m) => m.id && !NOT_CHAT.test(m.id) && m.active !== false && m.capabilities?.completion_chat !== false && !m.deprecation)
+        .map((m) => ({
+          id: m.id,
+          name: m.name && m.name !== m.id ? m.name : m.id,
+          detail: [m.max_context_length || m.context_window ? kTokens(m.max_context_length || m.context_window) + " context" : "", m.created ? "released " + dateOf(m.created) : "", U.truncate(m.description || "", 90)].filter(Boolean).join(" · "),
+          order: m.created || 0,
+        }));
+    }
+    // Newest first where the provider says when a model came out; otherwise by name
+    return out.sort((a, b) => (b.order > a.order ? 1 : b.order < a.order ? -1 : a.name.localeCompare(b.name))).map(({ order, ...m }) => m);
   }
 
   async function test(profile) {

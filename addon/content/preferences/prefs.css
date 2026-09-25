@@ -20,7 +20,7 @@
 #zr-prefs .zr-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; margin: 4px 0; }
 #zr-prefs .zr-grid {
   display: grid;
-  grid-template-columns: max-content 1fr;
+  grid-template-columns: max-content minmax(0, 1fr);
   gap: 6px 12px;
   align-items: center;
   margin: 6px 0 10px;
@@ -64,3 +64,43 @@
 #zr-prefs .zr-inline { display: inline-flex; align-items: center; gap: 4px; margin-left: auto; }
 #zr-prefs .zr-src-toolbar input[type="search"] { margin-left: 8px; }
 #zr-prefs .zr-details summary { cursor: pointer; font-weight: 600; margin: 4px 0 8px; }
+
+/* hidden must win over display rules (e.g. .zr-actions is flex) */
+#zr-prefs [hidden] { display: none !important; }
+#zr-prefs .zr-grid > * { min-width: 0; }
+#zr-prefs .zr-editor { max-width: 100%; box-sizing: border-box; }
+#zr-prefs .zr-field { width: 100%; max-width: 34em; box-sizing: border-box; }
+#zr-prefs .zr-row { display: flex; gap: 6px; align-items: center; max-width: 42em; }
+#zr-prefs .zr-row > .zr-field { flex: 1 1 auto; min-width: 0; }
+#zr-prefs .zr-row > button { flex: none; }
+#zr-prefs .zr-model-list {
+  max-width: 42em;
+  max-height: 16em;
+  overflow: auto;
+  margin: 4px 0;
+  border: 1px solid var(--fill-quinary, rgba(128,128,128,.3));
+  border-radius: 6px;
+}
+#zr-prefs .zr-model-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 0 10px;
+  width: 100%;
+  text-align: start;
+  border: 0;
+  border-bottom: 1px solid var(--fill-quinary, rgba(128,128,128,.2));
+  border-radius: 0;
+  background: transparent;
+  padding: 5px 8px;
+  margin: 0;
+  cursor: pointer;
+}
+#zr-prefs .zr-model-row:hover { background: var(--fill-quinary, rgba(128,128,128,.12)); }
+#zr-prefs .zr-model-row.zr-selected { background: color-mix(in srgb, var(--accent-blue, #4072e5) 18%, transparent); }
+#zr-prefs .zr-model-name { font-weight: 600; display: inline-flex; gap: 6px; align-items: center; }
+#zr-prefs .zr-model-id { color: var(--fill-secondary, gray); font-size: 0.9em; }
+#zr-prefs .zr-model-detail { grid-column: 1 / -1; color: var(--fill-secondary, gray); font-size: 0.9em; }
+#zr-prefs .zr-editor .zr-grid { align-items: start; }
+#zr-prefs .zr-editor .zr-grid > label { padding-top: 5px; }
+#zr-prefs .zr-model-row { height: auto; min-height: 0; line-height: 1.35; box-sizing: border-box; }
+#zr-prefs .zr-model-row:focus-visible { outline: 2px solid var(--accent-blue, #4072e5); outline-offset: -2px; }

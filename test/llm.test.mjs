@@ -44,20 +44,84 @@ test("missing key and model are reported clearly", async () => {
   await assert.rejects(ZR.LLM.chat(null, []), /No LLM profile/);
 });
 
-test("listModels: OpenAI-style, Anthropic, and Gemini native endpoint", async () => {
-  const http = mockHTTP((url) => {
+test("listModels: each provider's own model list, with names and details", async () => {
+  const http = mockHTTP((url, method, o) => {
     if (url.includes("generativelanguage")) {
       assert.match(url, /v1beta\/models\?pageSize=200&key=G/);
-      return { models: [{ name: "models/gemini-3.8-flash" }] };
+      return {
+        models: [
+          { name: "models/gemini-3.8-flash", displayName: "Gemini 3.8 Flash", inputTokenLimit: 1048576, supportedGenerationMethods: ["generateContent"] },
+          { name: "models/text-embedding-9", displayName: "Embedding", supportedGenerationMethods: ["embedContent"] },
+        ],
+      };
     }
+    if (url.startsWith("https://api.anthropic.com/v1/models")) {
+      assert.equal(o.headers["x-api-key"], "k");
+      assert.equal(o.headers["anthropic-version"], "2023-06-01");
+      return { data: [{ id: "claude-sonnet-5", display_name: "Claude Sonnet 5", created_at: "2026-03-01T00:00:00Z" }, { id: "claude-opus-5-5", display_name: "Claude Opus 5.5", created_at: "2026-08-01T00:00:00Z" }] };
+    }
+    if (url === "https://openrouter.ai/api/v1/models") {
+      return {
+        data: [
+          { id: "anthropic/claude-sonnet-5", name: "Anthropic: Claude Sonnet 5", context_length: 1000000, pricing: { prompt: "0.000003", completion: "0.000015" }, architecture: { output_modalities: ["text"] }, created: 1772000000 },
+          { id: "x/image-gen", name: "Image model", architecture: { output_modalities: ["image"] } },
+        ],
+      };
+    }
+    if (url === "https://api.openai.com/v1/models") return { data: [{ id: "gpt-6-luna", created: 1770000000 }, { id: "text-embedding-4", created: 1780000000 }, { id: "gpt-6-astra", created: 1775000000 }, { id: "whisper-2" }] };
     return { data: [{ id: "b" }, { id: "a" }] };
   });
   const ZR = load({ http });
-  eq(await ZR.LLM.listModels({ provider: "groq", apiKey: "k" }), ["a", "b"]);
-  eq(await ZR.LLM.listModels({ provider: "gemini", apiKey: "G" }), ["gemini-3.8-flash"]);
-  await ZR.LLM.listModels({ provider: "anthropic", apiKey: "k" });
-  assert.match(http.calls[2].url, /api\.anthropic\.com\/v1\/models\?limit=100/);
-  assert.equal(http.calls[2].options.headers["x-api-key"], "k");
+  eq((await ZR.LLM.listModels({ provider: "groq", apiKey: "k" })).map((m) => m.id), ["a", "b"]);
+  const gemini = await ZR.LLM.listModels({ provider: "gemini", apiKey: "G" });
+  eq(gemini.map((m) => [m.id, m.name]), [["gemini-3.8-flash", "Gemini 3.8 Flash"]]);
+  assert.match(gemini[0].detail, /1M context/);
+  const claude = await ZR.LLM.listModels({ provider: "anthropic", apiKey: "k" });
+  eq(claude.map((m) => m.name), ["Claude Opus 5.5", "Claude Sonnet 5"], "newest first, display names");
+  assert.ok(http.calls.some((c) => /anthropic\.com\/v1\/models\?limit=1000/.test(c.url)));
+  const or = await ZR.LLM.listModels({ provider: "openrouter" }); // public list, no key needed
+  eq(or.map((m) => m.id), ["anthropic/claude-sonnet-5"], "text models only");
+  assert.equal(or[0].detail, "$3 in / $15 out per M tokens · 1M context");
+  const openai = await ZR.LLM.listModels({ provider: "openai", apiKey: "k" });
+  eq(openai.map((m) => m.id), ["gpt-6-astra", "gpt-6-luna"], "chat models only, newest first");
+  await assert.rejects(ZR.LLM.listModels({ provider: "anthropic", apiKey: "" }), /API key/);
+});
+
+test("listModels for the CLIs reads what the CLIs themselves know", async () => {
+  const files = {
+    "/home/.codex/models_cache.json": JSON.stringify({
+      models: [
+        { slug: "gpt-6-astra", display_name: "GPT-6-Astra", description: "Frontier intelligence.", visibility: "list", supported_reasoning_levels: [{ effort: "low" }, { effort: "high" }] },
+        { slug: "gpt-5.6-terra", display_name: "GPT-5.6-Terra", description: "Everyday work.", visibility: "list" },
+        { slug: "codex-auto-review", display_name: "Codex Auto Review", visibility: "hide" },
+      ],
+    }),
+    "/home/.codex/config.toml": 'model = "gpt-5.6-terra"\nmodel_reasoning_effort = "medium"\n',
+    "/home/.claude/settings.json": JSON.stringify({ model: "opus[1m]" }),
+    "/home/.claude.json": JSON.stringify({ additionalModelOptionsCache: [{ value: "claude-fable-5-1[1m]", label: "Fable", description: "Fable 5.1 · Most capable" }] }),
+  };
+  const globals = {
+    IOUtils: {
+      readUTF8: async (p) => {
+        if (!(p in files)) throw new Error("ENOENT " + p);
+        return files[p];
+      },
+      exists: async (p) => p in files,
+    },
+    PathUtils: { join: (...a) => a.join("/") },
+    Services: { env: { get: () => "" }, dirsvc: { get: () => ({ path: "/home" }) }, appinfo: { OS: "Linux" } },
+    Components: { interfaces: { nsIFile: {} } },
+  };
+  const ZR = load({ globals });
+  const codex = await ZR.LLM.listModels({ provider: "codex-cli" });
+  eq(codex.map((m) => [m.id, m.name, !!m.isDefault]), [["gpt-6-astra", "GPT-6-Astra", false], ["gpt-5.6-terra", "GPT-5.6-Terra", true]], "hidden models left out; your default marked");
+  assert.match(codex[0].detail, /reasoning: low, high/);
+  const claude = await ZR.LLM.listModels({ provider: "claude-cli" });
+  eq(claude.map((m) => m.id), ["fable", "opus", "sonnet", "haiku", "claude-fable-5-1[1m]"]);
+  assert.equal(claude.find((m) => m.isDefault).id, "opus", "default from Claude Code settings");
+  // Resolved aliases (from an earlier check) show the exact model
+  ZR.Prefs.setJSON("claudeModelMap", { sonnet: { id: "claude-sonnet-5", at: "2026-09-25" } });
+  assert.match((await ZR.LLM.listModels({ provider: "claude-cli" })).find((m) => m.id === "sonnet").detail, /runs claude-sonnet-5/);
 });
 
 test("planQuery validates the LLM's boolean query", async () => {
@@ -110,7 +174,6 @@ test("CLI providers (Claude Code / Codex) need no key or model and route to the 
   assert.equal(plan.query, "BIM AND IFC");
   assert.equal(calls[0].provider, "claude-cli");
   assert.match(calls[0].system, /research librarian/);
-  eq(await ZR.LLM.listModels({ provider: "claude-cli" }), ["sonnet", "opus", "haiku"]);
   const ids = ZR.LLM.PROVIDERS.map((p) => p.id);
   for (const id of ["claude-cli", "codex-cli", "anthropic", "openrouter"]) assert.ok(ids.includes(id), id);
 });

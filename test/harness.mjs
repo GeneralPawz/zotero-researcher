@@ -9,9 +9,9 @@ import assert from "node:assert/strict";
 const content = join(fileURLToPath(import.meta.url), "..", "..", "addon", "content");
 const FILES = ["lib/util.js", "lib/prefs.js", "lib/secrets.js", "lib/store.js", "lib/query.js", "lib/querybuilder.js", "lib/records.js", "sources/registry.js", "sources/adapters.js", "lib/llm.js", "lib/cli.js", "lib/assist.js", "lib/methodologies.js", "lib/embeddings.js", "lib/system1.js", "lib/prisma.js", "lib/projects.js", "lib/citations.js", "lib/search.js"];
 
-export function load({ http, prefs = {} } = {}) {
+export function load({ http, prefs = {}, globals = {} } = {}) {
   const ZR = { id: "test", version: "test" };
-  const ctx = vm.createContext({ ZR, console, setTimeout, clearTimeout, URLSearchParams, TextEncoder });
+  const ctx = vm.createContext(Object.assign({ ZR, console, setTimeout, clearTimeout, URLSearchParams, TextEncoder }, globals));
   for (const f of FILES) vm.runInContext(readFileSync(join(content, f), "utf8"), ctx, { filename: f });
   const store = new Map(Object.entries(prefs));
   ZR.Prefs._backend = { get: (k) => store.get(k), set: (k, v) => store.set(k, v) };

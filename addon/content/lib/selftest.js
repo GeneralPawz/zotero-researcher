@@ -586,11 +586,25 @@ ZR.SelfTest = (() => {
       await pick(d.getElementById("zr-llm-provider"), "Claude Code CLI");
       const program = await waitFor(() => [...d.querySelectorAll("#zr-llm-editor input")].map((i) => i.value).find((v) => /claude(.exe|.cmd)?$/i.test(v)), 15000).catch(() => "not detected");
       const keyRowHidden = [...d.querySelectorAll("#zr-llm-editor label")].find((l) => l.textContent === "API key")?.hidden;
+      // The key field itself must be gone for CLIs, and nothing may stick out of the pane
+      const editor = d.querySelector("#zr-llm-editor .zr-editor");
+      if (!editor.getBoundingClientRect().width) throw new Error("the AI provider editor is not visible (Settings search active?) — layout can't be checked");
+      const keyFieldShown = d.querySelector('#zr-llm-editor input[type="password"]').getBoundingClientRect().width > 0;
+      const claudeModels = await waitFor(() => d.querySelectorAll("#zr-llm-editor .zr-model-row").length >= 4 && [...d.querySelectorAll("#zr-llm-editor .zr-model-row")].map((r) => r.querySelector(".zr-model-id").textContent), 15000).catch(() => []);
+      const right = editor.getBoundingClientRect().right;
+      const overflowing = [...editor.querySelectorAll("input, select, button, .zr-dd-btn")].filter((e) => e.getBoundingClientRect().width && e.getBoundingClientRect().right > right + 1).map((e) => e.id || e.className || e.localName);
+      editor.scrollIntoView();
+      await U.sleep(200);
+      await shot(pw, "06c-ai-editor-cli.png");
+      await pick(d.getElementById("zr-llm-provider"), "Codex CLI");
+      const codexModels = await waitFor(() => [...d.querySelectorAll("#zr-llm-editor .zr-model-row .zr-model-id")].map((r) => r.textContent).filter((t) => /gpt/i.test(t)).length && [...d.querySelectorAll("#zr-llm-editor .zr-model-row .zr-model-id")].map((r) => r.textContent), 15000).catch(() => []);
+      await shot(pw, "06d-ai-editor-codex.png");
+      if (keyFieldShown || overflowing.length || claudeModels.length < 4) throw new Error(JSON.stringify({ keyFieldShown, overflowing, claudeModels }));
       d.getElementById("zr-llm-provider").zrDropdownButton.click();
       await U.sleep(200);
       await shot(pw, "06b-preferences-dropdown.png");
       d.querySelector(".zr-dd-menu .zr-dd-item")?.click();
-      const res = { checklist: d.querySelectorAll("#zr-checklist .zr-check-row").length, areas: d.querySelectorAll("#zr-areas .zr-area").length, databasesShown: rowsDefault, pubmedListed, aiEditor: !!d.querySelector("#zr-llm-editor .zr-editor"), providerMenuVisible: prov.visible, baseAfterPick, cliProgram: program, cliHidesKey: keyRowHidden, system1: d.querySelectorAll("#zr-s1 select, #zr-s1 input").length };
+      const res = { checklist: d.querySelectorAll("#zr-checklist .zr-check-row").length, areas: d.querySelectorAll("#zr-areas .zr-area").length, databasesShown: rowsDefault, pubmedListed, aiEditor: !!d.querySelector("#zr-llm-editor .zr-editor"), providerMenuVisible: prov.visible, baseAfterPick, cliProgram: program, cliHidesKey: keyRowHidden, claudeModels, codexModels, system1: d.querySelectorAll("#zr-s1 select, #zr-s1 input").length };
       pw.close();
       if (pubmedListed) throw new Error("PubMed listed although medicine is off");
       return res;

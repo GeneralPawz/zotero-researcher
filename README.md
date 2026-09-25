@@ -175,7 +175,17 @@ You can add any number of AI profiles and switch between them:
 - **Local models:** Ollama, LM Studio
 - **Custom:** any OpenAI-compatible endpoint
 
-*Fetch available models* lists the models your key can use, and *Test* checks the connection.
+The model list comes from the provider itself, with names and details:
+- **Anthropic** (`/v1/models`): display names, newest first.
+- **OpenAI** (`/v1/models`): chat models only, newest first.
+- **OpenRouter** (public `/api/v1/models`, no key needed): prices per million tokens and context size.
+- **Gemini, Mistral, Groq and others:** their own model endpoint.
+- **Codex CLI:** the models Codex lists for your ChatGPT plan, with your default marked.
+- **Claude Code CLI:** its aliases (`fable`, `opus`, `sonnet`, `haiku`) plus any extra models on your account.
+  - *Check which model each alias runs* sends one short request per alias and shows the exact model behind it, e.g. `sonnet` → `claude-sonnet-5`.
+  - The result is remembered.
+
+*Test* checks the connection.
 
 ## System 1 model (screening)
 
