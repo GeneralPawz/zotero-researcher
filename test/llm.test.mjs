@@ -98,3 +98,27 @@ test("sanitizeHTML strips scripts, styles and attributes", () => {
   const out = ZR.Assist.sanitizeHTML('<h2 onclick="x()">T</h2><script>alert(1)</script><table style="c"><tr><td>1</td></tr></table><a href="javascript:x">j</a><a href="https://ok">k</a><img src=x>');
   assert.equal(out, '<h2>T</h2><table><tr><td>1</td></tr></table><a>j</a><a href="https://ok">k</a>');
 });
+
+test("CLI providers (Claude Code / Codex) need no key or model and route to the CLI bridge", async () => {
+  const ZR = load();
+  const calls = [];
+  ZR.CLI.chat = async (profile, messages, opts) => {
+    calls.push({ provider: profile.provider, messages, system: opts.system });
+    return '{"query": "BIM AND IFC", "yearFrom": null, "yearTo": null, "concepts": [], "rationale": "r"}';
+  };
+  const plan = await ZR.Assist.planQuery({ id: "c", name: "Claude Code", provider: "claude-cli", model: "", baseURL: "" }, "BIM papers");
+  assert.equal(plan.query, "BIM AND IFC");
+  assert.equal(calls[0].provider, "claude-cli");
+  assert.match(calls[0].system, /research librarian/);
+  eq(await ZR.LLM.listModels({ provider: "claude-cli" }), ["sonnet", "opus", "haiku"]);
+  const ids = ZR.LLM.PROVIDERS.map((p) => p.id);
+  for (const id of ["claude-cli", "codex-cli", "anthropic", "openrouter"]) assert.ok(ids.includes(id), id);
+});
+
+test("multi-turn chats are flattened into one CLI prompt", () => {
+  const ZR = load();
+  assert.equal(ZR.CLI.transcript([{ role: "user", content: "Hi" }], "SYS", false), "Hi");
+  assert.equal(ZR.CLI.transcript([{ role: "user", content: "Hi" }], "SYS", true), "Instructions:\nSYS\n\nHi");
+  const t = ZR.CLI.transcript([{ role: "user", content: "A" }, { role: "assistant", content: "B" }, { role: "user", content: "C" }], "", false);
+  assert.equal(t, "User:\nA\n\nAssistant:\nB\n\nUser:\nC\n\nAssistant:");
+});

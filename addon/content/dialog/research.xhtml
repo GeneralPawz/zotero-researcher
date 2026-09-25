@@ -4,14 +4,14 @@
 <head>
   <meta charset="utf-8"/>
   <title>Zotero Researcher</title>
-  <link rel="stylesheet" href="chrome://zotero-researcher/content/dialog/research.css"/>
+  <link rel="stylesheet" href="chrome://zotero-researcher/content/dialog/research.css?v=__ZR_VERSION__"/>
   <script src="chrome://zotero/content/include.js"></script>
-  <script src="chrome://zotero-researcher/content/dropdown.js"></script>
-  <script src="chrome://zotero-researcher/content/dialog/research.js"></script>
-  <script src="chrome://zotero-researcher/content/dialog/items.js"></script>
-  <script src="chrome://zotero-researcher/content/dialog/review.js"></script>
-  <script src="chrome://zotero-researcher/content/dialog/citations.js"></script>
-  <script src="chrome://zotero-researcher/content/dialog/tour.js"></script>
+  <script src="chrome://zotero-researcher/content/dropdown.js?v=__ZR_VERSION__"></script>
+  <script src="chrome://zotero-researcher/content/dialog/research.js?v=__ZR_VERSION__"></script>
+  <script src="chrome://zotero-researcher/content/dialog/items.js?v=__ZR_VERSION__"></script>
+  <script src="chrome://zotero-researcher/content/dialog/review.js?v=__ZR_VERSION__"></script>
+  <script src="chrome://zotero-researcher/content/dialog/citations.js?v=__ZR_VERSION__"></script>
+  <script src="chrome://zotero-researcher/content/dialog/tour.js?v=__ZR_VERSION__"></script>
 </head>
 <body data-mode="structured">
   <header class="top">
@@ -86,6 +86,16 @@
             <label class="check" title="Title, abstract or keywords must satisfy the query exactly"><input type="checkbox" id="strict"/> Strict match on title/abstract</label>
           </div>
           <div class="opt-group">
+            <div class="opt-title">Filters</div>
+            <div class="opt-label">Languages <span class="hint">— none selected = any</span></div>
+            <div id="lang-picks" class="picks"></div>
+            <div class="opt-label">Publication types <span class="hint">— none selected = any</span></div>
+            <div id="type-picks" class="picks"></div>
+            <label class="inline" title="Papers whose source reports no citation count are kept">At least <input type="number" id="min-cites" min="0" step="1" placeholder="0"/> citations</label>
+            <label class="check"><input type="checkbox" id="has-abstract"/> Has an abstract</label>
+            <label class="check"><input type="checkbox" id="has-doi"/> Has a DOI</label>
+          </div>
+          <div class="opt-group">
             <div class="opt-title">Your library</div>
             <label class="check"><input type="checkbox" id="skip-existing" checked="checked"/> Hide papers already in the library</label>
             <label class="check" title="Papers you (or the AI) excluded before, in any review or search"><input type="checkbox" id="hide-excluded"/> Hide papers excluded before</label>
@@ -110,6 +120,14 @@
       <span id="results-count"></span>
       <button class="link" id="res-all">select all</button> · <button class="link" id="res-none">none</button>
       <input type="search" id="res-filter" placeholder="Filter results…"/>
+      <span class="spacer"></span>
+      <label class="inline hint">Sort <select id="res-sort">
+        <option value="relevance">Best match</option>
+        <option value="cited">Most cited</option>
+        <option value="newest">Newest first</option>
+        <option value="oldest">Oldest first</option>
+        <option value="title">Title A–Z</option>
+      </select></label>
     </div>
     <div class="scroll" id="results-scroll">
       <div id="search-empty" class="empty-state">

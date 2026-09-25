@@ -180,7 +180,7 @@ var ZRPrefsPane = (() => {
 
   function openEditor(p) {
     const isNew = !p;
-    const providerID = p?.provider || "openai";
+    const providerID = p?.provider || ZR.LLM.PROVIDERS[0].id;
     editing = p ? Object.assign({}, p) : { id: "llm-" + Date.now().toString(36), name: "", provider: providerID, baseURL: "", model: "", temperature: "" };
     const box = document.getElementById("zr-llm-editor");
     box.replaceChildren();
@@ -195,13 +195,40 @@ var ZRPrefsPane = (() => {
     const datalist = el("datalist", { id: "zr-model-list" });
     const temp = el("input", { type: "number", min: "0", max: "2", step: "0.1", value: editing.temperature ?? "", placeholder: "default", style: "width: 80px" });
     const status = el("span", { class: "zr-status" });
+    // Rows that differ between API providers and local CLIs (Claude Code / Codex)
+    const urlLabel = el("label", { text: "Base URL" });
+    const urlHelp = el("span", { class: "zr-help" });
+    const detectBtn = el("button", {
+      text: "Detect",
+      onclick: async () => {
+        status.className = "zr-status";
+        status.textContent = "looking for the program…";
+        const found = await ZR.CLI.detect(providerSel.value);
+        if (found) baseURL.value = found;
+        status.textContent = found ? "found " + found : "not found — install it, or enter the path to the program";
+        status.classList.add(found ? "zr-good" : "zr-bad");
+      },
+    });
+    const urlRow = el("div", { class: "zr-actions" }, [baseURL, detectBtn, urlHelp]);
+    const keyLabel = el("label", { text: "API key" });
+    const keyRow = el("div", { class: "zr-actions" }, [key, showKey, keyLink]);
+    const tempLabel = el("label", { text: "Temperature" });
+    const tempRow = el("div", { class: "zr-actions" }, [temp, el("span", { class: "zr-help", text: "leave empty for provider default (required for some reasoning models)" })]);
+    const fetchBtn = el("button", { text: "Fetch available models" });
 
     const syncProvider = (resetURL) => {
       const prov = ZR.LLM.getProvider(providerSel.value);
-      if (resetURL || !baseURL.value) baseURL.value = prov.baseURL;
-      baseURL.placeholder = prov.baseURL || "https://your-endpoint/v1";
+      const cli = prov.protocol === "cli";
+      if (resetURL || (!baseURL.value && !cli)) baseURL.value = prov.baseURL;
+      urlLabel.textContent = cli ? "Program" : "Base URL";
+      baseURL.placeholder = cli ? "detected automatically" : prov.baseURL || "https://your-endpoint/v1";
+      urlHelp.textContent = cli ? "Signs in with the account you use in the terminal — no API key, uses your subscription." : "";
+      detectBtn.hidden = !cli;
+      for (const e of [keyLabel, keyRow, tempLabel, tempRow, fetchBtn]) e.hidden = cli;
+      model.placeholder = cli ? (prov.models.length ? "e.g. " + prov.models.join(", ") + " — empty = CLI default" : "empty = your CLI default") : "model id";
+      if (cli && !baseURL.value) detectBtn.click();
       datalist.replaceChildren(...prov.models.map((m) => el("option", { value: m })));
-      if (!model.value && prov.models[0]) model.value = prov.models[0];
+      if (!model.value && prov.models[0] && !cli) model.value = prov.models[0];
       keyLink.replaceChildren(prov.keyURL ? link(prov.needsKey ? "Get an API key" : "Download / docs", prov.keyURL) : "");
       key.placeholder = prov.needsKey ? "API key (required)" : "API key (optional)";
       if (!name.value || name.dataset.auto) {
@@ -226,6 +253,7 @@ var ZRPrefsPane = (() => {
       temperature: temp.value === "" ? "" : Number(temp.value),
     });
 
+    fetchBtn.addEventListener("click", () => fetchModels());
     const fetchModels = async () => {
       status.className = "zr-status";
       status.textContent = "fetching models…";
@@ -242,7 +270,7 @@ var ZRPrefsPane = (() => {
 
     const save = async () => {
       const prof = current();
-      if (!prof.model) {
+      if (!prof.model && ZR.LLM.getProvider(prof.provider).protocol !== "cli") {
         status.textContent = "Choose a model.";
         status.className = "zr-status zr-bad";
         return;
@@ -267,14 +295,14 @@ var ZRPrefsPane = (() => {
           providerSel,
           el("label", { text: "Name" }),
           name,
-          el("label", { text: "Base URL" }),
-          baseURL,
-          el("label", { text: "API key" }),
-          el("div", { class: "zr-actions" }, [key, showKey, keyLink]),
+          urlLabel,
+          urlRow,
+          keyLabel,
+          keyRow,
           el("label", { text: "Model" }),
-          el("div", { class: "zr-actions" }, [model, datalist, el("button", { text: "Fetch available models", onclick: fetchModels })]),
-          el("label", { text: "Temperature" }),
-          el("div", { class: "zr-actions" }, [temp, el("span", { class: "zr-help", text: "leave empty for provider default (required for some reasoning models)" })]),
+          el("div", { class: "zr-actions" }, [model, datalist, fetchBtn]),
+          tempLabel,
+          tempRow,
         ]),
         el("div", { class: "zr-actions" }, [
           el("button", { text: "Save", class: "zr-primary", onclick: save }),

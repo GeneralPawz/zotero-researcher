@@ -14,8 +14,9 @@ ZR.UI = (() => {
       pluginID: ZR.id,
       id: "zotero-researcher-prefs",
       src: ZR.rootURI + "content/preferences/prefs.xhtml",
-      scripts: [ZR.rootURI + "content/dropdown.js", ZR.rootURI + "content/preferences/prefs.js"],
-      stylesheets: [ZR.rootURI + "content/preferences/prefs.css"],
+      // ?v= makes Zotero load fresh copies after an update instead of cached ones
+      scripts: [`chrome://zotero-researcher/content/dropdown.js?v=${ZR.version}`, `chrome://zotero-researcher/content/preferences/prefs.js?v=${ZR.version}`],
+      stylesheets: [`chrome://zotero-researcher/content/preferences/prefs.css?v=${ZR.version}`],
       label: "Zotero Researcher",
       image: ICON,
     });
@@ -53,7 +54,7 @@ ZR.UI = (() => {
     const css = doc.createElementNS(HTML_NS, "link");
     css.id = "zotero-researcher-css";
     css.rel = "stylesheet";
-    css.href = "chrome://zotero-researcher/content/main.css";
+    css.href = `chrome://zotero-researcher/content/main.css?v=${ZR.version}`;
     doc.documentElement.appendChild(css);
 
     // Toolbar button right after "New Note" in the items toolbar.
@@ -174,6 +175,36 @@ ZR.UI = (() => {
     };
     args.wrappedJSObject = args;
     return win.openDialog("chrome://zotero-researcher/content/dialog/research.xhtml", "", "chrome,centerscreen,resizable,dialog=no,width=1100,height=780", args);
+  }
+
+  /** Every collection an item is in, as {id, label} with full paths (empty = unfiled). */
+  function collectionsOf(item) {
+    const lib = Zotero.Libraries.get(item.libraryID).name;
+    return item
+      .getCollections()
+      .map((id) => Zotero.Collections.get(id))
+      .filter((c) => c && !c.deleted)
+      .map((c) => ({ id: c.id, label: `${lib} › ${collectionPath(c)}` }))
+      .sort((a, b) => a.label.localeCompare(b.label));
+  }
+
+  /**
+   * Show an item in the main window: in `collectionID` if given, else in the preferred
+   * collection (when the item is in it), else in its first collection, else the library.
+   */
+  async function revealItem(itemID, { collectionID = null, preferCollectionID = null } = {}) {
+    const win = Zotero.getMainWindow();
+    const item = Zotero.Items.get(itemID);
+    if (!win || !item) return false;
+    const zp = win.ZoteroPane;
+    win.Zotero_Tabs?.select("zotero-pane");
+    const cols = item.getCollections();
+    const target = collectionID || (preferCollectionID && cols.includes(preferCollectionID) ? preferCollectionID : cols[0]);
+    if (target) await zp.collectionsView.selectCollection(target);
+    else await zp.collectionsView.selectLibrary(item.libraryID);
+    await zp.selectItem(itemID);
+    win.focus();
+    return true;
   }
 
   function openPreferences() {
@@ -409,5 +440,5 @@ ZR.UI = (() => {
     rerender(body, item);
   }
 
-  return { startup, shutdown, onMainWindowLoad, onMainWindowUnload, openDialog, openPreferences, getTarget, showWelcome };
+  return { startup, shutdown, onMainWindowLoad, onMainWindowUnload, openDialog, openPreferences, getTarget, showWelcome, revealItem, collectionsOf };
 })();

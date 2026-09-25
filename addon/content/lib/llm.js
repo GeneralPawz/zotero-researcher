@@ -10,6 +10,24 @@ ZR.LLM = (() => {
 
   const PROVIDERS = [
     {
+      id: "claude-cli",
+      name: "Claude Code CLI — uses your Claude subscription",
+      protocol: "cli",
+      baseURL: "",
+      keyURL: "https://docs.anthropic.com/en/docs/claude-code/overview",
+      needsKey: false,
+      models: ["sonnet", "opus", "haiku"],
+    },
+    {
+      id: "codex-cli",
+      name: "Codex CLI — uses your ChatGPT plan",
+      protocol: "cli",
+      baseURL: "",
+      keyURL: "https://developers.openai.com/codex/cli",
+      needsKey: false,
+      models: [],
+    },
+    {
       id: "openai",
       name: "OpenAI",
       protocol: "openai",
@@ -119,6 +137,7 @@ ZR.LLM = (() => {
   function resolve(profile) {
     if (!profile) throw new Error("No LLM profile configured. Add one in Settings → Zotero Researcher.");
     const provider = getProvider(profile.provider);
+    if (provider.protocol === "cli") return { provider, baseURL: "", apiKey: "" };
     const baseURL = (profile.baseURL || provider.baseURL || "").replace(/\/+$/, "");
     if (!baseURL) throw new Error(`LLM profile "${profile.name}" has no base URL`);
     const apiKey = profile.apiKey ?? ZR.Secrets.get(ZR.Secrets.llmKey(profile.id));
@@ -135,6 +154,8 @@ ZR.LLM = (() => {
    */
   async function chat(profile, messages, opts = {}) {
     const { provider, baseURL, apiKey } = resolve(profile);
+    // Local CLI (Claude Code / Codex): the user's subscription, no API key
+    if (provider.protocol === "cli") return ZR.CLI.chat(profile, messages, { system: opts.system, timeout: opts.timeout || 240000 });
     const maxTokens = opts.maxTokens || 4096;
     const temperature = opts.temperature ?? (profile.temperature !== "" && profile.temperature != null ? Number(profile.temperature) : undefined);
     const timeout = opts.timeout || 180000;
@@ -189,6 +210,7 @@ ZR.LLM = (() => {
 
   async function listModels(profile) {
     const provider = getProvider(profile.provider);
+    if (provider.protocol === "cli") return provider.models; // the CLIs have no model-listing command
     const baseURL = (profile.baseURL || provider.baseURL || "").replace(/\/+$/, "");
     const apiKey = profile.apiKey ?? ZR.Secrets.get(ZR.Secrets.llmKey(profile.id));
     const headers = Object.assign({}, provider.extraHeaders || {});

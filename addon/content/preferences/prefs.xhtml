@@ -51,7 +51,7 @@
   <groupbox>
     <label><html:h2>Advanced</html:h2></label>
     <html:details class="zr-details">
-      <html:summary>Defaults for new searches</html:summary>
+      <html:summary>Search defaults and behavior</html:summary>
       <html:div class="zr-grid">
         <html:label for="zr-max">Results per database</html:label>
         <html:input id="zr-max" type="number" min="1" max="500" preference="extensions.zotero-researcher.maxPerSource"/>
@@ -64,6 +64,13 @@
         </menulist>
         <html:label for="zr-minscore">Pre-select AI scores from</html:label>
         <html:input id="zr-minscore" type="number" min="0" max="10" preference="extensions.zotero-researcher.llmScreeningMinScore"/>
+        <html:label for="zr-result-click">Clicking a result that is already in your library</html:label>
+        <menulist id="zr-result-click" preference="extensions.zotero-researcher.resultClick" native="true">
+          <menupopup>
+            <menuitem value="jump" label="Jumps to it in Zotero"/>
+            <menuitem value="collections" label="Shows all collections it is in"/>
+          </menupopup>
+        </menulist>
         <html:label for="zr-tag">Tag for added papers</html:label>
         <html:input id="zr-tag" type="text" size="20" preference="extensions.zotero-researcher.importTag"/>
       </html:div>

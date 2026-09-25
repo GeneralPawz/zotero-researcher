@@ -43,7 +43,10 @@ const { time, date } = dosTime(new Date());
 
 for (const file of files) {
   const name = Buffer.from(relative(src, file).split(sep).join("/"), "utf8");
-  const data = file === join(src, "manifest.json") ? Buffer.from(JSON.stringify(manifest, null, 2) + "\n") : readFileSync(file);
+  let data = file === join(src, "manifest.json") ? Buffer.from(JSON.stringify(manifest, null, 2) + "\n") : readFileSync(file);
+  // Version-stamp resource URLs (?v=__ZR_VERSION__) so an update bypasses Zotero's
+  // stylesheet/script caches instead of mixing new markup with old CSS.
+  if (file.endsWith(".xhtml")) data = Buffer.from(data.toString("utf8").replaceAll("__ZR_VERSION__", manifest.version));
   const deflated = deflateRawSync(data, { level: 9 });
   const useDeflate = deflated.length < data.length;
   const body = useDeflate ? deflated : data;

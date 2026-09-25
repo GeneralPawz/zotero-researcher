@@ -154,6 +154,28 @@ App.panels.search = (() => {
   let ZR;
   let lastRun = null;
   const st = (m) => App.status("search", m);
+  const pickedLangs = new Set();
+  const pickedTypes = new Set();
+
+  /** Toggle chips for multi-select filters (languages, publication types). */
+  function renderPicks(boxID, items, picked) {
+    const box = $(boxID);
+    box.replaceChildren(
+      ...items.map((it) =>
+        el("button", {
+          class: "pick",
+          "aria-pressed": String(picked.has(it.id)),
+          text: it.label,
+          onclick: (e) => {
+            if (picked.has(it.id)) picked.delete(it.id);
+            else picked.add(it.id);
+            e.target.setAttribute("aria-pressed", String(picked.has(it.id)));
+            updateChips();
+          },
+        })
+      )
+    );
+  }
 
   function init() {
     ZR = App.ZR;
@@ -177,6 +199,15 @@ App.panels.search = (() => {
     $("screen").checked = s.screen ?? true;
     $("min-score").value = ZR.Prefs.get("llmScreeningMinScore", 6);
     $("auto-import").checked = s.mode === "yolo";
+    for (const l of s.languages || []) pickedLangs.add(l);
+    for (const t of s.types || []) pickedTypes.add(t);
+    renderPicks("lang-picks", ZR.Records.LANGUAGES.map((l) => ({ id: l.code, label: l.name })), pickedLangs);
+    renderPicks("type-picks", ZR.Records.TYPE_FILTERS.map((t) => ({ id: t.id, label: t.label })), pickedTypes);
+    $("min-cites").value = s.minCitations || "";
+    $("has-abstract").checked = !!s.hasAbstract;
+    $("has-doi").checked = !!s.hasDOI;
+    $("res-sort").value = s.sort || "relevance";
+    $("res-sort").addEventListener("change", () => (renderResults(), ZR.Prefs.setJSON("dialogState", Object.assign(ZR.Prefs.getJSON("dialogState", {}), { sort: $("res-sort").value }))));
     $("empty-target").textContent = App.target.label;
     App.fillProfileSelect($("llm-profile"));
     renderSources(s.sources);
@@ -199,7 +230,7 @@ App.panels.search = (() => {
     $("res-all").addEventListener("click", () => selectAll(true));
     $("res-none").addEventListener("click", () => selectAll(false));
     $("res-filter").addEventListener("input", renderResults);
-    for (const id of ["year-from", "year-to", "limit", "fulltext-only", "oa-only", "strict", "skip-existing", "hide-excluded", "attach-pdfs", "screen", "auto-import"]) {
+    for (const id of ["year-from", "year-to", "limit", "fulltext-only", "oa-only", "strict", "skip-existing", "hide-excluded", "attach-pdfs", "screen", "auto-import", "min-cites", "has-abstract", "has-doi"]) {
       $(id).addEventListener("change", updateChips);
     }
     $("fulltext-only").addEventListener("change", () => $("fulltext-only").checked && ($("attach-pdfs").checked = true));
@@ -259,8 +290,15 @@ App.panels.search = (() => {
   function renderBuilder(focusRow = -1) {
     const box = $("builder");
     box.replaceChildren();
+    box.title = "Terms in one row are alternatives (OR). Rows combine with AND, OR, NOT or XOR. Multi-word terms are exact phrases; build* matches word endings.";
+    const multi = blocks.length > 1;
     blocks.forEach((b, i) => {
-      const input = el("input", { type: "text", class: "qb-input", spellcheck: "false", placeholder: b.terms.length ? "or…" : i === 0 ? "type a term, press Enter — e.g. IFC5" : "type a term, press Enter" });
+      const input = el("input", {
+        type: "text",
+        class: "qb-input",
+        spellcheck: "false",
+        placeholder: b.terms.length ? "or…" : i === 0 ? "Type a term and press Enter — e.g. IFC5" : "Type a term and press Enter",
+      });
       const addTerms = (text) => {
         const parts = String(text).split(/[,;\n]/).map((t) => t.trim()).filter(Boolean);
         if (!parts.length) return false;
@@ -290,39 +328,33 @@ App.panels.search = (() => {
         }
       });
       input.addEventListener("blur", () => input.value.trim() && addTerms(input.value));
-      const chips = el("div", { class: "qb-chips", title: "Terms in one row are alternatives (OR)", onclick: (e) => e.target === chips && input.focus() });
+      const chips = el("div", { class: "qb-chips", onclick: (e) => e.target === chips && input.focus() });
       b.terms.forEach((t, k) => {
         if (k) chips.append(el("span", { class: "qb-or", text: "or" }));
-        chips.append(
-          el("span", { class: "qb-chip" }, [
-            t,
-            el("button", { title: "Remove", text: "×", onclick: () => (b.terms.splice(k, 1), syncFromBuilder(), renderBuilder(i)) }),
-          ])
-        );
+        chips.append(el("span", { class: "qb-chip" }, [t, el("button", { title: "Remove term", text: "×", onclick: () => (b.terms.splice(k, 1), syncFromBuilder(), renderBuilder(i)) })]));
       });
       chips.append(input);
+      let lead = null;
+      if (i > 0) {
+        lead = el(
+          "span",
+          { class: "qb-lead" },
+          el("select", { class: "qb-op", title: "How this row combines with the rows above", onchange: (e) => ((b.op = e.target.value), syncFromBuilder()) }, QB().OPS.map((o) => el("option", { value: o.id, text: o.label, title: o.hint, selected: b.op === o.id })))
+        );
+      } else if (multi) {
+        lead = el("span", { class: "qb-lead qb-first", text: "Find" });
+      }
       box.append(
         el("div", { class: "qb-row" }, [
-          i === 0
-            ? el("span", { class: "qb-first", text: "Find" })
-            : el(
-                "select",
-                { class: "qb-op", title: "How this row combines with the rows above", onchange: (e) => ((b.op = e.target.value), syncFromBuilder()) },
-                QB().OPS.map((o) => el("option", { value: o.id, text: o.label, title: o.hint, selected: b.op === o.id }))
-              ),
+          lead,
           el("select", { class: "qb-field", title: "Where the terms must appear", onchange: (e) => ((b.field = e.target.value), syncFromBuilder()) }, QB().FIELDS.map((x) => el("option", { value: x.id, text: x.label, selected: b.field === x.id }))),
           chips,
-          blocks.length > 1 ? el("button", { class: "qb-remove", title: "Remove this row", text: "×", onclick: () => (blocks.splice(i, 1), syncFromBuilder(), renderBuilder()) }) : null,
+          multi ? el("button", { class: "qb-remove", title: "Remove this row", text: "×", onclick: () => (blocks.splice(i, 1), syncFromBuilder(), renderBuilder()) }) : null,
         ])
       );
       if (i === focusRow) setTimeout(() => input.focus(), 0);
     });
-    box.append(
-      el("div", { class: "qb-foot" }, [
-        el("button", { class: "link", text: "+ Add row", onclick: () => (blocks.push(emptyRow()), renderBuilder(blocks.length - 1)) }),
-        el("span", { class: "hint", text: "Terms in a row are alternatives (OR). Rows combine with AND · OR · NOT · XOR. Multi-word terms are searched as exact phrases; build* matches word endings." }),
-      ])
-    );
+    box.append(el("button", { class: "link qb-add", text: "+ Add condition", title: "Add a row combined with AND, OR, NOT or XOR", onclick: () => (blocks.push(emptyRow()), renderBuilder(blocks.length - 1)) }));
   }
 
   function setMode(mode) {
@@ -354,6 +386,11 @@ App.panels.search = (() => {
     const yt = $("year-to").value;
     parts.push(yf || yt ? `${yf || "…"}–${yt || "…"}` : "any year");
     parts.push(`${$("limit").value || 25} per source`);
+    if (pickedLangs.size) parts.push([...pickedLangs].map((l) => l.toUpperCase()).join("/"));
+    if (pickedTypes.size) parts.push(pickedTypes.size === 1 ? ZR.Records.TYPE_FILTERS.find((t) => pickedTypes.has(t.id)).label.toLowerCase() : `${pickedTypes.size} types`);
+    if (parseInt($("min-cites").value, 10) > 0) parts.push(`≥${parseInt($("min-cites").value, 10)} citations`);
+    if ($("has-abstract").checked) parts.push("with abstract");
+    if ($("has-doi").checked) parts.push("with DOI");
     if ($("fulltext-only").checked) parts.push("full text only");
     else if ($("oa-only").checked) parts.push("open access");
     if ($("hide-excluded").checked) parts.push("hide excluded");
@@ -435,6 +472,11 @@ App.panels.search = (() => {
       hideExcluded: $("hide-excluded").checked,
       screen: llm && $("screen").checked,
       minScore: int("min-score") ?? 6,
+      languages: [...pickedLangs],
+      types: [...pickedTypes],
+      minCitations: Math.max(0, int("min-cites") || 0),
+      hasAbstract: $("has-abstract").checked,
+      hasDOI: $("has-doi").checked,
     };
   }
 
@@ -454,6 +496,12 @@ App.panels.search = (() => {
       hideExcluded: o.hideExcluded,
       screen: $("screen").checked,
       kwView,
+      languages: o.languages,
+      types: o.types,
+      minCitations: o.minCitations,
+      hasAbstract: o.hasAbstract,
+      hasDOI: o.hasDOI,
+      sort: $("res-sort").value,
     });
   }
 
@@ -482,9 +530,12 @@ App.panels.search = (() => {
       lastRun = await ZR.Search.run(o, st);
       if (lastRun.plan) showPlan(lastRun.plan);
       renderResults();
-      const errs = Object.entries(lastRun.perSource).filter(([, s]) => s.error);
-      st(`${lastRun.records.length} papers found · ` + Object.entries(lastRun.perSource).map(([id, s]) => `${ZR.Sources.get(id).name} ${s.error ? "⚠" : s.count}`).join(" · "));
-      $("search-status").title = errs.map(([id, s]) => `${ZR.Sources.get(id).name}: ${s.error}`).join("\n");
+      const rm = Object.values(lastRun.removedByFilters || {}).reduce((a, b) => a + b, 0);
+      st(`${lastRun.records.length} papers found · ` + Object.entries(lastRun.perSource).map(([id, s]) => `${ZR.Sources.get(id).name} ${s.error ? "⚠" : s.count}`).join(" · ") + (rm ? ` · ${rm} removed by filters` : ""));
+      // Hover the status line for per-database counts, errors and response times
+      $("search-status").title = Object.entries(lastRun.perSource)
+        .map(([id, s]) => `${ZR.Sources.get(id).name}: ${s.error ? "⚠ " + s.error : s.count + " results"}${s.ms != null ? ` (${(s.ms / 1000).toFixed(1)} s)` : ""}`)
+        .join("\n");
       if (o.mode === "yolo") {
         App.setBusy("search", false);
         await importSelected(true);
@@ -583,7 +634,8 @@ App.panels.search = (() => {
     const box = $("results");
     box.replaceChildren();
     if (!lastRun) return;
-    const recs = lastRun.records;
+    const sortFn = ZR.Search.SORTS[$("res-sort").value];
+    const recs = sortFn ? lastRun.records.slice().sort(sortFn) : lastRun.records;
     const filter = $("res-filter").value.trim().toLowerCase();
     $("results-head").hidden = false;
     if (!recs.length) {
@@ -596,7 +648,14 @@ App.panels.search = (() => {
       const row = el("div", { class: "result" + (r.existingItemID || excluded ? " muted" : "") }, [
         el("input", { type: "checkbox", checked: r.selected, onchange: (e) => ((r.selected = e.target.checked), updateImportBar()) }),
         el("div", { class: "r-main" }, [
-          el("div", { class: "r-title" }, link ? el("a", { href: "#", text: r.title, onclick: (e) => (e.preventDefault(), Zotero.launchURL(link)) }) : r.title),
+          el("div", { class: "r-title" }, [
+            r.existingItemID
+              ? el("a", { href: "#", text: r.title, title: "In your library — click to show it in Zotero", onclick: (e) => (e.preventDefault(), openInLibrary(r, row)) })
+              : link
+                ? el("a", { href: "#", text: r.title, title: "Open the paper's web page", onclick: (e) => (e.preventDefault(), Zotero.launchURL(link)) })
+                : r.title,
+            r.existingItemID && link ? el("a", { href: "#", class: "web", text: "web ↗", title: link, onclick: (e) => (e.preventDefault(), Zotero.launchURL(link)) }) : null,
+          ]),
           el("div", { class: "r-meta", text: [ZR.Records.creatorsToString(r.creators), r.year, r.venue].filter(Boolean).join(" · ") }),
           r.abstract ? el("div", { class: "r-abstract", text: r.abstract, title: "Click to expand", onclick: () => row.classList.toggle("expanded") }) : null,
           el("div", { class: "r-tags" }, [
@@ -626,6 +685,27 @@ App.panels.search = (() => {
       box.append(row);
     }
     updateImportBar();
+  }
+
+  /**
+   * A result already in the library: jump to it in Zotero (default), or — if set in
+   * Settings — list every collection it is in, each one clickable.
+   */
+  function openInLibrary(r, row) {
+    const reveal = (opts) => App.ZR.UI.revealItem(r.existingItemID, Object.assign({ preferCollectionID: App.target.collectionID }, opts));
+    if (ZR.Prefs.get("resultClick", "jump") !== "collections") return reveal();
+    const existing = row.querySelector(".in-cols");
+    if (existing) return existing.remove();
+    const item = Zotero.Items.get(r.existingItemID);
+    const cols = App.ZR.UI.collectionsOf(item);
+    row.querySelector(".r-main").append(
+      el("div", { class: "in-cols" }, [
+        el("span", { class: "hint", text: cols.length ? "In:" : "In your library, not in any collection:" }),
+        ...(cols.length
+          ? cols.map((c) => el("a", { href: "#", text: c.label, onclick: (e) => (e.preventDefault(), reveal({ collectionID: c.id })) }))
+          : [el("a", { href: "#", text: Zotero.Libraries.get(item.libraryID).name, onclick: (e) => (e.preventDefault(), reveal()) })]),
+      ])
+    );
   }
 
   function selectAll(on) {
