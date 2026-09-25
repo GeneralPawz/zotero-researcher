@@ -187,19 +187,19 @@ var ZRPrefsPane = (() => {
     const box = document.getElementById("zr-llm-editor");
     box.replaceChildren();
 
-    const providerSel = el("select", { id: "zr-llm-provider" }, ZR.LLM.PROVIDERS.map((x) => el("option", { value: x.id, text: x.name, selected: x.id === editing.provider })));
-    const name = el("input", { type: "text", value: editing.name, placeholder: "e.g. Claude Sonnet (work)", size: 30 });
-    const baseURL = el("input", { type: "text", value: editing.baseURL, size: 46, class: "zr-mono" });
-    const key = el("input", { type: "password", size: 46, value: isNew ? "" : ZR.Secrets.get(ZR.Secrets.llmKey(editing.id)), placeholder: "API key", autocomplete: "off" });
+    const providerSel = el("select", { id: "zr-llm-provider", class: "zr-field" }, ZR.LLM.PROVIDERS.map((x) => el("option", { value: x.id, text: x.name, selected: x.id === editing.provider })));
+    const name = el("input", { type: "text", class: "zr-field", value: editing.name, placeholder: "e.g. Claude Sonnet (work)" });
+    const baseURL = el("input", { type: "text", class: "zr-field zr-mono", value: editing.baseURL });
+    const key = el("input", { type: "password", class: "zr-field", value: isNew ? "" : ZR.Secrets.get(ZR.Secrets.llmKey(editing.id)), placeholder: "API key", autocomplete: "off" });
     const showKey = el("button", { text: "show", onclick: () => ((key.type = key.type === "password" ? "text" : "password"), (showKey.textContent = key.type === "password" ? "show" : "hide")) });
-    const keyLink = el("span");
-    const model = el("input", { type: "text", value: editing.model, size: 34, list: "zr-model-list", class: "zr-mono", placeholder: "model id" });
-    const datalist = el("datalist", { id: "zr-model-list" });
-    const temp = el("input", { type: "number", min: "0", max: "2", step: "0.1", value: editing.temperature ?? "", placeholder: "default", style: "width: 80px" });
+    const keyLink = el("div", { class: "zr-help" });
+    const model = el("input", { type: "text", class: "zr-field zr-mono", value: editing.model, placeholder: "model id" });
+    const temp = el("input", { type: "number", min: "0", max: "2", step: "0.1", value: editing.temperature ?? "", placeholder: "default", style: "width: 7em" });
     const status = el("span", { class: "zr-status" });
+
     // Rows that differ between API providers and local CLIs (Claude Code / Codex)
     const urlLabel = el("label", { text: "Base URL" });
-    const urlHelp = el("span", { class: "zr-help" });
+    const urlHelp = el("div", { class: "zr-help" });
     const detectBtn = el("button", {
       text: "Detect",
       onclick: async () => {
@@ -209,14 +209,72 @@ var ZRPrefsPane = (() => {
         if (found) baseURL.value = found;
         status.textContent = found ? "found " + found : "not found — install it, or enter the path to the program";
         status.classList.add(found ? "zr-good" : "zr-bad");
+        if (found) loadModels(false);
       },
     });
-    const urlRow = el("div", { class: "zr-actions" }, [baseURL, detectBtn, urlHelp]);
+    const urlCell = el("div", {}, [el("div", { class: "zr-row" }, [baseURL, detectBtn]), urlHelp]);
     const keyLabel = el("label", { text: "API key" });
-    const keyRow = el("div", { class: "zr-actions" }, [key, showKey, keyLink]);
+    const keyCell = el("div", {}, [el("div", { class: "zr-row" }, [key, showKey]), keyLink]);
     const tempLabel = el("label", { text: "Temperature" });
-    const tempRow = el("div", { class: "zr-actions" }, [temp, el("span", { class: "zr-help", text: "leave empty for provider default (required for some reasoning models)" })]);
+    const tempCell = el("div", {}, [temp, el("div", { class: "zr-help", text: "Leave empty for the provider's default (required by some reasoning models)." })]);
+
+    // Model: free text, plus the provider's own list of models
     const fetchBtn = el("button", { text: "Fetch available models" });
+    const modelStatus = el("div", { class: "zr-help" });
+    const filter = el("input", { type: "search", class: "zr-field", placeholder: "filter models…", hidden: true });
+    const list = el("div", { class: "zr-model-list", hidden: true });
+    let models = [];
+    const renderModels = () => {
+      const q = filter.value.trim().toLowerCase();
+      const shown = models.filter((m) => !q || `${m.name} ${m.id} ${m.detail}`.toLowerCase().includes(q));
+      list.replaceChildren(
+        ...shown.slice(0, 300).map((m) =>
+          el("div", { class: "zr-model-row" + (m.id === model.value.trim() ? " zr-selected" : ""), role: "option", tabindex: "0", title: m.id, onclick: () => ((model.value = m.id), renderModels()), onkeydown: (e) => e.key === "Enter" && ((model.value = m.id), renderModels()) }, [
+            el("span", { class: "zr-model-name" }, [m.name, m.isDefault ? el("span", { class: "zr-badge free", text: "your default" }) : null]),
+            el("span", { class: "zr-mono zr-model-id", text: m.id }),
+            m.detail ? el("span", { class: "zr-model-detail", text: m.detail }) : null,
+          ])
+        ),
+        ...(shown.length > 300 ? [el("div", { class: "zr-help", text: `…and ${shown.length - 300} more — type to filter` })] : [])
+      );
+      list.hidden = !models.length;
+      filter.hidden = models.length <= 10;
+    };
+    filter.addEventListener("input", renderModels);
+    model.addEventListener("input", renderModels);
+
+    let loadSeq = 0;
+    const loadModels = async (resolve) => {
+      const seq = ++loadSeq;
+      const prov = ZR.LLM.getProvider(providerSel.value);
+      modelStatus.className = "zr-help";
+      modelStatus.textContent = resolve && providerSel.value === "claude-cli" ? "Asking Claude Code which model each alias runs (4 short requests on your plan)…" : "Loading the model list…";
+      fetchBtn.disabled = true;
+      try {
+        const got = await ZR.LLM.listModels(Object.assign(current(), { apiKey: key.value.trim() }), { resolve });
+        if (seq !== loadSeq) return;
+        models = got;
+        const def = models.find((m) => m.isDefault);
+        if (!model.value && def && prov.protocol !== "cli") model.value = def.id;
+        modelStatus.textContent =
+          prov.id === "claude-cli"
+            ? "Aliases always run the latest model of their family. “Check which model each alias runs” shows the exact model."
+            : prov.id === "codex-cli"
+              ? `${models.length} models available on your ChatGPT plan (from Codex). Leave the field empty to use your Codex default.`
+              : `${models.length} models available${prov.id === "openrouter" ? " (prices per million tokens)" : ""} — click one to use it.`;
+        renderModels();
+      } catch (e) {
+        if (seq !== loadSeq) return;
+        models = [];
+        renderModels();
+        modelStatus.textContent = "Could not load the model list: " + e.message;
+        modelStatus.className = "zr-help zr-bad";
+      } finally {
+        if (seq === loadSeq) fetchBtn.disabled = false;
+      }
+    };
+    fetchBtn.addEventListener("click", () => loadModels(providerSel.value === "claude-cli"));
+    key.addEventListener("change", () => key.value.trim() && loadModels(false));
 
     const syncProvider = (resetURL) => {
       const prov = ZR.LLM.getProvider(providerSel.value);
@@ -225,18 +283,25 @@ var ZRPrefsPane = (() => {
       urlLabel.textContent = cli ? "Program" : "Base URL";
       baseURL.placeholder = cli ? "detected automatically" : prov.baseURL || "https://your-endpoint/v1";
       urlHelp.textContent = cli ? "Signs in with the account you use in the terminal — no API key, uses your subscription." : "";
+      urlHelp.hidden = !cli;
       detectBtn.hidden = !cli;
-      for (const e of [keyLabel, keyRow, tempLabel, tempRow, fetchBtn]) e.hidden = cli;
-      model.placeholder = cli ? (prov.models.length ? "e.g. " + prov.models.join(", ") + " — empty = CLI default" : "empty = your CLI default") : "model id";
-      if (cli && !baseURL.value) detectBtn.click();
-      datalist.replaceChildren(...prov.models.map((m) => el("option", { value: m })));
-      if (!model.value && prov.models[0] && !cli) model.value = prov.models[0];
+      for (const e of [keyLabel, keyCell, tempLabel, tempCell]) e.hidden = cli;
+      model.placeholder = cli ? "empty = your CLI default" : "model id";
+      fetchBtn.textContent = prov.id === "claude-cli" ? "Check which model each alias runs" : prov.id === "codex-cli" ? "Reload" : "Fetch available models";
       keyLink.replaceChildren(prov.keyURL ? link(prov.needsKey ? "Get an API key" : "Download / docs", prov.keyURL) : "");
       key.placeholder = prov.needsKey ? "API key (required)" : "API key (optional)";
       if (!name.value || name.dataset.auto) {
         name.value = prov.name;
         name.dataset.auto = "1";
       }
+      models = [];
+      filter.value = "";
+      renderModels();
+      modelStatus.textContent = "";
+      if (cli && !baseURL.value) detectBtn.click();
+      // Load the real list right away where that costs nothing
+      else if (cli || prov.id === "openrouter" || !prov.needsKey || key.value.trim()) loadModels(false);
+      else modelStatus.textContent = "Enter the API key to see the models available to you.";
     };
     name.addEventListener("input", () => delete name.dataset.auto);
     providerSel.addEventListener("change", () => {
@@ -244,7 +309,6 @@ var ZRPrefsPane = (() => {
       syncProvider(true);
     });
     if (isNew) name.dataset.auto = "1";
-    syncProvider(false);
 
     const current = () => ({
       id: editing.id,
@@ -255,21 +319,6 @@ var ZRPrefsPane = (() => {
       temperature: temp.value === "" ? "" : Number(temp.value),
     });
 
-    fetchBtn.addEventListener("click", () => fetchModels());
-    const fetchModels = async () => {
-      status.className = "zr-status";
-      status.textContent = "fetching models…";
-      try {
-        const models = await ZR.LLM.listModels(Object.assign(current(), { apiKey: key.value.trim() }));
-        datalist.replaceChildren(...models.map((m) => el("option", { value: m })));
-        status.textContent = `${models.length} models available — pick one in the Model field`;
-        status.classList.add("zr-good");
-      } catch (e) {
-        status.textContent = "Could not list models: " + e.message;
-        status.classList.add("zr-bad");
-      }
-    };
-
     const save = async () => {
       const prof = current();
       if (!prof.model && ZR.LLM.getProvider(prof.provider).protocol !== "cli") {
@@ -277,13 +326,13 @@ var ZRPrefsPane = (() => {
         status.className = "zr-status zr-bad";
         return;
       }
-      const list = ZR.Prefs.getLLMProfiles();
-      const i = list.findIndex((x) => x.id === prof.id);
-      if (i >= 0) list[i] = prof;
-      else list.push(prof);
-      ZR.Prefs.setLLMProfiles(list);
+      const all = ZR.Prefs.getLLMProfiles();
+      const i = all.findIndex((x) => x.id === prof.id);
+      if (i >= 0) all[i] = prof;
+      else all.push(prof);
+      ZR.Prefs.setLLMProfiles(all);
       await ZR.Secrets.set(ZR.Secrets.llmKey(prof.id), key.value.trim());
-      if (!ZR.Prefs.get("activeLLMProfile", "") || list.length === 1) ZR.Prefs.set("activeLLMProfile", prof.id);
+      if (!ZR.Prefs.get("activeLLMProfile", "") || all.length === 1) ZR.Prefs.set("activeLLMProfile", prof.id);
       box.replaceChildren();
       editing = null;
       renderLLMList();
@@ -298,13 +347,13 @@ var ZRPrefsPane = (() => {
           el("label", { text: "Name" }),
           name,
           urlLabel,
-          urlRow,
+          urlCell,
           keyLabel,
-          keyRow,
+          keyCell,
           el("label", { text: "Model" }),
-          el("div", { class: "zr-actions" }, [model, datalist, fetchBtn]),
+          el("div", {}, [el("div", { class: "zr-row" }, [model, fetchBtn]), modelStatus, filter, list]),
           tempLabel,
-          tempRow,
+          tempCell,
         ]),
         el("div", { class: "zr-actions" }, [
           el("button", { text: "Save", class: "zr-primary", onclick: save }),
@@ -314,6 +363,7 @@ var ZRPrefsPane = (() => {
         ]),
       ])
     );
+    syncProvider(false);
   }
 
   // -------------------------------------------------------- sources ----

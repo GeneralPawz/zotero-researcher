@@ -87,6 +87,97 @@ ZR.CLI = (() => {
     }
   }
 
+  async function readJSON(path) {
+    try {
+      return JSON.parse(await IOUtils.readUTF8(path));
+    } catch (e) {
+      return null;
+    }
+  }
+
+  const CLAUDE_ALIASES = [
+    { id: "fable", name: "Fable (latest)", detail: "most capable" },
+    { id: "opus", name: "Opus (latest)", detail: "strong reasoning" },
+    { id: "sonnet", name: "Sonnet (latest)", detail: "balanced speed and quality" },
+    { id: "haiku", name: "Haiku (latest)", detail: "fastest, lowest usage" },
+  ];
+
+  /** Ask Claude Code which model an alias runs (one tiny request; read from its usage report). */
+  async function resolveClaude(path, alias) {
+    const dir = await tempDir();
+    try {
+      const args = ["-p", "--output-format", "json", "--tools", "", "--no-session-persistence", "--strict-mcp-config", "--model", alias];
+      const r = await exec(path, args, "Reply with OK", { timeout: 90000, workdir: dir });
+      const data = JSON.parse(r.stdout.trim().split("\n").pop());
+      return Object.keys(data.modelUsage || {})[0] || "";
+    } finally {
+      IOUtils.remove(dir, { recursive: true, ignoreAbsent: true }).catch(() => {});
+    }
+  }
+
+  /**
+   * Models a CLI can use, from the CLI's own files:
+   *   Codex: ~/.codex/models_cache.json (the list Codex fetched for your account) and the
+   *          default model from ~/.codex/config.toml
+   *   Claude Code: its aliases, extra models of your account (~/.claude.json) and your
+   *          default (~/.claude/settings.json); with resolve, each alias is asked which model
+   *          it runs (cached for a week)
+   */
+  async function models(profile, { resolve = false } = {}) {
+    const kind = profile.provider;
+    if (kind === "codex-cli") {
+      const dir = env("CODEX_HOME") || PathUtils.join(home(), ".codex");
+      const cache = await readJSON(PathUtils.join(dir, "models_cache.json"));
+      let def = "";
+      try {
+        def = ((await IOUtils.readUTF8(PathUtils.join(dir, "config.toml"))).match(/^\s*model\s*=\s*"([^"]+)"/m) || [])[1] || "";
+      } catch (e) {
+        /* no config */
+      }
+      const list = (cache?.models || []).filter((m) => m.visibility !== "hide");
+      if (!list.length) throw new Error("Codex has not stored its model list yet — run codex once in a terminal");
+      return list.map((m) => ({
+        id: m.slug,
+        name: m.display_name || m.slug,
+        detail: [m.description, m.supported_reasoning_levels?.length ? "reasoning: " + m.supported_reasoning_levels.map((l) => l.effort).join(", ") : ""].filter(Boolean).join(" · "),
+        isDefault: m.slug === def,
+      }));
+    }
+    if (kind === "claude-cli") {
+      const settings = await readJSON(PathUtils.join(home(), ".claude", "settings.json"));
+      const account = await readJSON(PathUtils.join(home(), ".claude.json"));
+      const def = settings?.model || "";
+      const known = ZR.Prefs.getJSON("claudeModelMap", {});
+      if (resolve) {
+        const path = profile.baseURL || (await detect(kind));
+        if (!path) throw new Error("Claude Code CLI not found");
+        await Promise.all(
+          CLAUDE_ALIASES.map(async (a) => {
+            try {
+              const id = await resolveClaude(path, a.id);
+              if (id) known[a.id] = { id, at: new Date().toISOString().slice(0, 10) };
+            } catch (e) {
+              U.log("Could not resolve Claude alias", a.id, e.message);
+            }
+          })
+        );
+        ZR.Prefs.setJSON("claudeModelMap", known);
+      }
+      const out = CLAUDE_ALIASES.map((a) => ({
+        id: a.id,
+        name: a.name,
+        detail: known[a.id] ? `runs ${known[a.id].id} (checked ${known[a.id].at}) · ${a.detail}` : a.detail,
+        isDefault: def.replace(/\[.*\]$/, "") === a.id,
+      }));
+      for (const m of account?.additionalModelOptionsCache || []) {
+        if (m?.value && !out.some((x) => x.id === m.value)) out.push({ id: m.value, name: m.label || m.value, detail: m.description || "", isDefault: m.value === def });
+      }
+      if (def && !out.some((x) => x.id === def || x.id === def.replace(/\[.*\]$/, ""))) out.push({ id: def, name: def, detail: "your Claude Code default", isDefault: true });
+      return out;
+    }
+    return [];
+  }
+
   /** Flatten a chat into one prompt (the CLIs take a single instruction). */
   function transcript(messages, system, inlineSystem) {
     const turns =
@@ -139,5 +230,5 @@ ZR.CLI = (() => {
     }
   }
 
-  return { TOOLS, detect, chat, transcript };
+  return { TOOLS, detect, chat, transcript, models };
 })();
