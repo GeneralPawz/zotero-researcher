@@ -72,3 +72,23 @@
 .zr-decision.include { color: var(--accent-green, #1f9d55); }
 .zr-decision.exclude { color: var(--accent-red, #db2c3a); }
 .zr-decision.maybe { color: var(--accent-gold, #cc9200); }
+
+/* Tag pane: tabs for Zotero's list and the nested tag tree */
+.zr-tagtabs { display: flex; gap: 2px; padding: 4px 8px 2px; flex: none; }
+.zr-tagtabs button { appearance: none; border: 0; background: transparent; padding: 2px 10px; border-radius: 5px; font: inherit; font-size: 0.92em; color: var(--fill-secondary, GrayText); }
+.zr-tagtabs button:hover { background: var(--fill-quinary, rgba(128, 128, 128, 0.12)); }
+.zr-tagtabs button.on { background: var(--fill-quarternary, rgba(128, 128, 128, 0.2)); color: var(--fill-primary, CanvasText); font-weight: 600; }
+#zotero-tag-selector-container.zr-tree-on .tag-selector-list-container { display: none !important; }
+#zotero-tag-selector-container.zr-tree-on #zotero-tag-selector { flex: 0 0 auto !important; height: auto !important; }
+#zotero-tag-selector-container.zr-tree-on .tag-selector { height: auto !important; }
+.zr-tagtree { flex: 1; min-height: 0; overflow: auto; padding: 2px 6px 4px; }
+.zr-tagtree[hidden] { display: none; }
+.zr-tt-row { display: flex; align-items: center; gap: 3px; min-height: 22px; border-radius: 4px; white-space: nowrap; cursor: default; }
+.zr-tt-row:hover { background: var(--fill-quinary, rgba(128, 128, 128, 0.12)); }
+.zr-tt-twisty { width: 12px; flex: none; text-align: center; color: var(--fill-secondary, GrayText); font-size: 0.8em; }
+.zr-tt-label { padding: 1px 5px; border-radius: 4px; overflow: hidden; text-overflow: ellipsis; }
+.zr-tt-label.virtual { color: var(--fill-secondary, GrayText); }
+.zr-tt-row.group > .zr-tt-label { font-weight: 600; }
+.zr-tt-row.selected > .zr-tt-label { background: var(--color-accent, Highlight); color: var(--accent-white, HighlightText); }
+.zr-tt-count { margin-inline-start: auto; padding-inline-end: 4px; font-size: 0.85em; color: var(--fill-tertiary, GrayText); }
+.zr-tt-empty { padding: 6px; color: var(--fill-secondary, GrayText); }

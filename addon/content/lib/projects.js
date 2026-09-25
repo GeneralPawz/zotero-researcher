@@ -60,9 +60,51 @@ ZR.Projects = (() => {
     return (await ledger(libraryID)).projects[id] || null;
   }
 
+  /** The most recently used project on a collection (several may share one). */
   async function byCollection(libraryID, collectionKey) {
     if (!collectionKey) return null;
     return (await list(libraryID)).find((p) => p.collectionKey === collectionKey) || null;
+  }
+
+  /**
+   * Where a project's decisions are kept. Normally its collection; a project that shares
+   * its collection with another one keeps its own (so the same paper can be included in
+   * one and excluded in the other).
+   */
+  const reviewKey = (p) => p?.decisionKey || p?.collectionKey || null;
+
+  /** Tag name part from a project name: "BIM in der Bauausführung" → "BIM-in-der-Bauausführung". */
+  function slug(name) {
+    return (
+      String(name || "")
+        .normalize("NFC")
+        .replace(/[#/\\,;"']+/g, " ")
+        .trim()
+        .replace(/\s+/g, "-")
+        .slice(0, 60) || "project"
+    );
+  }
+
+  /**
+   * The Zotero tag of a project's papers: #review/<name> for reviews, #project/<name> for
+   * quick searches (nested tags, shown as a tree in Zotero's tag pane). Fixed at first use,
+   * so it stays when the project is renamed; unique in the library.
+   */
+  function tagFor(project, others = []) {
+    if (project.tag) return project.tag;
+    const base = `#${project.kind === "review" ? "review" : "project"}/${slug(project.name)}`;
+    let tag = base;
+    for (let n = 2; others.some((o) => o.id !== project.id && o.tag === tag); n++) tag = `${base}-${n}`;
+    return tag;
+  }
+
+  /** The project's tag, stored with the project on first use. */
+  async function ensureTag(libraryID, project) {
+    if (!project.tag) {
+      project.tag = tagFor(project, await list(libraryID));
+      await save(libraryID, project);
+    }
+    return project.tag;
   }
 
   async function save(libraryID, project) {
@@ -75,10 +117,16 @@ ZR.Projects = (() => {
 
   /**
    * @param {{name, kind: "quick"|"review", collectionKey, methodology?, protocol?, search?}} o
+   * A collection that already belongs to a project can be used again: the new project
+   * then keeps its decisions under its own key.
    */
   async function create(libraryID, o) {
+    const id = newID();
+    const others = await list(libraryID);
+    const shared = !!o.collectionKey && others.some((p) => p.collectionKey === o.collectionKey);
     const project = {
-      id: newID(),
+      id,
+      ...(shared ? { decisionKey: "p:" + id } : {}),
       name: o.name || "Untitled project",
       kind: o.kind === "review" ? "review" : "quick",
       collectionKey: o.collectionKey || null,
@@ -90,6 +138,7 @@ ZR.Projects = (() => {
       created: now(),
       updated: now(),
     };
+    project.tag = tagFor(project, others);
     return save(libraryID, project);
   }
 
@@ -262,7 +311,7 @@ ZR.Projects = (() => {
     for (const item of col ? col.getChildItems(false).filter((i) => i.isRegularItem()) : []) {
       const key = ZR.Store.keyForItem(item);
       if (!key || out.has(key)) continue;
-      const prior = await ZR.Store.prior(libraryID, { key, item, collectionKey: project.collectionKey });
+      const prior = await ZR.Store.prior(libraryID, { key, item, collectionKey: reviewKey(project) });
       out.set(key, {
         key,
         itemID: item.id,
@@ -285,7 +334,7 @@ ZR.Projects = (() => {
     }
     for (const [key, r] of Object.entries(pool.records)) {
       if (out.has(key)) continue;
-      const prior = await ZR.Store.prior(libraryID, { key, collectionKey: project.collectionKey });
+      const prior = await ZR.Store.prior(libraryID, { key, collectionKey: reviewKey(project) });
       out.set(key, {
         key,
         itemID: null,
@@ -359,7 +408,8 @@ ZR.Projects = (() => {
     if (c.itemID) return Zotero.Items.get(c.itemID);
     const col = Zotero.Collections.getByLibraryAndKey(libraryID, project.collectionKey);
     const rec = Object.assign({ abstract: "", keywords: [], pdfURLs: [], ids: {}, creators: [], sources: [] }, c.record);
-    const { item } = await ZR.Importer.importRecord(rec, { libraryID, collectionID: col?.id, tags, skipExisting: true });
+    // a paper that is already in Zotero is reused (added to the collection, tagged), not duplicated
+    const { item } = await ZR.Importer.importRecord(rec, { libraryID, collectionID: col?.id, tags: [...tags, ...(ZR.Prefs.get("projectTags", true) ? [await ensureTag(libraryID, project)] : [])], skipExisting: true, tagExisting: true });
     c.itemID = item.id;
     return item;
   }
@@ -372,6 +422,10 @@ ZR.Projects = (() => {
     list,
     get,
     byCollection,
+    reviewKey,
+    slug,
+    tagFor,
+    ensureTag,
     create,
     save,
     convert,

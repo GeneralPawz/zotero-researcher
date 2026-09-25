@@ -88,9 +88,25 @@ App.panels.review = (() => {
     if (draft && draft.id !== p.id) reset();
     await ZR.Embed.available().catch(() => false); // local model on this computer? (checked at most once a minute)
     cands = await ZR.Projects.candidates(libraryID(), p);
+    await syncProjectTags(p);
     if (!step || !method().stages.includes(step)) step = firstOpenStage();
     renderFunnel();
     await go(step);
+  }
+
+  /** Every paper included in this review carries the project's tag (also those included before tags existed). */
+  async function syncProjectTags(p) {
+    if (!ZR.Prefs.get("projectTags", true) || !App.target.editable) return;
+    const items = cands.filter((c) => c.itemID && c.ta === "include").map((c) => Zotero.Items.get(c.itemID)).filter(Boolean);
+    const tag = await ZR.Projects.ensureTag(libraryID(), p);
+    const missing = items.filter((i) => !i.hasTag(tag));
+    if (!missing.length) return;
+    await Zotero.DB.executeTransaction(async () => {
+      for (const i of missing) {
+        i.addTag(tag);
+        await i.save();
+      }
+    });
   }
 
   const protocolFilled = (pr) => !!(pr && (pr.questions?.length || pr.objective || pr.inclusion?.length));
@@ -1872,7 +1888,14 @@ App.panels.review = (() => {
       if (c.highlights?.length) await PaperView.syncNote(item.id, c.title, c.highlights).catch((e) => ZR.Util.log("Highlight note failed", e.message));
     }
     const r = d === "exclude" ? reason || $("reason-select")?.value || "" : "";
-    await ZR.Store.decide({ libraryID: libraryID(), key: c.key, item, title: c.title, stage: s, d, r, by, collectionKey: p.collectionKey });
+    // a paper that goes on in this review carries the project tag (also one that was in Zotero
+    // already); excluded at screening, it loses it again (saved with the decision below)
+    if (item && s === "ta" && ZR.Prefs.get("projectTags", true)) {
+      const tag = await ZR.Projects.ensureTag(libraryID(), p);
+      if (d === "include" && !item.hasTag(tag)) item.addTag(tag);
+      else if (d === "exclude" && item.hasTag(tag)) item.removeTag(tag);
+    }
+    await ZR.Store.decide({ libraryID: libraryID(), key: c.key, item, title: c.title, stage: s, d, r, by, collectionKey: ZR.Projects.reviewKey(p) });
     c[s] = d;
     c.reason = r;
     c.by = d ? by : "";

@@ -362,8 +362,10 @@
         </div>
       </div>
       <div class="field">Collection
-        <label class="choice" id="np-use-wrap"><input type="radio" name="np-col" value="use" checked="checked"/><span id="np-use-label"></span></label>
+        <label class="choice" id="np-use-wrap"><input type="radio" name="np-col" value="use" checked="checked"/><span><span id="np-use-label"></span><small id="np-use-note"></small></span></label>
+        <label class="choice" id="np-other-wrap"><input type="radio" name="np-col" value="other"/><span>Use another collection <select id="np-col-other"></select><small id="np-other-note"></small></span></label>
         <label class="choice"><input type="radio" name="np-col" value="new"/><span>Create a new collection named after the project</span></label>
+        <p class="hint np-reuse">Papers that are already in Zotero are reused: added to the project's collection and tagged, not imported twice.</p>
       </div>
       <div class="actions"><span class="spacer"></span><button id="np-cancel">Cancel</button><button id="np-create" class="primary">Create project</button></div>
     </div>

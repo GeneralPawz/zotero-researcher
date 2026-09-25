@@ -863,3 +863,8 @@ body.ap-open.ap-collapsed #panel-review > .statusbar { padding-right: max(2px, c
 .stepper, .toolbar, .queue, .queue-head, .queue-ai, .hero { border-color: var(--chrome-line); }
 .rp-range .hint { white-space: nowrap; min-width: 36px; }
 .rp-range input { width: 96px; }
+
+/* new project: which collection */
+.choice select { margin-top: 4px; max-width: 100%; }
+.choice small:empty { display: none; }
+.np-reuse { margin: 2px 0 6px; }

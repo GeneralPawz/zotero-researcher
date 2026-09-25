@@ -218,7 +218,8 @@ ZR.Search = (() => {
           libraryID: o.libraryID,
           collectionID: o.collectionID,
           tags,
-          skipExisting: true,
+          skipExisting: true, // papers already in Zotero are reused, not duplicated
+          tagExisting: !!o.tagExisting,
         });
         rec.existingItemID = item.id;
         if (existing) {

@@ -139,6 +139,13 @@ ZR.UI = (() => {
     css.href = `chrome://zotero-researcher/content/main.css?v=${ZR.version}`;
     doc.documentElement.appendChild(css);
 
+    // Nested tags as a tree in the tag pane
+    try {
+      ZR.TagTree.mount(win);
+    } catch (e) {
+      Zotero.logError(e);
+    }
+
     // Toolbar button right after "New Note" in the items toolbar.
     const noteBtn = doc.getElementById("zotero-tb-note-add");
     if (noteBtn && !doc.getElementById("zotero-researcher-tb")) {
@@ -211,6 +218,11 @@ ZR.UI = (() => {
 
   function onMainWindowUnload(win) {
     const doc = win.document;
+    try {
+      ZR.TagTree.unmount(win);
+    } catch (e) {
+      Zotero.logError(e);
+    }
     for (const id of ["zotero-researcher-tb", "zotero-researcher-batch-btn", "zotero-researcher-css", "zotero-researcher-welcome"]) doc.getElementById(id)?.remove();
     doc.querySelector('link[href="zotero-researcher.ftl"]')?.remove();
   }
