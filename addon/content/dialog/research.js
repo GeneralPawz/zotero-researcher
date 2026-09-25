@@ -34,6 +34,7 @@ const App = (window.App = {
   },
 
   setBusy(which, on) {
+    if (on && !window.Autopilot?.isStopping()) App.ZR.Activity.resume();
     App.busy = on;
     for (const b of document.querySelectorAll("button[data-busy]")) b.disabled = on;
     for (const id of ["run", "import", "fix-meta", "fix-meta-ai", "find-pdfs", "find-related", "compare-run", "apply-all", "cite-scan", "cite-missing", "ai-uncertain", "ai-accept", "s1-rate", "rv-fill", "rv-save", "rv-start-btn", "rv-table-ai", "np-create"]) {
@@ -247,6 +248,8 @@ const App = (window.App = {
     const clock = (t) => new Date(t).toTimeString().slice(0, 8);
     function render() {
       const now = Date.now();
+      const stopAllBtn = document.getElementById("log-stop-all");
+      if (stopAllBtn) stopAllBtn.hidden = !Act.running().some((e) => e.cancel);
       const rows = Act.list()
         .filter((e) => filter === "all" || e.kind === filter)
         .reverse()
@@ -261,7 +264,10 @@ const App = (window.App = {
                 el("span", { class: "log-time", text: clock(e.started) }),
                 el("span", { class: "log-kind k-" + e.kind, text: e.kind }),
                 el("span", { class: "log-label", text: e.label }),
-                el("span", { class: "log-state", text: state }),
+                el("span", { class: "log-state" }, [
+                  state,
+                  !e.ended && e.cancel ? el("button", { class: "log-stop", title: "Stop this request / program now", text: "Stop", onclick: (ev) => (ev.stopPropagation(), Act.cancel(e.id)) }) : null,
+                ]),
               ]);
               if (!open.has(e.id)) return row;
               return el("div", {}, [row, el("pre", { class: "log-detail", text: [e.detail, e.result ? (e.ok === false ? "Error: " : "Result: ") + e.result : ""].filter(Boolean).join("\n\n") || "(no details)" })]);
@@ -274,6 +280,7 @@ const App = (window.App = {
         el("b", { text: "Activity" }),
         seg,
         el("span", { class: "spacer" }),
+        el("button", { id: "log-stop-all", class: "danger-soft", text: "Stop all", title: "Cancel every running request and CLI run now (the autopilot stops too)", onclick: () => (window.Autopilot?.isRunning() ? Autopilot.stop() : Act.stopAll()) }),
         el("button", { text: "Copy", title: "Copy the log as text (for a bug report)", onclick: () => Zotero.Utilities.Internal.copyTextToClipboard(Act.text()) }),
         el("button", { text: "Clear finished", onclick: () => Act.clear() }),
         el("button", { class: "icon-btn", text: "×", title: "Close", onclick: () => App.closeLog() }),
@@ -429,6 +436,7 @@ App.panels.search = (() => {
     $("has-abstract").checked = !!s.hasAbstract;
     $("has-doi").checked = !!s.hasDOI;
     $("res-sort").value = s.sort || "relevance";
+    if (s.attachPDFs != null) $("attach-pdfs").checked = !!s.attachPDFs;
     renderSources(s.sources);
     setView(s.kwView || kwView || "builder");
     $("run").textContent = getMode() === "llm" && $("auto-import").checked ? "Search & add" : "Search";
@@ -768,6 +776,7 @@ App.panels.search = (() => {
       hasAbstract: o.hasAbstract,
       hasDOI: o.hasDOI,
       sort: $("res-sort").value,
+      attachPDFs: $("attach-pdfs").checked,
     };
   }
 

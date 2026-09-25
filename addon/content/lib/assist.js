@@ -86,6 +86,7 @@ ZR.Assist = (() => {
     const criteria = `Review question: ${review.question || "(not stated)"}\nInclusion criteria: ${review.include || "(not stated)"}\nExclusion criteria: ${review.exclude || "(not stated)"}\nAllowed exclusion reasons: ${reasons.map((r) => `"${r}"`).join(", ")}`;
     const out = new Array(papers.length).fill(null);
     for (let i = 0; i < papers.length; i += batchSize) {
+      if (ZR.Activity?.stopping) break;
       const batch = papers.slice(i, i + batchSize);
       const list = batch
         .map(

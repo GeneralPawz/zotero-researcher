@@ -59,6 +59,7 @@ ZR.Util = (() => {
         errorDelayIntervals: [1500, 4000],
         errorDelayMax: options.noRetry ? 0 : 12000,
         responseType: "text",
+        cancellerReceiver: options.cancellerReceiver,
       });
     } catch (e) {
       if (e && e.xmlhttp) xhr = e.xmlhttp;

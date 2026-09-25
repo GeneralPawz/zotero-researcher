@@ -347,6 +347,7 @@ ZR.System1 = (() => {
     const results = {};
     let done = 0;
     await U.mapLimit(cands, concurrency, async (c) => {
+      if (ZR.Activity?.stopping) return;
       try {
         results[c.key] = await scoreOneTypeSafe(c, protocol, questions, key);
       } catch (e) {

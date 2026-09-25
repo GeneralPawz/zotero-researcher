@@ -1045,6 +1045,7 @@ App.panels.review = (() => {
     let n = 0;
     try {
       for (const c of list) {
+        if (ZR.Activity.stopping) break;
         const r = kind === "exclude" ? (c.s1.suggest?.d === "exclude" && c.s1.suggest.r) || p.protocol.reasons?.[0] || "Off topic" : "";
         await decide(c, kind, r, "s1", { advance: false, render: false });
         if (++n % 5 === 0) st(`${kind === "exclude" ? "Excluding" : "Including"} ${n}/${list.length}…`);
@@ -1148,14 +1149,28 @@ App.panels.review = (() => {
     renderScreen();
   }
 
+  // PDFs of included papers are fetched one after another in the background
+  let pdfChain = Promise.resolve();
+  function fetchPDFLater(c, item) {
+    pdfChain = pdfChain
+      .then(() => (ZR.Activity.stopping ? false : ZR.Importer.attachFullText(item, c.record)))
+      .then((ok) => ok && (c.hasPDF = true))
+      .catch((e) => ZR.Util.log("Background PDF failed", e.message));
+  }
+  const wantPDFs = () => project()?.search?.attachPDFs ?? ZR.Prefs.get("attachPDFs", true);
+
   async function findPDFs() {
-    const list = population().filter((c) => c.itemID && !c.hasPDF && !c.ft);
     App.setBusy("review", true);
+    st("Waiting for PDFs still downloading…");
+    await pdfChain;
+    const list = population().filter((c) => c.itemID && !c.hasPDF && !c.ft);
     let found = 0;
     try {
       for (const [i, c] of list.entries()) {
+        if (ZR.Activity.stopping) break;
         st(`Looking for PDFs ${i + 1}/${list.length}…`);
-        if (await ZR.Importer.attachFullText(Zotero.Items.get(c.itemID))) {
+        // the links the search found (arXiv, DOAJ, CORE, …) first, then DOI resolvers and Unpaywall
+        if (await ZR.Importer.attachFullText(Zotero.Items.get(c.itemID), c.record)) {
           c.hasPDF = true;
           found++;
         }
@@ -1361,6 +1376,7 @@ App.panels.review = (() => {
     let failed = 0;
     try {
       for (const [i, c] of todo.entries()) {
+        if (ZR.Activity.stopping) break;
         st(`Annotating ${i + 1}/${todo.length}: ${ZR.Util.truncate(c.title, 60)}…`);
         try {
           made += (await annotateAI(c, { quiet: true })).created;
@@ -1609,6 +1625,7 @@ App.panels.review = (() => {
       const tag = ZR.Prefs.get("tagImported", true) ? ZR.Prefs.get("importTag", "zr:imported") : "";
       item = await ZR.Projects.importCandidate(libraryID(), p, c, tag ? [tag] : []);
       c.hasPDF = ZR.Prisma.itemHasPDF(item);
+      if (!c.hasPDF && wantPDFs()) fetchPDFLater(c, item);
       if (c.highlights?.length) await PaperView.syncNote(item.id, c.title, c.highlights).catch((e) => ZR.Util.log("Highlight note failed", e.message));
     }
     const r = d === "exclude" ? reason || $("reason-select")?.value || "" : "";
@@ -1770,6 +1787,7 @@ App.panels.review = (() => {
     let failed = 0;
     try {
       await ZR.Util.mapLimit(rows, 3, async (c) => {
+        if (ZR.Activity.stopping) return;
         try {
           const paper = await paperFor(c, spec.cols);
           if (spec.field === "qa") {

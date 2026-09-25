@@ -61,17 +61,31 @@ ZR.CLI = (() => {
 
   /** Run a program with stdin text; resolves {stdout, stderr, exitCode}. Kills it after `timeout` ms. */
   function exec(path, args, input, opts = {}) {
+    if (ZR.Activity.stopping) return Promise.reject(new ZR.Activity.Stopped());
     const name = String(path).split(/[\\/]/).pop();
     return ZR.Activity.track(
       "cli",
       `${name} ${args.filter((a) => !a.startsWith("-") && a.length < 40).slice(0, 3).join(" ")}`.trim(),
       `${path} ${args.map((a) => (/\s/.test(a) || !a ? JSON.stringify(a) : a)).join(" ")}\n\nInput: ${U.truncate(String(input || ""), 2000)}`,
-      () => execRaw(path, args, input, opts),
+      (setCancel) => execRaw(path, args, input, opts, setCancel),
       (r) => `exit ${r.exitCode}${r.stderr ? "\n" + U.truncate(r.stderr, 1500) : ""}`
     );
   }
 
-  async function execRaw(path, args, input, { timeout = 180000, workdir = null } = {}) {
+  /** End a CLI run with everything it started (Codex runs helpers of its own). */
+  async function killTree(proc) {
+    if (isWin() && proc.pid) {
+      try {
+        await Subprocess().call({ command: (env("SystemRoot") || "C:\\Windows") + "\\System32\\taskkill.exe", arguments: ["/PID", String(proc.pid), "/T", "/F"] }).then((p) => p.wait());
+        return;
+      } catch (e) {
+        U.log("taskkill failed", e.message);
+      }
+    }
+    proc.kill();
+  }
+
+  async function execRaw(path, args, input, { timeout = 180000, workdir = null } = {}, setCancel = () => {}) {
     let command = path;
     let argv = args;
     // npm installs .cmd shims, which must go through cmd.exe
@@ -80,7 +94,9 @@ ZR.CLI = (() => {
       argv = ["/d", "/s", "/c", path, ...args];
     }
     const proc = await Subprocess().call({ command, arguments: argv, stderr: "pipe", workdir });
-    const timer = setTimeout(() => proc.kill(), timeout);
+    let stopped = false;
+    setCancel(() => ((stopped = true), killTree(proc)));
+    const timer = setTimeout(() => killTree(proc), timeout);
     const readAll = async (pipe) => {
       let out = "";
       for (let s; (s = await pipe.readString()); ) out += s;
@@ -92,6 +108,7 @@ ZR.CLI = (() => {
         await proc.stdin.close();
       })()]);
       const { exitCode } = await proc.wait();
+      if (stopped) throw new ZR.Activity.Stopped();
       return { stdout, stderr, exitCode };
     } finally {
       clearTimeout(timer);

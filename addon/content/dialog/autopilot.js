@@ -24,7 +24,28 @@ const Autopilot = (window.Autopilot = (() => {
   const api = () => App.panels.review.api;
   let running = false;
   let pauseRequested = false;
+  let stopRequested = false;
   let pendingAsk = null;
+  let closeDialog = null;
+
+  // Review operations the autopilot calls: after a stop, none of them starts any more
+  const ASYNC_OPS = new Set(["persistProtocol", "rate", "bulk", "aiUncertain", "acceptAll", "decideRest", "decideByKey", "setThresholds", "findPDFs", "annotateAll", "tableAI", "saveNote"]);
+  const checkStop = () => {
+    if (stopRequested) throw new (ZR().Activity.Stopped)();
+  };
+  const API = () =>
+    new Proxy(App.panels.review.api, {
+      get(target, name) {
+        const v = target[name];
+        if (typeof v !== "function" || !ASYNC_OPS.has(name)) return v;
+        return async (...args) => {
+          checkStop();
+          const r = await v(...args);
+          checkStop();
+          return r;
+        };
+      },
+    });
 
   const state = () => (App.project?.kind === "review" ? App.project.autopilot || null : null);
   async function saveState(patch) {
@@ -71,7 +92,8 @@ const Autopilot = (window.Autopilot = (() => {
         el("b", { text: "✦ Autopilot" }),
         el("span", { class: "hint", id: "ap-model" }),
         el("span", { class: "spacer" }),
-        el("button", { id: "ap-pause", text: "Pause", onclick: pause }),
+        el("button", { id: "ap-pause", text: "Pause", title: "Pause after the current step", onclick: pause }),
+        el("button", { id: "ap-stop", class: "danger-soft", text: "Stop now", title: "Stop immediately: cancels running AI calls, CLI programs and requests", onclick: () => stop() }),
         el("button", { id: "ap-resume", class: "primary", text: "Resume", onclick: () => run() }),
         el("button", { class: "icon-btn", text: "×", title: "Hide the panel (the autopilot keeps its state)", onclick: hide }),
       ]),
@@ -106,7 +128,8 @@ const Autopilot = (window.Autopilot = (() => {
       label = "(model missing)";
     }
     $("ap-model").textContent = label + (s?.stage ? ` · ${ZR().Methodologies.STAGES[s.stage]?.short || s.stage}` : "");
-    $("ap-pause").hidden = !running;
+    $("ap-pause").hidden = !running || stopRequested;
+    $("ap-stop").hidden = !running || stopRequested;
     $("ap-resume").hidden = running || !s?.on;
   }
 
@@ -149,6 +172,7 @@ const Autopilot = (window.Autopilot = (() => {
    * @returns {Promise<{choice, values}>}
    */
   function ask(text, choices, { inputs = [] } = {}) {
+    if (stopRequested) return Promise.reject(new (ZR().Activity.Stopped)());
     panel().hidden = false;
     document.body.classList.add("ap-open");
     return new Promise((resolve) => {
@@ -212,7 +236,7 @@ const Autopilot = (window.Autopilot = (() => {
     }
     const p = App.project;
     const protocolReady = !!(p.protocol?.questions?.length || p.protocol?.inclusion?.length);
-    const stages = R().api.method().stages;
+    const stages = API().method().stages;
     const current = R().step && stages.includes(R().step) ? R().step : protocolReady ? (p.runs?.length ? "screen" : "search") : "protocol";
     const profileSel = el("select", { id: "ap-profile" }, profiles.map((o) => el("option", { value: o.value, text: o.label })));
     const modelSel = el("select", { id: "ap-model-select" });
@@ -246,8 +270,8 @@ const Autopilot = (window.Autopilot = (() => {
 
   /** Start (or restart) the autopilot for the current review project. */
   async function start({ profileID, model = "", question, stage = "protocol" }) {
-    await show();
     await saveState({ on: true, profileID, model, question, stage, attempt: 0, finished: false });
+    await show();
     $("ap-prompt").replaceChildren();
     await say(`Autopilot started with **${modelName(harness())}** at step “${ZR().Methodologies.STAGES[stage].label}”.`, "info");
     run();
@@ -256,12 +280,26 @@ const Autopilot = (window.Autopilot = (() => {
   function pause() {
     pauseRequested = true;
     pendingAsk?.resolve();
-    App.status("review", "The autopilot pauses after the current step.");
+    closeDialog?.();
+    say("Pausing after the current step finishes — use “Stop now” to interrupt it.", "info");
+    renderHead();
+  }
+
+  /** Stop immediately: cancel running AI calls, CLI programs and requests; the step can be resumed. */
+  function stop() {
+    if (!running) return;
+    stopRequested = true;
+    pauseRequested = true;
+    const n = ZR().Activity.stopAll();
+    pendingAsk?.resolve();
+    closeDialog?.();
+    say(`Stopping now${n ? ` — cancelled ${n} running call(s)` : ""}…`, "warn");
+    renderHead();
   }
 
   // ---------------------------------------------------------------- the loop ----
   function nextAfter(stage) {
-    const stages = R().api.method().stages;
+    const stages = API().method().stages;
     return stages[stages.indexOf(stage) + 1] || "report";
   }
 
@@ -269,6 +307,8 @@ const Autopilot = (window.Autopilot = (() => {
     if (running || !state()?.on) return;
     running = true;
     pauseRequested = false;
+    stopRequested = false;
+    ZR().Activity.resume();
     renderHead();
     try {
       while (state()?.on && !pauseRequested) {
@@ -278,6 +318,7 @@ const Autopilot = (window.Autopilot = (() => {
         App.showTab("review");
         await R().refresh(); // fresh candidates before the step works with them
         const next = await fn();
+        if (stopRequested) throw new (ZR().Activity.Stopped)(); // never move on after a stop
         if (next === "pause" || pauseRequested) {
           await say("Paused. Click Resume to continue from here.", "info");
           break;
@@ -286,10 +327,18 @@ const Autopilot = (window.Autopilot = (() => {
         await saveState({ stage: next, attempt: 0 });
       }
     } catch (e) {
-      Zotero.logError(e);
-      await say("Something went wrong: " + e.message + " — fix it and click Resume to retry this step.", "warn");
+      if (stopRequested || e?.stopped) await say(`Stopped during “${stageLabel(state()?.stage)}”. Resume starts this step again.`, "info");
+      else {
+        Zotero.logError(e);
+        await say("Something went wrong: " + e.message + " — fix it and click Resume to retry this step.", "warn");
+      }
     } finally {
       running = false;
+      if (stopRequested) {
+        stopRequested = false;
+        ZR().Activity.resume();
+      }
+      App.setBusy("review", false);
       renderHead();
     }
   }
@@ -302,7 +351,7 @@ const Autopilot = (window.Autopilot = (() => {
     await R().go("protocol");
     await say("Reading your question and choosing the methodology…", "info");
     const r = await ZR().Autopilot.chooseMethodology(harness(), state().question, { query: App.project.search?.query });
-    await R().api.persistProtocol(r.methodology, r.protocol, state().question);
+    await API().persistProtocol(r.methodology, r.protocol, state().question);
     await R().go("protocol");
     const P = App.project.protocol;
     await say(
@@ -339,33 +388,79 @@ const Autopilot = (window.Autopilot = (() => {
     return res;
   }
 
-  /** The search plan in a popup: accept or change it before running. */
+  /** The search plan in a popup: every search setting can be set or unset before it runs. */
   function searchDialog(plan, sources) {
     return new Promise((resolve) => {
+      const Z = ZR();
       const P = protocol();
+      const prev = App.project.search || {};
       const q = el("textarea", { id: "ap-s-query", rows: "3", class: "mono" });
-      q.value = P.query || "";
+      q.value = P.query || prev.query || "";
       const chosen = new Set(plan.sources);
       const srcBox = el(
         "div",
         { class: "ap-sources" },
-        sources.map((s) => el("label", { class: "src" }, [el("input", { type: "checkbox", value: s.id, checked: chosen.has(s.id) }), el("span", { text: s.name })]))
+        sources.map((s) => el("label", { class: "src", title: s.coverage || "" }, [el("input", { type: "checkbox", value: s.id, checked: chosen.has(s.id) }), el("span", { text: s.name }), el("span", { class: "badge " + s.access, text: s.access === "free" ? "free" : s.access === "free-key" ? "key" : "paid" })]))
       );
-      const limit = el("input", { type: "number", id: "ap-s-limit", min: "5", max: "500", value: String(plan.limit) });
-      const yFrom = el("input", { type: "number", id: "ap-s-from", value: P.yearFrom || "", placeholder: "from" });
-      const yTo = el("input", { type: "number", id: "ap-s-to", value: P.yearTo || "", placeholder: "to" });
-      const inLib = el("input", { type: "checkbox", id: "ap-s-inlib", checked: true });
-      const close = (v) => (layer.remove(), resolve(v));
+      const setSources = (pred) => srcBox.querySelectorAll("input").forEach((i) => (i.checked = pred(Z.Sources.get(i.value), i.value)));
+      const num = (id, value, attrs = {}) => el("input", Object.assign({ type: "number", id, value: value ?? "" }, attrs));
+      const limit = num("ap-s-limit", plan.limit, { min: "5", max: "500" });
+      const yFrom = num("ap-s-from", P.yearFrom ?? prev.yearFrom, { placeholder: "from" });
+      const yTo = num("ap-s-to", P.yearTo ?? prev.yearTo, { placeholder: "to" });
+      const minCites = num("ap-s-cites", prev.minCitations || "", { min: "0", placeholder: "0" });
+      const picks = (id, items, selected) =>
+        el(
+          "div",
+          { class: "picks", id },
+          items.map((it) => el("button", { class: "pick", "data-v": it.id, "aria-pressed": String(selected.includes(it.id)), text: it.label, onclick: (e) => e.target.setAttribute("aria-pressed", String(e.target.getAttribute("aria-pressed") !== "true")) }))
+        );
+      const langs = picks("ap-s-langs", Z.Records.LANGUAGES.map((l) => ({ id: l.code, label: l.name })), P.languages?.length ? P.languages : prev.languages || []);
+      const types = picks("ap-s-types", Z.Records.TYPE_FILTERS.map((t) => ({ id: t.id, label: t.label })), P.types?.length ? P.types : prev.types || []);
+      const picked = (box) => [...box.querySelectorAll('[aria-pressed="true"]')].map((b) => b.dataset.v);
+      const box = (id, label, checked, title = "") => {
+        const input = el("input", { type: "checkbox", id, checked: !!checked });
+        return { input, row: el("label", { class: "ap-check", title }, [input, " " + label]) };
+      };
+      const opts = {
+        hasAbstract: box("ap-s-abstract", "Only papers with an abstract", prev.hasAbstract),
+        hasDOI: box("ap-s-doi", "Only papers with a DOI", prev.hasDOI),
+        oaOnly: box("ap-s-oa", "Only open access", prev.oaOnly),
+        fulltextOnly: box("ap-s-ft", "Only papers with a full text available", prev.fulltextOnly),
+        strict: box("ap-s-strict", "Strict matching (query must match title, abstract or keywords)", prev.strict),
+        inLibrary: box("ap-s-inlib", "Also screen papers already in my library (recommended for a review)", true),
+        hideExcluded: box("ap-s-hideexcl", "Hide papers I excluded before", false),
+        attachPDFs: box("ap-s-pdfs", "Download PDFs when papers are included (needed for the full-text step)", prev.attachPDFs ?? Z.Prefs.get("attachPDFs", true)),
+      };
+      const close = (v) => {
+        closeDialog = null;
+        layer.remove();
+        resolve(v);
+      };
+      closeDialog = () => close(null);
+      const section = (title, children) => el("div", { class: "ap-sec" }, [el("div", { class: "opt-title", text: title }), ...children]);
       const layer = el(
         "div",
         { class: "modal-layer", id: "ap-search-layer" },
         el("div", { class: "modal ap-search-modal", role: "dialog" }, [
           el("h2", { text: "Search plan" }),
-          el("p", { class: "hint", text: plan.why || "Proposed by the autopilot — change anything before it runs." }),
-          el("label", { class: "field" }, ["Query", q]),
-          el("div", { class: "field" }, ["Databases", srcBox]),
-          el("div", { class: "ap-row" }, [el("label", { class: "field" }, ["Results per database", limit]), el("label", { class: "field" }, ["Years", el("div", { class: "ap-row" }, [yFrom, "–", yTo])])]),
-          el("label", { class: "choice" }, [inLib, el("span", { text: "Also screen papers that are already in my library (recommended for a review)" })]),
+          el("p", { class: "hint", text: (plan.why ? plan.why + " " : "") + "Proposed by the autopilot — set or unset anything before it runs." }),
+          el("div", { class: "ap-search-body" }, [
+            section("Query", [q]),
+            section("Databases", [
+              el("div", { class: "ap-row" }, [
+                el("button", { class: "link", text: "all", onclick: () => setSources(() => true) }),
+                el("button", { class: "link", text: "none", onclick: () => setSources(() => false) }),
+                el("button", { class: "link", text: "free only", onclick: () => setSources((s) => s?.access === "free") }),
+                el("button", { class: "link", text: "suggested", onclick: () => setSources((s, id) => chosen.has(id)) }),
+              ]),
+              srcBox,
+            ]),
+            section("Results", [el("div", { class: "ap-row" }, [el("label", { class: "ap-inline" }, ["Per database ", limit]), el("label", { class: "ap-inline" }, ["Years ", yFrom, " – ", yTo]), el("label", { class: "ap-inline" }, ["Min. citations ", minCites])])]),
+            section("Languages (none = any)", [langs]),
+            section("Publication types (none = any)", [types]),
+            section("Filters", [opts.hasAbstract.row, opts.hasDOI.row, opts.oaOnly.row, opts.fulltextOnly.row, opts.strict.row]),
+            section("Library and PDFs", [opts.inLibrary.row, opts.hideExcluded.row, opts.attachPDFs.row]),
+          ]),
           el("div", { class: "actions" }, [
             el("span", { class: "spacer" }),
             el("button", { text: "Pause", onclick: () => close(null) }),
@@ -373,22 +468,29 @@ const Autopilot = (window.Autopilot = (() => {
               class: "primary",
               id: "ap-s-run",
               text: "Run the search",
-              onclick: () =>
+              onclick: () => {
+                const sourcesChosen = [...srcBox.querySelectorAll("input:checked")].map((i) => i.value);
+                if (!sourcesChosen.length) return srcBox.classList.add("ap-missing");
                 close({
                   mode: "structured",
                   query: q.value.trim(),
-                  sources: [...srcBox.querySelectorAll("input:checked")].map((i) => i.value),
+                  sources: sourcesChosen,
                   limit: parseInt(limit.value, 10) || plan.limit,
                   yearFrom: parseInt(yFrom.value, 10) || null,
                   yearTo: parseInt(yTo.value, 10) || null,
-                  languages: P.languages || [],
-                  types: P.types || [],
-                  skipExisting: !inLib.checked,
-                  hideExcluded: false,
-                  strict: false,
-                  oaOnly: false,
-                  fulltextOnly: false,
-                }),
+                  minCitations: Math.max(0, parseInt(minCites.value, 10) || 0),
+                  languages: picked(langs),
+                  types: picked(types),
+                  hasAbstract: opts.hasAbstract.input.checked,
+                  hasDOI: opts.hasDOI.input.checked,
+                  oaOnly: opts.oaOnly.input.checked,
+                  fulltextOnly: opts.fulltextOnly.input.checked,
+                  strict: opts.strict.input.checked,
+                  skipExisting: !opts.inLibrary.input.checked,
+                  hideExcluded: opts.hideExcluded.input.checked,
+                  attachPDFs: opts.attachPDFs.input.checked,
+                });
+              },
             }),
           ]),
         ])
@@ -413,8 +515,8 @@ const Autopilot = (window.Autopilot = (() => {
     if (ch.inclusion) P.inclusion = ch.inclusion;
     if (ch.exclusion) P.exclusion = ch.exclusion;
     if (ch.query) P.query = ch.query;
-    if (ch.inclusion || ch.exclusion || ch.query) await R().api.persistProtocol(p.methodology, P);
-    if (ch.thresholds) await R().api.setThresholds(ch.thresholds);
+    if (ch.inclusion || ch.exclusion || ch.query) await API().persistProtocol(p.methodology, P);
+    if (ch.thresholds) await API().setThresholds(ch.thresholds);
     if (ch.query) {
       const s = state();
       const base = s.lastSettings || { mode: "structured", sources: Object.keys(p.runs?.at(-1)?.perSource || {}), limit: 50 };
@@ -429,20 +531,20 @@ const Autopilot = (window.Autopilot = (() => {
     let attempt = state().attempt || 0;
     for (;;) {
       await say("System 1 is rating the pool…", "info");
-      await R().api.rate(true);
-      const cands = R().api.population();
+      await API().rate(true);
+      const cands = API().population();
       if (!cands.length) {
         await say("The pool is empty — there is nothing to screen. Let's adjust the search.", "warn");
         await saveState({ stage: "search" });
         return "search";
       }
-      const summary = ZR().Autopilot.screeningSummary(cands, R().api.thresholds());
+      const summary = ZR().Autopilot.screeningSummary(cands, API().thresholds());
       await say(
         `System 1: of **${summary.pool}** papers, ${summary.aboveInclude} are above the include threshold, ${summary.middle} in the uncertain middle and ${summary.belowExclude} below the exclude threshold (suggestions: ${summary.suggest.include} include, ${summary.suggest.maybe} maybe, ${summary.suggest.exclude} exclude).`,
         "info"
       );
       await say("Checking whether that is plausible…", "info");
-      const a = await ZR().Autopilot.assessScreening(harness(), protocol(), summary, () => ZR().Autopilot.screeningSample(R().api.population()), { attempt });
+      const a = await ZR().Autopilot.assessScreening(harness(), protocol(), summary, () => ZR().Autopilot.screeningSample(API().population()), { attempt });
       await say((a.drilldown ? "I looked at sample papers in detail. " : "") + a.explanation);
       if (a.verdict === "ok") break;
       attempt++;
@@ -471,12 +573,12 @@ const Autopilot = (window.Autopilot = (() => {
       await applyChanges(a.changes);
     }
     await say("Screening: applying the thresholds, and the AI reads the uncertain papers…", "info");
-    await R().api.bulk("exclude");
-    await R().api.bulk("include");
-    await withProfile(harness(), () => R().api.aiUncertain());
-    await R().api.acceptAll({ maybeAs: "include" });
-    await R().api.decideRest();
-    const all = R().api.candidates();
+    await API().bulk("exclude");
+    await API().bulk("include");
+    await withProfile(harness(), () => API().aiUncertain());
+    await API().acceptAll({ maybeAs: "include" });
+    await API().decideRest();
+    const all = API().candidates();
     await say(`Screening done: **${all.filter((c) => c.ta === "include").length}** papers go on, ${all.filter((c) => c.ta === "exclude").length} excluded. Every decision is in the list and can be changed.`);
     return nextAfter("screen");
   }
@@ -494,9 +596,9 @@ const Autopilot = (window.Autopilot = (() => {
     if (a.choice === "choose") await saveState({ ftProfileID: a.values.profile, ftModel: "" });
     else await saveState({ ftProfileID: null });
     await say("Looking for PDFs…", "info");
-    await R().api.findPDFs();
+    await API().findPDFs();
     await say(`**${modelName(ftModel())}** annotates the full texts (real Zotero annotations, author “${ZR().FullText.botName()}”)…`, "info");
-    await withProfile(ftModel(), () => R().api.annotateAll());
+    await withProfile(ftModel(), () => API().annotateAll());
     let papers = fullTextPapers();
     const withPDF = papers.filter((p) => p.hasPDF).length;
     await say(`${withPDF} of ${papers.length} papers have a PDF and annotations; ${papers.length - withPDF} without PDF stay open (“not retrieved” in the flow diagram).`, "info");
@@ -535,7 +637,7 @@ const Autopilot = (window.Autopilot = (() => {
       { id: "pause", label: "Pause — I'll decide myself" },
     ]);
     if (q3.choice === "pause") return "pause";
-    for (const d of dec.decisions) await R().api.decideByKey(d.key, "ft", d.d, d.r, "llm");
+    for (const d of dec.decisions) await API().decideByKey(d.key, "ft", d.d, d.r, "llm");
     await R().go("fulltext");
     await say(`Full-text decisions applied (${dec.decisions.length}).`);
     return nextAfter("fulltext");
@@ -567,7 +669,7 @@ const Autopilot = (window.Autopilot = (() => {
       if (a.choice === "skip") return nextAfter(stage);
     }
     await say(`${stageLabel(stage)}: ${modelName(ftModel())} fills in the table…`, "info");
-    await withProfile(ftModel(), () => R().api.tableAI());
+    await withProfile(ftModel(), () => API().tableAI());
     await say(`${stageLabel(stage)} done — check the table; every cell can be changed.`);
     return nextAfter(stage);
   }
@@ -575,13 +677,13 @@ const Autopilot = (window.Autopilot = (() => {
   // --- 7 report
   async function doReport() {
     await R().go("report");
-    const c = R().api.counts();
+    const c = API().counts();
     await say(`All steps done. **${c.identified}** records identified, ${c.screened} screened, ${c.excludedTA} excluded at screening, ${c.assessed} full texts assessed, **${c.included}** included.`, "done");
     const a = await ask("Save the protocol and the flow summary as a note in the collection?", [
       { id: "save", label: "Save as note", primary: true },
       { id: "no", label: "Finish" },
     ]);
-    if (a.choice === "save") await R().api.saveNote();
+    if (a.choice === "save") await API().saveNote();
     await saveState({ on: false, finished: true, stage: "report" });
     await say("Finished. The autopilot can be started again from any step.", "done");
     return "stop";
@@ -598,5 +700,5 @@ const Autopilot = (window.Autopilot = (() => {
     report: doReport,
   };
 
-  return { show, hide, start, run, pause, isRunning: () => running, state, say, ask };
+  return { show, hide, start, run, pause, stop, isRunning: () => running, isStopping: () => stopRequested, state, say, ask };
 })());
