@@ -1,6 +1,6 @@
 # Push (or merge) to the `release` branch to ship a new version:
 #   1. bump "version" in addon/manifest.json (and package.json)
-#   2. git push origin main:release   (or merge main into release)
+#   2. npm run release   (merges main into release and pushes; or merge a PR into release)
 # This builds the XPI, publishes GitHub Release v<version> with it attached, and
 # rewrites updates.json on the release branch. Installed copies of the plugin read
 # that file (manifest update_url) when Zotero checks for plugin updates.
@@ -22,9 +22,9 @@ jobs:
   release:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
           node-version: 22
 

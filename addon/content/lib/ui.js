@@ -21,6 +21,19 @@ ZR.UI = (() => {
     });
     registerItemPaneSection();
     registerMenus();
+    announceUpdate();
+  }
+
+  /** After an update the old Settings pane is gone, so the new version confirms it. */
+  function announceUpdate() {
+    const last = ZR.Prefs.get("lastVersion", "");
+    ZR.Prefs.set("lastVersion", ZR.version);
+    if (!last || last === ZR.version) return;
+    const pw = new Zotero.ProgressWindow({ closeOnClick: true });
+    pw.changeHeadline("Zotero Researcher updated");
+    pw.addDescription(`Version ${last} → ${ZR.version}. Your settings and library data were kept.`);
+    pw.show();
+    pw.startCloseTimer(8000);
   }
 
   async function shutdown() {

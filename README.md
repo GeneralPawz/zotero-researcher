@@ -35,7 +35,7 @@ Installed copies update themselves from this repository:
 ### Publishing a release
 
 1. Bump `version` in `addon/manifest.json` (and `package.json`), then commit to `main`.
-2. Push `main` to `release` with `git push origin main:release`, or merge a pull request into `release`.
+2. Run `npm run release` from `main`. It checks that the version is new, merges `main` into `release` and pushes. You can also merge a pull request into `release`.
 3. The **Release** GitHub Action then:
    - runs the tests,
    - builds the XPI,
