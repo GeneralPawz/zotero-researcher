@@ -106,7 +106,7 @@ const Autopilot = (window.Autopilot = (() => {
         el("button", { id: "ap-history", class: "ap-icon", title: "Sessions: this one and earlier ones", "aria-haspopup": "dialog", onclick: () => toggleHistory() }, App.icon("history")),
         el("button", { id: "ap-toggle", class: "ap-icon", onclick: () => (running ? pause() : state()?.on ? run() : (expand(), renderSetup())) }, App.icon("play")),
         el("button", { id: "ap-stop", class: "ap-icon danger", title: "Stop now: cancels running AI calls, CLI programs and requests", onclick: () => stop() }, App.icon("stop")),
-        el("button", { id: "ap-collapse", class: "ap-icon", onclick: () => ($("ap-panel").classList.contains("collapsed") ? expand() : collapse()) }, App.icon("collapse")),
+        el("button", { id: "ap-collapse", class: "ap-icon", onclick: () => ($("ap-panel").classList.contains("collapsed") ? show() : collapse()) }, App.icon("collapse")),
       ]),
       el("div", { class: "ap-log", id: "ap-log" }),
       el("div", { class: "ap-prompt", id: "ap-prompt" }),
@@ -131,6 +131,18 @@ const Autopilot = (window.Autopilot = (() => {
     if ($("ap-panel")) $("ap-panel").hidden = true;
     $("ap-pop")?.remove();
     document.body.classList.remove("ap-open", "ap-collapsed");
+  }
+
+  /** On the review tab the panel is always there: collapsed to a strip until opened. */
+  function dock() {
+    if (App.project?.kind !== "review") return hide();
+    const fresh = !$("ap-panel");
+    const p = panel();
+    if (!fresh && !p.hidden) return renderHead(); // open or collapsed as the user left it
+    p.hidden = false;
+    p.classList.add("collapsed");
+    document.body.classList.add("ap-open", "ap-collapsed");
+    renderHead();
   }
 
   function collapse() {
@@ -171,14 +183,8 @@ const Autopilot = (window.Autopilot = (() => {
     const collapsed = $("ap-panel").classList.contains("collapsed");
     $("ap-panel").classList.toggle("running", running);
     $("ap-collapse").replaceChildren(App.icon(collapsed ? "expand" : "collapse"));
-    $("ap-collapse").title = collapsed ? (running ? "Show the autopilot (running)" : "Show the autopilot") : "Collapse the autopilot panel";
+    $("ap-collapse").title = collapsed ? (running ? "Autopilot: running. Click to show it" : s?.on ? "Autopilot: paused. Click to show it" : "Autopilot: an AI runs the review with you. Click to open") : "Collapse the autopilot panel";
     $("ap-history").classList.toggle("on", !!viewing);
-    // the "✦ Autopilot" button in the review's subheader follows the state
-    const open = $("ap-open");
-    if (open) {
-      open.textContent = running ? "✦ Autopilot running" : s?.on ? "✦ Autopilot (paused)" : "✦ Autopilot";
-      open.classList.toggle("on", !!s?.on || running);
-    }
     App.syncLayout?.();
   }
 
@@ -1012,5 +1018,5 @@ const Autopilot = (window.Autopilot = (() => {
     report: doReport,
   };
 
-  return { show, hide, collapse, expand, start, runFrom, run, pause, stop, stopAndWait, isRunning: () => running, isStopping: () => stopRequested, state, say, ask, viewSession };
+  return { show, hide, dock, collapse, expand, start, runFrom, run, pause, stop, stopAndWait, isRunning: () => running, isStopping: () => stopRequested, state, say, ask, viewSession };
 })());

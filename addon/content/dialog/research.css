@@ -814,3 +814,52 @@ textarea#query { resize: none; overflow: hidden; min-height: 40px; line-height: 
    keeps its place when the subheader wraps onto two rows (panel open) or not (collapsed) */
 .ap-head, .ap-panel.collapsed .ap-head { align-items: flex-start; padding-top: 6px; }
 .ap-title { margin-top: 1px; }
+
+/* ---------- report: diagrams, styles, export ---------- */
+.rp-bar { gap: 8px; }
+.rp-note { margin: 0 0 8px; }
+.prisma-view svg { max-width: 100%; height: auto; border-radius: 6px; border: 1px solid var(--line); background: #ffffff; }
+.prisma-view.transparent svg { background: repeating-conic-gradient(#eeeeee 0% 25%, #ffffff 0% 50%) 50% / 16px 16px; }
+.rp-editor, .rp-ai { border-bottom: 1px solid var(--chrome-line); background: var(--chrome-bg); padding: 10px 18px 12px; display: flex; flex-direction: column; gap: 10px; max-height: 46vh; overflow: auto; }
+.rp-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 12px 22px; }
+.rp-group { display: flex; flex-direction: column; gap: 5px; }
+.rp-field { display: grid; grid-template-columns: 110px minmax(0, 1fr); align-items: center; gap: 8px; font-size: 12px; color: var(--fg-2); }
+.rp-field input[type="number"] { width: 80px; }
+.rp-check { display: flex; align-items: center; gap: 6px; font-size: 12px; }
+.rp-colour { display: inline-flex; align-items: center; gap: 6px; }
+.rp-colour input[type="color"] { width: 28px; height: 24px; padding: 0 2px; border: 1px solid var(--line); border-radius: 5px; background: var(--bg); cursor: pointer; }
+.rp-hex { width: 84px; font-family: ui-monospace, Consolas, monospace; font-size: 12px; padding: 3px 6px !important; }
+.rp-range { display: inline-flex; align-items: center; gap: 8px; }
+.rp-range input { width: 120px; }
+.rp-save input[type="text"] { width: 260px; }
+.rp-ai textarea { width: 100%; }
+.rp-ai-row { display: flex; align-items: center; gap: 10px; }
+.rp-ai-image { display: flex; align-items: center; gap: 8px; flex: 1; min-width: 0; }
+.rp-ai-image img { max-height: 70px; max-width: 160px; border: 1px solid var(--line); border-radius: 6px; background: #ffffff; }
+
+/* ---------- round 13 ---------- */
+/* the collapsed panel continues the subheader's line */
+.ap-panel.collapsed .ap-head { border-bottom: 1px solid var(--chrome-line); background: var(--chrome-bg); }
+/* running: a light runs along the edge of the panel toggle */
+.ap-panel.running #ap-collapse { position: relative; overflow: hidden; isolation: isolate; border-color: transparent; color: var(--accent); }
+.ap-panel.running #ap-collapse::before { content: ""; position: absolute; inset: -60%; z-index: -2; background: conic-gradient(transparent 0 62%, var(--accent) 88%, transparent 100%); animation: zr-edge 1.4s linear infinite; }
+.ap-panel.running #ap-collapse::after { content: ""; position: absolute; inset: 2px; z-index: -1; border-radius: 5px; background: var(--bg); }
+@keyframes zr-edge { to { transform: rotate(1turn); } }
+/* Log sits centred under the collapsed panel */
+body.ap-open.ap-collapsed #panel-review > .statusbar { padding-right: max(2px, calc((48px - var(--log-w, 40px)) / 2)); }
+/* screening filter: the decisions in their colours */
+.zr-dd-item.opt-include, .zr-dd-label.opt-include { color: var(--good); }
+.zr-dd-item.opt-maybe, .zr-dd-label.opt-maybe { color: var(--mid); }
+.zr-dd-item.opt-exclude, .zr-dd-label.opt-exclude { color: var(--bad); }
+.opt-include::before, .opt-maybe::before, .opt-exclude::before { content: "●"; margin-right: 6px; font-size: 0.85em; }
+/* a line between the list header and the list that scrolls under it */
+.queue-head { border-bottom: 1px solid var(--line); }
+/* nothing clipped: the autopilot's step marker stays inside the circle, descenders have room */
+.stepper button.ap-here .num { box-shadow: inset 0 0 0 2px var(--accent), inset 0 0 0 3.5px var(--bg); }
+.stepper button.on.ap-here .num { box-shadow: inset 0 0 0 2px var(--accent), inset 0 0 0 3.5px var(--accent-fg); }
+.zr-dd-label, .stepper .st-label { line-height: 1.4; padding-block: 1px; }
+.project-box .zr-dd-btn { padding: 2px 6px; line-height: 1.4; }
+/* lines in Zotero's colour */
+.stepper, .toolbar, .queue, .queue-head, .queue-ai, .hero { border-color: var(--chrome-line); }
+.rp-range .hint { white-space: nowrap; min-width: 36px; }
+.rp-range input { width: 96px; }

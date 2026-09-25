@@ -1,4 +1,4 @@
-/* global Zotero, App, $, el, document, window, DOMParser, PaperView, Autopilot */
+/* global Zotero, App, $, el, document, window, PaperView, Autopilot, ReportView */
 "use strict";
 
 // Review tab: a methodology-based pipeline for the current project.
@@ -20,7 +20,6 @@ App.panels.review = (() => {
   let currentKey = null;
   let protocolMode = null; // "describe" | "form"; null = pick automatically
   let draft = null; // protocol being edited: {id, methodology, protocol, full, recommended}
-  let lastSVG = "";
   const st = (m) => App.status("review", m);
   const project = () => (App.project?.kind === "review" ? App.project : null);
   const method = () => ZR.Methodologies.get(project()?.methodology);
@@ -64,7 +63,7 @@ App.panels.review = (() => {
     $("rv-table-cluster").addEventListener("click", clusterFacet);
     $("rv-table-full").addEventListener("click", () => (ZR.Prefs.set("tableFullHeaders", !ZR.Prefs.get("tableFullHeaders", false)), renderTable()));
     $("prisma-note").addEventListener("click", saveNote);
-    $("prisma-svg").addEventListener("click", exportSVG);
+    ReportView.init();
     document.addEventListener("keydown", onKey);
   }
 
@@ -141,17 +140,8 @@ App.panels.review = (() => {
     });
     const rated = cands.filter((c) => c.s1).length;
     if (cands.length) box.append(el("span", { class: "hint funnel-s1", text: `System 1 rated ${rated}/${cands.length}` }));
-    const ap = p.autopilot;
     setTimeout(() => App.syncLayout(), 0);
-    box.append(
-      el("button", {
-        id: "ap-open",
-        class: "ap-open-btn" + (ap?.on ? " on" : ""),
-        title: "An AI runs the review with you, step by step",
-        text: ap?.on ? (Autopilot.isRunning() ? "✦ Autopilot running" : "✦ Autopilot (paused)") : "✦ Autopilot",
-        onclick: () => Autopilot.show(),
-      })
-    );
+    Autopilot.dock(); // the panel on the right, collapsed until opened
     renderSteps();
   }
 
@@ -2167,11 +2157,15 @@ App.panels.review = (() => {
 
   async function renderReport() {
     const c = counts();
-    lastSVG = ZR.Prisma.svg(c, { title: `${method().name} · ${project().name}` });
-    const doc = new DOMParser().parseFromString(lastSVG, "image/svg+xml");
-    const view = $("prisma-view");
-    view.replaceChildren(document.importNode(doc.documentElement, true));
-    if (method().stages.includes("classify")) view.append(facetSummary());
+    ReportView.render({
+      project: project(),
+      method: method(),
+      cands,
+      counts: c,
+      thresholds: thresholds(),
+      engineName: ENGINE_NAMES[ZR.System1.engine()] || "keyword rules",
+      facetSummary: method().stages.includes("classify") ? facetSummary : null,
+    });
     st(c.pendingTA || c.pendingFT ? `Still to do: ${c.pendingTA} title/abstract and ${c.pendingFT} full-text decision(s).` : "All papers screened.");
   }
 
@@ -2217,12 +2211,6 @@ App.panels.review = (() => {
     const legacy = Object.assign(criteriaOf(p.protocol), { runs: p.runs });
     await ZR.Importer.createNote(protocolHTML(p) + ZR.Prisma.noteHTML(c, legacy, p.name), { libraryID: libraryID(), collectionID: App.target.collectionID });
     st("Protocol and flow summary saved as a note in the collection.");
-  }
-
-  async function exportSVG() {
-    if (!lastSVG) await renderReport();
-    const f = await App.saveFile(lastSVG, "prisma-flow.svg", "SVG image", "*.svg");
-    if (f) st("Saved " + f);
   }
 
   /** Open this step the next time the tab is shown. */

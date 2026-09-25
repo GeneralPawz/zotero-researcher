@@ -180,16 +180,27 @@ ZR.LLM = (() => {
     );
   }
 
+  /** Images ({mediaType, data: base64}) go with the last user message, in each API's format. */
+  function withImages(messages, images, format) {
+    if (!images?.length) return messages;
+    const out = messages.slice();
+    const i = out.map((m) => m.role).lastIndexOf("user");
+    const text = { type: "text", text: String(out[i].content) };
+    const pics = images.map((im) => (format === "anthropic" ? { type: "image", source: { type: "base64", media_type: im.mediaType, data: im.data } } : { type: "image_url", image_url: { url: `data:${im.mediaType};base64,${im.data}` } }));
+    out[i] = { role: "user", content: format === "anthropic" ? [...pics, text] : [text, ...pics] };
+    return out;
+  }
+
   async function chatRaw(profile, messages, opts = {}) {
     const { provider, baseURL, apiKey } = resolve(profile);
     // Local CLI (Claude Code / Codex): the user's subscription, no API key
-    if (provider.protocol === "cli") return ZR.CLI.chat(profile, messages, { system: opts.system, timeout: opts.timeout || 240000, web: !!opts.web });
+    if (provider.protocol === "cli") return ZR.CLI.chat(profile, messages, { system: opts.system, timeout: opts.timeout || 240000, web: !!opts.web, images: opts.images });
     const maxTokens = opts.maxTokens || 4096;
     const temperature = opts.temperature ?? (profile.temperature !== "" && profile.temperature != null ? Number(profile.temperature) : undefined);
     const timeout = opts.timeout || 180000;
 
     if (provider.protocol === "anthropic") {
-      const body = { model: profile.model, max_tokens: maxTokens, messages };
+      const body = { model: profile.model, max_tokens: maxTokens, messages: withImages(messages, opts.images, "anthropic") };
       if (opts.system) body.system = opts.system;
       if (temperature !== undefined && !Number.isNaN(temperature)) body.temperature = temperature;
       const res = await ZR.http("POST", `${baseURL}/messages`, {
@@ -203,7 +214,8 @@ ZR.LLM = (() => {
       return text;
     }
 
-    const msgs = opts.system ? [{ role: "system", content: opts.system }, ...messages] : messages;
+    const withPics = withImages(messages, opts.images, "openai");
+    const msgs = opts.system ? [{ role: "system", content: opts.system }, ...withPics] : withPics;
     const body = { model: profile.model, messages: msgs };
     // OpenAI's current models reject max_tokens and non-default temperatures.
     if (provider.newParams) body.max_completion_tokens = maxTokens;

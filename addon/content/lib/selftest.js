@@ -147,11 +147,14 @@ ZR.SelfTest = (() => {
       }
       if (url.startsWith(MOCK_EMBED)) return mockEmbed(url, o);
       if (!url.startsWith(MOCK)) return realHTTP(method, url, o);
-      const prompt = o.body.messages[o.body.messages.length - 1].content;
+      const last = o.body.messages[o.body.messages.length - 1].content;
+      const prompt = Array.isArray(last) ? last.filter((p) => p.type === "text").map((p) => p.text).join(" ") : last;
+      if (Array.isArray(last)) mockLLM.images = (mockLLM.images || 0) + last.filter((p) => p.type === "image_url").length;
       calls.push(prompt.slice(0, 50));
       const n = (prompt.match(/^\[\d+\]/gm) || []).length;
       let content;
-      if (prompt.includes('{"sources"')) content = JSON.stringify({ sources: ["crossref", "doaj", "arxiv"], limit: 5, why: "Multidisciplinary coverage of BIM research." });
+      if (prompt.includes("Design a style for flow diagrams")) content = JSON.stringify({ name: "Journal of Mock Engineering", font: "serif", fontSize: 11, radius: 0, bands: false, arrow: "open", boxStroke: "#000000", line: "#000000", text: "#000000", showTitle: false });
+      else if (prompt.includes('{"sources"')) content = JSON.stringify({ sources: ["crossref", "doaj", "arxiv"], limit: 5, why: "Multidisciplinary coverage of BIM research." });
       else if (prompt.includes('"verdict": "ok"|"adjust"|"hopeless"')) {
         // first check: too strict → propose a change; second: fine
         mockLLM.assessCalls = (mockLLM.assessCalls || 0) + 1;
@@ -1105,6 +1108,95 @@ ZR.SelfTest = (() => {
         return res;
       });
 
+      await step("report diagrams: PRISMA, review process, search strategy; styles (preset, editor, AI from text and image); copy and download as PNG, JPG, SVG, LaTeX", async () => {
+        const d = rv();
+        const RV = rw.ReportView;
+        await goStep("report", (x) => x.querySelector("#prisma-view svg"));
+        const svg = () => d.querySelector("#prisma-view svg").outerHTML;
+        const text = () => d.querySelector("#prisma-view svg").textContent;
+        const res = { diagrams: {}, panelCollapsed: d.getElementById("ap-panel")?.classList.contains("collapsed") };
+        for (const k of ["process", "search", "prisma"]) {
+          d.querySelector(`#rp-diagram [data-d="${k}"]`).click();
+          await waitFor(() => RV.kind() === k && d.querySelector(`#rp-diagram [data-d="${k}"].on`), 3000);
+          res.diagrams[k] = text().slice(0, 110);
+          if (k !== "prisma") await shot(rw, `12d-diagram-${k}.png`);
+        }
+        // a preset
+        d.getElementById("rp-theme").value = "print";
+        d.getElementById("rp-theme").dispatchEvent(new rw.Event("change"));
+        await waitFor(() => RV.currentTheme().id === "print" && d.getElementById("rp-theme").value === "print" && !/ rx="6"/.test(svg()), 5000).catch(() => null);
+        res.printSquare = !/<rect[^>]* rx="[1-9]/.test(svg().replace(/<marker[\s\S]*?<\/marker>/, ""));
+        // the editor: corners, then save as a style of its own
+        d.getElementById("rp-edit").click();
+        const radius = await waitFor(() => d.querySelector('#rp-editor input[data-key="radius"]'), 3000);
+        radius.value = "12";
+        radius.dispatchEvent(new rw.Event("input"));
+        res.editedRadius = / rx="12"/.test(svg());
+        res.unsaved = d.getElementById("rp-theme").value === "__draft";
+        await shot(rw, "12e-style-editor.png");
+        d.getElementById("rp-name").value = "Selftest style";
+        d.getElementById("rp-save-new").click();
+        await waitFor(() => ZR.Prefs.getJSON("diagramThemes", []).some((t) => t.name === "Selftest style") && d.getElementById("rp-theme").value !== "__draft", 5000).catch(() => null);
+        res.savedStyle = d.getElementById("rp-theme").selectedOptions[0]?.textContent;
+        // the AI: a description and an example image
+        d.getElementById("rp-edit").click();
+        d.getElementById("rp-ai").click();
+        await waitFor(() => d.getElementById("rp-ai-run"), 3000);
+        RV.setStyleImage({ mediaType: "image/png", data: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg==", name: "example.png" });
+        d.getElementById("rp-ai-text").value = "Black and white, Times, square boxes, open arrows";
+        mockLLM.images = 0;
+        d.getElementById("rp-ai-run").click();
+        await waitFor(() => RV.currentTheme().name === "Journal of Mock Engineering", 20000);
+        const t = RV.currentTheme();
+        res.ai = { font: t.font, radius: t.radius, bands: t.bands, arrow: t.arrow, imagesSent: mockLLM.images, editorOpen: !d.getElementById("rp-editor").hidden };
+        await shot(rw, "12f-style-ai.png");
+        // downloads (to a temporary folder instead of the save dialog)
+        const dir = PathUtils.join(PathUtils.tempDir, "zr-diagrams-" + Date.now());
+        await IOUtils.makeDirectory(dir);
+        const head = {};
+        for (const f of ["png", "jpg", "svg", "tikz", "latex"]) {
+          const p = PathUtils.join(dir, "d." + f);
+          await RV.download(f, p);
+          const b = await IOUtils.read(p);
+          head[f] = f === "png" ? [...b.slice(1, 4)].map((x) => String.fromCharCode(x)).join("") + ` ${(b[16] << 24) | (b[17] << 16) | (b[18] << 8) | b[19]}px` : f === "jpg" ? [...b.slice(0, 3)].join(",") : new TextDecoder().decode(b.slice(0, 40)).split("\n")[0];
+        }
+        const svgWidth = Number(svg().match(/ width="(\d+)"/)[1]);
+        res.files = head;
+        res.pngScale = Number(head.png.split(" ")[1].replace("px", "")) / svgWidth;
+        await IOUtils.remove(dir, { recursive: true });
+        // clipboard: LaTeX as text, the image as an image
+        const readClip = () => {
+          const Cc = Components.classes;
+          const Ci = Components.interfaces;
+          const tr = Cc["@mozilla.org/widget/transferable;1"].createInstance(Ci.nsITransferable);
+          tr.init(null);
+          tr.addDataFlavor("text/plain");
+          Services.clipboard.getData(tr, Services.clipboard.kGlobalClipboard);
+          const o = {};
+          tr.getTransferData("text/plain", o);
+          return o.value.QueryInterface(Ci.nsISupportsString).data;
+        };
+        await RV.copy("tikz");
+        res.clipTikz = readClip().split("\n")[0];
+        await RV.copy("png");
+        res.clipImage = Services.clipboard.hasDataMatchingFlavors(["application/x-moz-nativeimage", "image/png"], Services.clipboard.kGlobalClipboard);
+        // the menus
+        d.getElementById("rp-download").click();
+        res.downloadMenu = [...(await waitFor(() => d.querySelector(".ctx-menu"), 3000)).querySelectorAll(".ctx-item")].map((x) => x.textContent.split(" ")[0]);
+        await shot(rw, "12g-download-menu.png");
+        rw.PaperView.closeMenu();
+        await RV.chooseTheme("colour");
+        const ok =
+          /How this review was done/.test(res.diagrams.process) === !!RV.currentTheme().showTitle &&
+          /Concept 1|Query/.test(res.diagrams.search) &&
+          res.panelCollapsed && res.printSquare && res.editedRadius && res.unsaved && /Selftest style/.test(res.savedStyle || "") &&
+          res.ai.font === "serif" && res.ai.radius === 0 && res.ai.bands === false && res.ai.imagesSent === 1 && res.ai.editorOpen &&
+          head.png.startsWith("PNG") && head.jpg === "255,216,255" && head.svg.startsWith("<svg") && head.tikz.startsWith("% ") && head.latex.startsWith("\\documentclass") &&
+          Math.abs(res.pngScale - 3) < 0.01 && res.clipTikz.startsWith("% ") && res.clipImage && res.downloadMenu.length === 5;
+        if (!ok) throw new Error(JSON.stringify(res));
+        return res;
+      });
+
       await step("logged searches: audit trail with the full chain, reopen read-only, refine as #1.1", async () => {
         const d = rv();
         await goStep("search", (x) => x.querySelector("#rv-runs table"));
@@ -1313,6 +1405,20 @@ ZR.SelfTest = (() => {
         await U.sleep(150);
         const collapsedWidth = Math.round(d.getElementById("ap-panel").getBoundingClientRect().width);
         const collapsed = { playShown: !!d.getElementById("ap-toggle").getClientRects().length, historyShown: !!d.getElementById("ap-history").getClientRects().length, toggleMoved: centre(d.getElementById("ap-collapse")) - toggleY };
+        // the collapsed strip continues the subheader line; Log sits centred under it
+        lw2.App.syncLayout();
+        await U.sleep(100);
+        const headLine = lw2.getComputedStyle(d.querySelector("#ap-panel .ap-head"));
+        collapsed.line = headLine.borderBottomWidth + " " + headLine.borderBottomColor;
+        collapsed.lineEndsWithSubheader = Math.abs(d.querySelector("#ap-panel .ap-head").getBoundingClientRect().bottom - d.getElementById("rv-funnel").getBoundingClientRect().bottom) <= 1;
+        const logR = d.querySelector("#panel-review > .statusbar .log-btn").getBoundingClientRect();
+        const apR = d.getElementById("ap-panel").getBoundingClientRect();
+        collapsed.logOffCentre = Math.round((logR.left + logR.right) / 2 - (apR.left + apR.right) / 2);
+        // lines in Zotero's colour (not the text colour)
+        const zLine = win.getComputedStyle(mdoc.querySelector(".tag-selector-filter-container") || mdoc.documentElement);
+        collapsed.lines = { zotero: parseFloat(zLine.borderTopWidth) > 0 ? zLine.borderTopColor : "(none measured)", subheader: lw2.getComputedStyle(d.getElementById("rv-funnel")).borderBottomColor, header: lw2.getComputedStyle(d.querySelector("header.top")).borderBottomColor, text: lw2.getComputedStyle(d.body).color };
+        // no Autopilot button in the subheader any more
+        collapsed.subheaderButton = !!d.getElementById("ap-open");
         await shot(lw2, "14b-autopilot-collapsed.png");
         d.getElementById("ap-collapse").click();
         await U.sleep(150);
@@ -1322,6 +1428,7 @@ ZR.SelfTest = (() => {
         // alternating rows in the screening list
         const rv2 = await ZR.Projects.list(libraryID).then((l) => l.find((p) => p.name === "IFC review"));
         const bgs = [];
+        const filterColours = [];
         if (rv2) {
           await lw2.App.switchProject(rv2.id);
           lw2.App.showTab("review");
@@ -1332,6 +1439,13 @@ ZR.SelfTest = (() => {
           await waitFor(() => d.querySelectorAll("#queue .q-item").length > 3, 5000);
           const items = d.querySelectorAll("#queue .q-item");
           bgs.push(lw2.getComputedStyle(items[1]).backgroundColor, lw2.getComputedStyle(items[2]).backgroundColor);
+          // the filter shows the decisions in their colours; a line under the list header
+          d.getElementById("queue-filter").zrDropdownButton.click();
+          const menuItems = await waitFor(() => d.querySelectorAll(".zr-dd-menu .zr-dd-item").length && [...d.querySelectorAll(".zr-dd-menu .zr-dd-item")], 3000);
+          filterColours.push(...menuItems.map((x) => lw2.getComputedStyle(x).color));
+          await shot(lw2, "14f-filter-colours.png");
+          lw2.ZRDropdown.close();
+          filterColours.push(lw2.getComputedStyle(d.querySelector(".queue-head")).borderBottomWidth);
           await shot(lw2, "14c-rows.png");
           await lw2.App.switchProject(proj.id);
         }
@@ -1368,6 +1482,7 @@ ZR.SelfTest = (() => {
           expandedWidth,
           toggleTitle,
           rowColours: bgs,
+          filterColours,
           askText,
           deleted: !(await ZR.Projects.get(libraryID, proj.id)),
           poolFileGone: !(await IOUtils.exists(poolFile)),
@@ -1386,7 +1501,7 @@ ZR.SelfTest = (() => {
           collapsed,
         };
         lw2.close();
-        if (headerDiff > 2 || (footerDiff != null && footerDiff > 2) || apDiff > 1 || gapToFooter < 4 || collapsedWidth > 60 || expandedWidth < 300 || (bgs.length && bgs[0] === bgs[1]) || !res.deleted || !res.poolFileGone || !res.collectionKept || res.selectOptions || res.deleteOption || targetLineShown || !/Adds papers to/.test(projectInfo) || !/zr-stop/.test(projectInfo) || !deleteItem.red || !deleteItem.icon || !deleteItem.menuClosed || Math.abs(footerToEdge) > 1 || colours.footer !== colours.header || colours.apHead !== colours.header || colours.subheader !== colours.header || colours.protocolCard !== colours.header || colours.footer === colours.page || icons.some((i) => i.svg < 20 || i.border !== "0px" || i.text) || subtitle || !/Harness/.test(info) || !infoClosed || collapsed.playShown || collapsed.historyShown || Math.abs(collapsed.toggleMoved) > 1) throw new Error(JSON.stringify(res));
+        if (headerDiff > 2 || (footerDiff != null && footerDiff > 2) || apDiff > 1 || gapToFooter < 4 || collapsedWidth > 60 || expandedWidth < 300 || (bgs.length && bgs[0] === bgs[1]) || !res.deleted || !res.poolFileGone || !res.collectionKept || res.selectOptions || res.deleteOption || targetLineShown || !/Adds papers to/.test(projectInfo) || !/zr-stop/.test(projectInfo) || !deleteItem.red || !deleteItem.icon || !deleteItem.menuClosed || Math.abs(footerToEdge) > 1 || colours.footer !== colours.header || colours.apHead !== colours.header || colours.subheader !== colours.header || colours.protocolCard !== colours.header || colours.footer === colours.page || icons.some((i) => i.svg < 20 || i.border !== "0px" || i.text) || subtitle || !/Harness/.test(info) || !infoClosed || collapsed.playShown || collapsed.historyShown || Math.abs(collapsed.toggleMoved) > 1 || !collapsed.line.startsWith("1px") || !collapsed.lineEndsWithSubheader || Math.abs(collapsed.logOffCentre) > 2 || collapsed.lines.subheader === collapsed.lines.text || (collapsed.lines.zotero !== "(none measured)" && collapsed.lines.subheader !== collapsed.lines.zotero) || collapsed.subheaderButton || (filterColours.length && (new Set(filterColours.slice(1, 4)).size !== 3 || filterColours.at(-1) !== "1px"))) throw new Error(JSON.stringify(res));
         return res;
       });
 

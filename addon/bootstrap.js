@@ -23,6 +23,7 @@ const LIB_FILES = [
   "lib/embeddings.js",
   "lib/system1.js",
   "lib/prisma.js",
+  "lib/diagrams.js",
   "lib/projects.js",
   "lib/fulltext.js",
   "lib/pdfhunt.js",
