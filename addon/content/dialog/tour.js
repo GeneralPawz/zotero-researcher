@@ -18,8 +18,8 @@ const Tour = (window.Tour = (() => {
     },
     {
       target: ".query-row",
-      title: "Type and press Enter",
-      text: 'Combine words with AND, OR, NOT, e.g. <code>("IFC5" OR IFCX) AND BIM</code>. The query is translated for each database automatically.',
+      title: "Build your query",
+      text: "Add terms row by row: terms in one row are alternatives (OR), rows combine with AND, OR, NOT or XOR, and each row can target the title, abstract or authors. Prefer typing? Switch to <b>Text</b> (top right) and write e.g. <code>(\"IFC5\" OR IFCX) AND BIM</code>. Either way, the query is translated for each database.",
     },
     {
       target: "#sources-chip",

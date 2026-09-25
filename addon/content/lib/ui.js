@@ -14,7 +14,7 @@ ZR.UI = (() => {
       pluginID: ZR.id,
       id: "zotero-researcher-prefs",
       src: ZR.rootURI + "content/preferences/prefs.xhtml",
-      scripts: [ZR.rootURI + "content/preferences/prefs.js"],
+      scripts: [ZR.rootURI + "content/dropdown.js", ZR.rootURI + "content/preferences/prefs.js"],
       stylesheets: [ZR.rootURI + "content/preferences/prefs.css"],
       label: "Zotero Researcher",
       image: ICON,

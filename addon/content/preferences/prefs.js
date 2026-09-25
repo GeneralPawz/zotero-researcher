@@ -1,4 +1,4 @@
-/* global Zotero, document */
+/* global Zotero, document, ZRDropdown */
 // Settings pane controller. Loaded into a sandbox before the pane markup is inserted,
 // so initialization waits for the pane's `load` event (dispatched on #zr-prefs).
 
@@ -27,6 +27,7 @@ var ZRPrefsPane = (() => {
   function init() {
     ZR = Zotero.Researcher;
     if (!ZR || !document.getElementById("zr-llm-list")) return;
+    ZRDropdown.observe(document, document.getElementById("zr-prefs"));
     renderChecklist();
     renderAreas();
     renderLLMList();
