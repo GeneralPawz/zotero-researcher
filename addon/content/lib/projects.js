@@ -163,23 +163,90 @@ ZR.Projects = (() => {
     return out;
   }
 
-  /** Add search results to a review's pool. Returns {added, known}. */
+  /** Add search results to a review's pool. Returns {added, known, knownKeys}. */
   async function addToPool(libraryID, id, records) {
     const pool = await loadPool(libraryID, id);
     let added = 0;
     let known = 0;
+    const knownKeys = new Set();
     for (const r of records) {
       const key = r.key || ZR.Store.keyForRecord(r);
       if (!key) continue;
       if (pool.records[key]) {
         known++;
+        knownKeys.add(key);
         continue;
       }
       pool.records[key] = poolRecord(r);
       added++;
     }
     await savePool(libraryID, id);
-    return { added, known };
+    return { added, known, knownKeys };
+  }
+
+  // ----------------------------------------------------------- audit trail ----
+  /** Slim copy of a record for a search's audit list (enough to show it and export it). */
+  function auditRow(r, fate, stage, reason) {
+    return {
+      key: r.key || ZR.Store.keyForRecord(r),
+      title: r.title,
+      creators: (r.creators || []).slice(0, 3),
+      year: r.year,
+      venue: r.venue,
+      doi: r.doi,
+      url: r.url,
+      sources: r.sources,
+      abstract: U.truncate(r.abstract || "", 600),
+      fate, // "pool" | "known" | "removed" | "unselected"
+      stage, // where it was decided: dedupe, strict, filter, library, excluded, pool, selection
+      reason,
+    };
+  }
+
+  /** Store what happened to every record of a search (in the local pool file). */
+  async function saveRunAudit(libraryID, id, runID, rows) {
+    const pool = await loadPool(libraryID, id);
+    pool.audit = pool.audit || {};
+    pool.audit[runID] = rows;
+    await savePool(libraryID, id);
+  }
+
+  async function runAudit(libraryID, id) {
+    return (await loadPool(libraryID, id)).audit || {};
+  }
+
+  /**
+   * Version labels for a project's searches: new searches are #1, #2, …; refinements of
+   * a search are #2.1, #2.2 (and #2.1.1 …). Older runs without an id get one here.
+   * @returns {Map<string, string>} run id → label
+   */
+  function runLabels(runs) {
+    runs.forEach((r, i) => (r.id = r.id || `legacy${i}`));
+    const labels = new Map();
+    const children = new Map();
+    let top = 0;
+    for (const r of runs) {
+      const parent = r.parent && labels.get(r.parent);
+      if (parent) {
+        const n = (children.get(r.parent) || 0) + 1;
+        children.set(r.parent, n);
+        labels.set(r.id, `${parent}.${n}`);
+      } else labels.set(r.id, `#${++top}`);
+    }
+    return labels;
+  }
+
+  /** Runs in display order: each search followed by its refinements. */
+  function runTree(runs) {
+    const labels = runLabels(runs);
+    return runs
+      .map((r) => ({ run: r, label: labels.get(r.id), depth: labels.get(r.id).split(".").length - 1 }))
+      .sort((a, b) => {
+        const pa = a.label.slice(1).split(".").map(Number);
+        const pb = b.label.slice(1).split(".").map(Number);
+        for (let i = 0; i < Math.max(pa.length, pb.length); i++) if ((pa[i] ?? -1) !== (pb[i] ?? -1)) return (pa[i] ?? -1) - (pb[i] ?? -1);
+        return 0;
+      });
   }
 
   /**
@@ -211,6 +278,8 @@ ZR.Projects = (() => {
         ft: prior?.ft?.d || null,
         reason: prior?.ft?.r || prior?.ta?.r || "",
         by: (prior?.ft || prior?.ta)?.by || "",
+        taInfo: prior?.ta || null,
+        ftInfo: prior?.ft || null,
       });
     }
     for (const [key, r] of Object.entries(pool.records)) {
@@ -233,6 +302,8 @@ ZR.Projects = (() => {
         ft: prior?.ft?.d || null,
         reason: prior?.ft?.r || prior?.ta?.r || "",
         by: (prior?.ft || prior?.ta)?.by || "",
+        taInfo: prior?.ta || null,
+        ftInfo: prior?.ft || null,
       });
     }
     for (const c of out.values()) {
@@ -309,6 +380,11 @@ ZR.Projects = (() => {
     loadPool,
     savePool,
     addToPool,
+    auditRow,
+    saveRunAudit,
+    runAudit,
+    runLabels,
+    runTree,
     candidates,
     inStage,
     funnel,

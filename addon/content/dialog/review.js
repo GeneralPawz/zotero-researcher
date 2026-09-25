@@ -434,27 +434,189 @@ App.panels.review = (() => {
 
   // --------------------------------------------------------------- search ----
   function renderSearch() {
-    const runs = project().runs || [];
+    const p = project();
+    const runs = p.runs || [];
     const box = $("rv-runs");
     box.replaceChildren();
     if (!runs.length) {
       box.append(el("p", { class: "hint", text: "No searches logged yet. The Search tab is pre-filled with the protocol's query and filters." }));
       return;
     }
+    const open = (r, label) => App.panels.search.showRun(p, r, label);
     box.append(
       el("table", { class: "runs" }, [
-        el("tr", {}, ["When", "How", "Query", "Found", "Into pool"].map((t) => el("th", { text: t }))),
-        ...runs.map((x) =>
-          el("tr", {}, [
+        el("tr", {}, ["", "When", "How", "Query", "Found", "Into pool", "Not added"].map((t) => el("th", { text: t }))),
+        ...ZR.Projects.runTree(runs).map(({ run: x, label, depth }) => {
+          const notAdded = x.identified != null && x.imported != null ? Math.max(0, x.identified - x.imported) : null;
+          return el("tr", { "data-run": x.id }, [
+            el("td", { class: "run-label", style: `padding-left:${6 + depth * 14}px`, title: x.parent ? "Refinement of an earlier search" : "Search" }, [depth ? "↳ " : "", el("b", { text: label })]),
             el("td", { text: x.at || "" }),
             el("td", { text: x.mode === "related" ? "citations" : x.mode }),
-            el("td", { title: Object.entries(x.perSource || {}).map(([id, s]) => `${ZR.Sources.get(id)?.name || id}: ${s.error ? "⚠ " + s.error : s.count}`).join("\n") }, el("code", { text: ZR.Util.truncate(x.query || "", 140) })),
+            el(
+              "td",
+              { title: "Open this search in the Search tab (read-only; you can edit and run it again)\n\n" + Object.entries(x.perSource || {}).map(([id, s]) => `${ZR.Sources.get(id)?.name || id}: ${s.error ? "⚠ " + s.error : s.count}`).join("\n") },
+              el("a", { href: "#", class: "run-query", onclick: (e) => (e.preventDefault(), open(x, label)) }, el("code", { text: ZR.Util.truncate(x.query || "(AI request)", 160) }))
+            ),
             el("td", { text: String(x.identified ?? "") }),
             el("td", { text: String(x.imported ?? "") }),
-          ])
-        ),
-      ])
+            el("td", {}, notAdded ? el("a", { href: "#", class: "run-why", text: `${notAdded} — why?`, title: "Every paper this search found and what happened to it", onclick: (e) => (e.preventDefault(), openAudit(x.id)) }) : el("span", { class: "hint", text: notAdded === 0 ? "0" : "" })),
+          ]);
+        }),
+      ]),
+      el("div", { class: "actions" }, [el("button", { id: "rv-audit", text: "Audit trail — every paper and what happened to it…", onclick: () => openAudit("all") })])
     );
+  }
+
+  // ---------------------------------------------------------------- audit trail ----
+  const STAGE_LABEL = { strict: "strict matching", filter: "filter", library: "already in library", excluded: "excluded earlier", selection: "not selected", pool: "pool" };
+  const BY_LABEL = { me: "you", s1: "System 1", llm: "AI", dup: "duplicate check" };
+
+  /** Where a paper ended up: the latest step of its chain. */
+  function outcomeOf(row, c) {
+    if (row.fate === "removed") return { outcome: "Not added", step: "search", reason: row.reason };
+    if (row.fate === "unselected") return { outcome: "Not added", step: "search", reason: row.reason };
+    if (!c) return { outcome: "In pool", step: "pool", reason: row.fate === "known" ? row.reason : "" };
+    const hasFT = method().stages.includes("fulltext");
+    const info = (d) => ({ reason: d.r || "", by: BY_LABEL[d.by] || d.by || "", at: d.at || "" });
+    if (c.ftInfo?.d) return Object.assign({ outcome: c.ftInfo.d === "include" ? "Included" : "Excluded at full text", step: "full text" }, info(c.ftInfo));
+    if (c.taInfo?.d) {
+      const d = c.taInfo.d;
+      const outcome = d === "exclude" ? "Excluded at screening" : d === "maybe" ? "Maybe (screening)" : hasFT ? "Passed screening" : "Included";
+      return Object.assign({ outcome, step: "screening" }, info(c.taInfo));
+    }
+    return { outcome: "In pool — not screened yet", step: "pool", reason: row.fate === "known" ? row.reason : "" };
+  }
+
+  async function auditRows() {
+    const p = project();
+    const audit = await ZR.Projects.runAudit(libraryID(), p.id);
+    const labels = ZR.Projects.runLabels(p.runs || []);
+    // Fresh from the library: decisions carry who decided and when
+    const fresh = await ZR.Projects.candidates(libraryID(), p);
+    const byKey = new Map(fresh.map((c) => [c.key, c]));
+    const rows = [];
+    const seen = new Set();
+    for (const run of p.runs || []) {
+      for (const r of audit[run.id] || []) {
+        const c = r.fate === "pool" || r.fate === "known" ? byKey.get(r.key) : null;
+        if (c) seen.add(c.key);
+        rows.push(Object.assign({ run: labels.get(run.id), runID: run.id, searchResult: r.fate === "removed" ? `not added: ${STAGE_LABEL[r.stage] || r.stage}` : r.fate === "unselected" ? "not selected" : r.fate === "known" ? "already in pool" : "added to pool" }, r, outcomeOf(r, c)));
+      }
+    }
+    // Papers of the review that no recorded search brought in (in the collection already, older searches)
+    for (const c of fresh) {
+      if (seen.has(c.key)) continue;
+      rows.push(Object.assign({ run: "—", runID: "", searchResult: c.itemID ? "in the collection" : "in pool (earlier search)", key: c.key, title: c.title, year: c.year, venue: c.venue, doi: c.doi, sources: c.record?.sources || [], creators: [] }, outcomeOf({ fate: "known" }, c)));
+    }
+    return rows;
+  }
+
+  async function openAudit(runID = "all") {
+    const p = project();
+    const rows = await auditRows();
+    const runsWithoutAudit = (p.runs || []).filter((r) => !rows.some((x) => x.runID === r.id)).length;
+    let fRun = runID;
+    let fOutcome = "all";
+    let fText = "";
+    const OUT = [
+      ["all", "All outcomes"],
+      ["notadded", "Not added (search)"],
+      ["excluded", "Excluded (screening / full text)"],
+      ["included", "Included / passed"],
+      ["open", "Not decided yet"],
+    ];
+    const matchOutcome = (r) =>
+      fOutcome === "all" ||
+      (fOutcome === "notadded" && r.outcome === "Not added") ||
+      (fOutcome === "excluded" && /^Excluded/.test(r.outcome)) ||
+      (fOutcome === "included" && /^(Included|Passed)/.test(r.outcome)) ||
+      (fOutcome === "open" && /^(In pool|Maybe)/.test(r.outcome));
+    const shown = () => rows.filter((r) => (fRun === "all" || r.runID === fRun) && matchOutcome(r) && (!fText || `${r.title} ${r.reason} ${r.outcome}`.toLowerCase().includes(fText)));
+    const labels = ZR.Projects.runLabels(p.runs || []);
+    const runSel = el(
+      "select",
+      { id: "audit-run", onchange: (e) => ((fRun = e.target.value), render()) },
+      [el("option", { value: "all", text: "All searches" }), ...ZR.Projects.runTree(p.runs || []).map(({ run, label }) => el("option", { value: run.id, text: `${label} · ${run.at}`, selected: run.id === runID }))]
+    );
+    const outSel = el("select", { id: "audit-outcome", onchange: (e) => ((fOutcome = e.target.value), render()) }, OUT.map(([v, t]) => el("option", { value: v, text: t })));
+    const search = el("input", { type: "search", placeholder: "filter…", oninput: (e) => ((fText = e.target.value.trim().toLowerCase()), render()) });
+    const summary = el("div", { class: "audit-summary" });
+    const table = el("div", { class: "audit-table scroll" });
+
+    function render() {
+      const list = shown();
+      const runs = fRun === "all" ? p.runs || [] : (p.runs || []).filter((r) => r.id === fRun);
+      const found = runs.reduce((n, r) => n + (r.identified || 0), 0);
+      const merged = runs.reduce((n, r) => n + Math.max(0, (r.identified || 0) - (r.deduped || r.identified || 0)), 0);
+      const count = (pred) => list.filter(pred).length;
+      const byStage = {};
+      for (const r of list.filter((x) => x.fate === "removed" || x.fate === "unselected")) byStage[STAGE_LABEL[r.stage] || r.stage] = (byStage[STAGE_LABEL[r.stage] || r.stage] || 0) + 1;
+      summary.replaceChildren(
+        el("span", {}, [el("b", { text: String(found) }), " found"]),
+        el("span", { class: "hint", text: "›" }),
+        el("span", { title: "The same paper found in several databases counts once" }, [el("b", { text: String(merged) }), " duplicates merged"]),
+        el("span", { class: "hint", text: "›" }),
+        el("span", { title: Object.entries(byStage).map(([k, v]) => `${k}: ${v}`).join("\n") }, [el("b", { text: String(count((r) => r.outcome === "Not added")) }), " not added (" + (Object.entries(byStage).map(([k, v]) => `${v} ${k}`).join(", ") || "—") + ")"]),
+        el("span", { class: "hint", text: "›" }),
+        el("span", {}, [el("b", { text: String(count((r) => r.outcome !== "Not added")) }), " in the review"]),
+        el("span", { class: "hint", text: "›" }),
+        el("span", { class: "k-exclude" }, [el("b", { text: String(count((r) => /^Excluded/.test(r.outcome))) }), " excluded"]),
+        el("span", { class: "hint", text: "›" }),
+        el("span", { class: "k-include" }, [el("b", { text: String(count((r) => /^(Included|Passed)/.test(r.outcome))) }), " included / passed"])
+      );
+      table.replaceChildren(
+        el("table", { class: "runs audit" }, [
+          el("tr", {}, ["Search", "Paper", "Year", "Found in", "Search result", "Outcome", "Reason", "By", "Date"].map((t) => el("th", { text: t }))),
+          ...list.slice(0, 1500).map((r) =>
+            el("tr", { class: /^Excluded|Not added/.test(r.outcome) ? "o-out" : /^(Included|Passed)/.test(r.outcome) ? "o-in" : "" }, [
+              el("td", { text: r.run }),
+              el("td", { class: "a-title", title: r.title }, [r.title || "(untitled)", r.doi ? el("div", { class: "hint", text: "doi:" + r.doi }) : null]),
+              el("td", { text: String(r.year || "") }),
+              el("td", { text: (r.sources || []).map((s) => ZR.Sources.get(s)?.name || s).join(", ") }),
+              el("td", { text: r.searchResult }),
+              el("td", { class: "a-outcome", text: r.outcome }),
+              el("td", { text: r.reason || "" }),
+              el("td", { text: r.by || "" }),
+              el("td", { text: r.at || "" }),
+            ])
+          ),
+        ]),
+        list.length > 1500 ? el("div", { class: "hint", text: `…and ${list.length - 1500} more — export the CSV for the full list` }) : null
+      );
+      $("audit-count").textContent = `${list.length} of ${rows.length} rows`;
+    }
+
+    async function exportCSV() {
+      const q = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+      const head = ["Search", "Search date", "Title", "Authors", "Year", "Venue", "DOI", "Found in", "Search result", "Outcome", "Step", "Reason", "Decided by", "Decision date"];
+      const at = new Map((p.runs || []).map((r) => [r.id, r.at]));
+      const lines = [head.map(q).join(",")];
+      for (const r of shown()) {
+        lines.push(
+          [r.run, at.get(r.runID) || "", r.title, (r.creators || []).map((c) => c.lastName || c.name).filter(Boolean).join("; "), r.year, r.venue, r.doi, (r.sources || []).map((s) => ZR.Sources.get(s)?.name || s).join("; "), r.searchResult, r.outcome, r.step, r.reason, r.by, r.at]
+            .map(q)
+            .join(",")
+        );
+      }
+      const f = await App.saveFile("﻿" + lines.join("\r\n"), `${p.name.replace(/[^\w-]+/g, "_")}-audit-trail.csv`, "CSV", "*.csv");
+      if (f) st("Saved " + f);
+    }
+
+    const layer = el("div", { class: "modal-layer", id: "audit-layer" }, [
+      el("div", { class: "modal audit-modal", role: "dialog" }, [
+        el("div", { class: "row-between" }, [
+          el("h2", { text: `Audit trail — ${p.name}` }),
+          el("button", { class: "icon-btn", text: "×", title: "Close", onclick: () => layer.remove() }),
+        ]),
+        el("p", { class: "hint", text: "Every paper your searches found and what happened to it: removed by a filter or option, added to the pool, and then screened, excluded or included — with the reason, who decided and when." + (runsWithoutAudit ? ` ${runsWithoutAudit} search(es) logged before version 0.7 have counts only.` : "") }),
+        summary,
+        el("div", { class: "audit-filters" }, [runSel, outSel, search, el("span", { class: "hint", id: "audit-count" }), el("span", { class: "spacer" }), el("button", { class: "primary", id: "audit-csv", text: "Export CSV", onclick: exportCSV })]),
+        table,
+      ]),
+    ]);
+    layer.addEventListener("keydown", (e) => e.key === "Escape" && layer.remove());
+    document.body.append(layer);
+    render();
   }
 
   // ------------------------------------------------------------ screening ----
@@ -959,7 +1121,7 @@ App.panels.review = (() => {
     const link = c.doi ? "https://doi.org/" + c.doi : c.record?.url || "";
     const showTerms = ZR.Prefs.get("showQueryTerms", true);
     const terms = showTerms ? termsOfProject() : [];
-    const kw = (text, field) => PaperView.termRanges(text, terms, field).map((r) => ({ start: r.start, end: r.end, cls: "kw", title: `search term: ${r.term}` }));
+    const kw = (text, field) => PaperView.termRanges(text, terms, field).map((r) => ({ start: r.start, end: r.end, cls: "kw", title: `search term: ${r.term}`, attrs: { style: `--kw-h:${termHue(terms, r.term)}` } }));
 
     const title = el("h2");
     PaperView.render(title, c.title || "(untitled)", kw(c.title, "title"));
@@ -1167,6 +1329,12 @@ App.panels.review = (() => {
     return termsCache.terms;
   }
 
+  /** Hue of a search term: golden-angle steps, so every term differs as much as possible from the others. */
+  function termHue(terms, text) {
+    const i = Math.max(0, terms.findIndex((t) => t.text.toLowerCase() === String(text).toLowerCase()));
+    return Math.round((i * 137.508 + 205) % 360);
+  }
+
   /** Which search terms occur where — "why is this paper here?" */
   function foundBy(c, terms) {
     if (!terms.length) return null;
@@ -1184,7 +1352,7 @@ App.panels.review = (() => {
     const miss = where.filter((w) => !w.fields.length);
     return el("div", { class: "found-by" }, [
       el("span", { class: "hint", text: hit.length ? "Search terms here:" : "No search term in title, authors or abstract" }),
-      ...hit.map((w) => el("span", { class: "kw-chip", title: `found in ${w.fields.join(", ")}` }, [el("b", { text: w.t.text }), " " + w.fields.join(", ")])),
+      ...hit.map((w) => el("span", { class: "kw-chip", style: `--kw-h:${termHue(terms, w.t.text)}`, title: `found in ${w.fields.join(", ")}` }, [el("b", { text: w.t.text }), " " + w.fields.join(", ")])),
       miss.length
         ? el("span", { class: "hint", title: "These terms of your searches do not occur here — the database may have matched keywords or the full text, or the paper came from another alternative of an OR", text: ` · not here: ${miss.map((w) => w.t.text).join(", ")}` })
         : null,
@@ -1335,6 +1503,7 @@ App.panels.review = (() => {
     c[s] = d;
     c.reason = r;
     c.by = d ? by : "";
+    c[s + "Info"] = d ? { d, r, by, at: today() } : null; // keeps the audit trail current
     if (by === "me" && s === "ta" && ZR.Embed.isAvailable() && cands.some((x) => x.s1 && x.s1.engine !== "rules")) scheduleRelearn();
     if (advance && d) {
       const list = filtered();

@@ -187,6 +187,26 @@ const App = (window.App = {
     await App.panels[App.currentTab]?.onShow?.();
   },
 
+  /** Ask a question in the window (no modal dialog). choices: [{id, label, primary?}] → resolves the chosen id. */
+  ask(title, text, choices) {
+    return new Promise((resolve) => {
+      const layer = el(
+        "div",
+        { class: "modal-layer", id: "ask-layer" },
+        el("div", { class: "modal", role: "dialog" }, [
+          el("h2", { text: title }),
+          el("p", { class: "ask-text", text }),
+          el("div", { class: "actions" }, [
+            el("span", { class: "spacer" }),
+            ...choices.map((c) => el("button", { class: c.primary ? "primary" : "", "data-choice": c.id, text: c.label, onclick: () => (layer.remove(), resolve(c.id)) })),
+          ]),
+        ])
+      );
+      document.body.append(layer);
+      layer.querySelector("button.primary")?.focus();
+    });
+  },
+
   // ------------------------------------------------------------ activity log ----
   /** The Log panel: every web request, AI call, CLI run and local-model call, live. */
   toggleLog() {
@@ -409,6 +429,11 @@ App.panels.search = (() => {
   /** Called when the project changes: load its search settings. */
   function loadProject() {
     if (!ZR) return;
+    if (viewing) {
+      viewing = null;
+      document.body.dataset.readonly = "";
+      $("plan-box").hidden = true;
+    }
     applyState(stateForProject());
     updateImportBar();
   }
@@ -731,11 +756,27 @@ App.panels.search = (() => {
 
   async function run() {
     if (App.busy) return;
+    if (viewing && !viewing.editable) return st("This is a logged search, shown read-only — click “Edit and run again” to change it.");
     const o = readOptions();
     if (o.mode === "structured" && !o.query) return st("Type a query first — for example: (\"IFC5\" OR IFCX) AND BIM");
     if (o.mode !== "structured" && !o.request) return st("Describe what you are looking for first.");
     if (o.query && !validateQuery()) return;
     if (!o.sources.length) return st("Choose at least one source (📚 chip).");
+    let parent = null;
+    if (viewing?.editable) {
+      const choice = await App.ask(
+        "New search or refinement?",
+        `You changed search ${viewing.label}. Log this run as a refinement of ${viewing.label} (e.g. adjusted keywords or filters), or as a separate new search?`,
+        [
+          { id: "refine", label: `Refinement of ${viewing.label}`, primary: true },
+          { id: "new", label: "New search" },
+          { id: "cancel", label: "Cancel" },
+        ]
+      );
+      if (choice === "cancel") return;
+      if (choice === "refine") parent = viewing.run.id;
+      closeRunView({ keepForm: true });
+    }
     saveState(o);
     if (o.mode !== "structured") {
       try {
@@ -752,6 +793,9 @@ App.panels.search = (() => {
     $("plan-box").hidden = true;
     try {
       lastRun = await ZR.Search.run(o, st);
+      lastRun.id = "r" + Date.now().toString(36);
+      lastRun.parent = parent;
+      lastRun.settings = stateOf(o);
       // A review screens everything it finds (that is what the flow diagram counts)
       if (App.project?.kind === "review") for (const r of lastRun.records) r.selected = true;
       if (lastRun.plan) showPlan(lastRun.plan);
@@ -872,7 +916,7 @@ App.panels.search = (() => {
       const link = r.url || (r.doi ? `https://doi.org/${r.doi}` : "");
       const excluded = (r.prior?.ft || r.prior?.ta)?.d === "exclude";
       const row = el("div", { class: "result" + (r.existingItemID || excluded ? " muted" : "") }, [
-        el("input", { type: "checkbox", checked: r.selected, onchange: (e) => ((r.selected = e.target.checked), updateImportBar()) }),
+        el("input", { type: "checkbox", checked: r.selected, disabled: !!viewing && !viewing.editable, onchange: (e) => ((r.selected = e.target.checked), updateImportBar()) }),
         el("div", { class: "r-main" }, [
           el("div", { class: "r-title" }, [
             r.existingItemID
@@ -885,6 +929,8 @@ App.panels.search = (() => {
           el("div", { class: "r-meta", text: [ZR.Records.creatorsToString(r.creators), r.year, r.venue].filter(Boolean).join(" · ") }),
           r.abstract ? el("div", { class: "r-abstract", text: r.abstract, title: "Click to expand", onclick: () => row.classList.toggle("expanded") }) : null,
           el("div", { class: "r-tags" }, [
+            r.fate ? el("span", { class: "tag " + ({ pool: "included", known: "lib", removed: "excluded", unselected: "maybe" }[r.fate] || ""), text: { pool: "added to pool", known: "already in pool", removed: "not added", unselected: "not selected" }[r.fate], title: r.fateReason || "" }) : null,
+            r.fate === "removed" ? el("span", { class: "tag", text: r.fateReason }) : null,
             r.existingItemID ? el("span", { class: "tag lib", text: "in library" }) : null,
             priorTag(r),
             r.seenBefore && !r.prior && !r.existingItemID ? el("span", { class: "tag", text: `seen ${r.seenBefore}`, title: "Appeared in an earlier search" }) : null,
@@ -940,10 +986,68 @@ App.panels.search = (() => {
     renderResults();
   }
 
+  // ------------------------------------------------------ logged searches ----
+  // A search logged in a review can be opened again: read-only first (settings and the
+  // list of what it found, with what happened to each paper), then editable. Running an
+  // edited search asks whether it refines the original (#2 → #2.1) or is a new search.
+  let viewing = null; // {run, label, editable}
+
+  async function showRun(project, run, label) {
+    App.showTab("search");
+    const settings = Object.assign({}, run.settings || {}, { query: run.query || run.settings?.query || "" });
+    if (!run.settings) settings.mode = run.mode === "structured" || !run.mode ? "structured" : "llm";
+    applyState(settings);
+    const audit = (await ZR.Projects.runAudit(App.target.libraryID, project.id))[run.id] || null;
+    viewing = { run, label, editable: false };
+    lastRun = audit
+      ? {
+          records: audit.map((a) => Object.assign({ pdfURLs: [], sources: [], creators: [] }, a, { fateReason: a.reason, selected: false })),
+          perSource: run.perSource || {},
+        }
+      : null;
+    $("results").replaceChildren();
+    $("search-empty").hidden = true;
+    renderRunBanner();
+    renderResults();
+    updateImportBar();
+    if (!audit) $("results").append(el("div", { class: "empty-state", text: "The individual results of this search were not recorded (logged before version 0.7) — only its settings and counts." }));
+    st(`Search ${label} from ${run.at}: ${run.identified ?? "?"} found, ${run.imported ?? "?"} into the pool.`);
+  }
+
+  function renderRunBanner() {
+    document.body.dataset.readonly = viewing && !viewing.editable ? "1" : "";
+    const box = $("plan-box");
+    if (!viewing) return (box.hidden = true);
+    const r = viewing.run;
+    box.replaceChildren(
+      el("div", { class: "run-banner" }, [
+        el("b", { text: viewing.editable ? `Editing a copy of search ${viewing.label}` : `Search ${viewing.label} · ${r.at}` }),
+        el("span", { class: "hint", text: viewing.editable ? "Change keywords or filters and run it — you will be asked whether it refines the original or is a new search." : `${r.identified ?? "?"} found · ${r.imported ?? "?"} into the pool · read-only` }),
+        el("span", { class: "spacer" }),
+        viewing.editable ? null : el("button", { id: "run-edit", class: "primary", text: "Edit and run again", onclick: () => ((viewing.editable = true), renderRunBanner(), renderResults(), updateImportBar()) }),
+        el("button", { id: "run-close", text: "Close", onclick: () => closeRunView() }),
+      ])
+    );
+    box.hidden = false;
+  }
+
+  function closeRunView({ keepForm = false } = {}) {
+    viewing = null;
+    document.body.dataset.readonly = "";
+    $("plan-box").hidden = true;
+    if (!keepForm) {
+      lastRun = null;
+      $("results").replaceChildren();
+      $("results-head").hidden = true;
+      loadProject();
+    }
+    updateImportBar();
+  }
+
   function updateImportBar() {
     if (!ZR) return;
     const n = lastRun ? lastRun.records.filter((r) => r.selected).length : 0;
-    $("import-bar").hidden = !lastRun;
+    $("import-bar").hidden = !lastRun || !!viewing;
     $("results-count").textContent = lastRun ? `${lastRun.records.length} papers · ${n} selected` : "";
     const where = `“${App.target.label.split(" › ").pop()}”`;
     const review = App.project?.kind === "review";
@@ -967,9 +1071,23 @@ App.panels.search = (() => {
       const libraryID = App.target.libraryID;
       if (App.project?.kind === "review") {
         // Review: into the candidate pool; papers reach Zotero when they pass screening
-        const { added, known } = await ZR.Projects.addToPool(libraryID, App.project.id, recs);
+        const P = ZR.Projects;
+        const { added, known, knownKeys } = await P.addToPool(libraryID, App.project.id, recs);
         const run = ZR.Prisma.runRecord(Object.assign({}, lastRun, { imported: added, inLibraryCount: 0, deduped: Math.max(0, (lastRun.deduped ?? lastRun.records.length) - known) }));
-        await ZR.Projects.addRun(libraryID, App.project.id, run);
+        // Chain of proof: what happened to every paper this search found
+        const keyOf = (r) => r.key || ZR.Store.keyForRecord(r);
+        const audit = [
+          ...(lastRun.dropped || []).map((x) => P.auditRow(x.r, "removed", x.stage, x.reason)),
+          ...lastRun.records.map((r) =>
+            !r.selected
+              ? P.auditRow(r, "unselected", "selection", "Not selected when adding to the pool")
+              : knownKeys.has(keyOf(r))
+                ? P.auditRow(r, "known", "pool", "Already in the pool (found by an earlier search)")
+                : P.auditRow(r, "pool", "pool", "Added to the pool")
+          ),
+        ];
+        await P.saveRunAudit(libraryID, App.project.id, run.id, audit);
+        await P.addRun(libraryID, App.project.id, run);
         for (const r of recs) r.selected = false;
         renderResults();
         const msg = `${auto ? "Automatic mode: " : ""}Added ${added} paper(s) to the screening pool of “${App.project.name}”${known ? `, ${known} were already in it` : ""}.`;
@@ -1025,5 +1143,5 @@ App.panels.search = (() => {
     }
   }
 
-  return { init, renderSources, runRelated, showRecords, updateImportBar, setMode, setView, useQueryText, loadProject, currentState, onShow: updateImportBar };
+  return { init, renderSources, runRelated, showRecords, updateImportBar, setMode, setView, useQueryText, loadProject, currentState, showRun, closeRunView, onShow: updateImportBar };
 })();

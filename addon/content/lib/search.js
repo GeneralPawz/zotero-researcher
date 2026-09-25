@@ -31,25 +31,27 @@ ZR.Search = (() => {
   /**
    * Deterministic post-filters. Values a source doesn't report (language, citations)
    * never cause removal — only known values that fail a filter do.
-   * @returns {{records: object[], removed: object}}
+   * @returns {{records: object[], removed: object, dropped: {r, reason}[]}}
    */
   function applyFilters(recs, o) {
     const removed = { language: 0, type: 0, citations: 0, abstract: 0, doi: 0 };
+    const dropped = [];
     const langs = new Set(o.languages || []);
     const types = new Set((o.types || []).flatMap((id) => ZR.Records.TYPE_FILTERS.find((t) => t.id === id)?.types || []));
-    const drop = (reason) => {
-      removed[reason]++;
+    const drop = (r, kind, reason) => {
+      removed[kind]++;
+      dropped.push({ r, reason });
       return false;
     };
     const records = recs.filter((r) => {
-      if (langs.size && r.language && !langs.has(r.language)) return drop("language");
-      if (types.size && !types.has(r.itemType)) return drop("type");
-      if (o.minCitations > 0 && r.citationCount != null && r.citationCount < o.minCitations) return drop("citations");
-      if (o.hasAbstract && (r.abstract || "").length < 50) return drop("abstract");
-      if (o.hasDOI && !r.doi) return drop("doi");
+      if (langs.size && r.language && !langs.has(r.language)) return drop(r, "language", `Language filter: ${r.language} is not ${[...langs].join("/")}`);
+      if (types.size && !types.has(r.itemType)) return drop(r, "type", `Type filter: ${r.itemType || "unknown type"} is not one of the selected types`);
+      if (o.minCitations > 0 && r.citationCount != null && r.citationCount < o.minCitations) return drop(r, "citations", `Citation filter: ${r.citationCount} < ${o.minCitations} citations`);
+      if (o.hasAbstract && (r.abstract || "").length < 50) return drop(r, "abstract", "Filter: no abstract");
+      if (o.hasDOI && !r.doi) return drop(r, "doi", "Filter: no DOI");
       return true;
     });
-    return { records, removed };
+    return { records, removed, dropped };
   }
 
   /** Result orderings offered in the results header. */
@@ -145,12 +147,22 @@ ZR.Search = (() => {
     runInfo.identified = all.length;
     let recs = ZR.Records.dedupe(all);
     runInfo.deduped = recs.length;
+    // Audit trail: every unique record that does not reach the result list, and why
+    const dropped = (runInfo.dropped = []);
+    const keep = (stage, test, reason) => {
+      recs = recs.filter((r) => {
+        if (test(r)) return true;
+        dropped.push({ r, stage, reason: typeof reason === "function" ? reason(r) : reason });
+        return false;
+      });
+    };
 
-    if (o.strict) recs = recs.filter((r) => ZR.Query.matches(ast, r));
+    if (o.strict) keep("strict", (r) => ZR.Query.matches(ast, r), "Strict matching: the query does not match title, abstract or keywords");
     const filtered = applyFilters(recs, o);
     recs = filtered.records;
     runInfo.removedByFilters = filtered.removed;
-    if (o.oaOnly || o.fulltextOnly) recs = recs.filter(ZR.Records.hasFullText);
+    for (const x of filtered.dropped) dropped.push({ r: x.r, stage: "filter", reason: x.reason });
+    if (o.oaOnly || o.fulltextOnly) keep("filter", ZR.Records.hasFullText, o.fulltextOnly ? "Filter: no full text available" : "Filter: not open access");
 
     if (o.libraryID != null && typeof Zotero !== "undefined") {
       status("Checking which results are already in your library…");
@@ -159,10 +171,10 @@ ZR.Search = (() => {
         r.existingItemID = hit ? hit.id : null;
       });
       runInfo.inLibraryCount = recs.filter((r) => r.existingItemID).length;
-      if (o.skipExisting) recs = recs.filter((r) => !r.existingItemID);
+      if (o.skipExisting) keep("library", (r) => !r.existingItemID, "Already in your library (option “skip papers already in the library”)");
       // Remembered decisions (tags on items + ledger) and "seen in an earlier search"
       await ZR.Store.annotateRecords(o.libraryID, recs);
-      if (o.hideExcluded) recs = recs.filter((r) => !isExcluded(r));
+      if (o.hideExcluded) keep("excluded", (r) => !isExcluded(r), (r) => `Excluded earlier: ${ZR.Store.describe(r.prior)}`);
     }
 
     if (o.screen && o.llmProfile && recs.length) {
