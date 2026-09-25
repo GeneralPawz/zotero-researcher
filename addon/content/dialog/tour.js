@@ -7,9 +7,9 @@
 const Tour = (window.Tour = (() => {
   const STEPS = [
     {
-      target: "#target",
+      target: ".project-box",
       title: "Welcome to Researcher 👋",
-      text: "Papers you find are added to the collection you had selected in Zotero — shown here. Select a different collection in Zotero and click the Researcher button again to change it.",
+      text: "Papers you find are added to the collection you had selected in Zotero — shown here. A <b>project</b> remembers a collection's search settings and history: pick one here, or create one with <b>+ New project…</b>. A collection you add papers to gets its own project automatically.",
     },
     {
       target: "#mode-seg",
@@ -33,8 +33,8 @@ const Tour = (window.Tour = (() => {
     },
     {
       target: '.tab[data-tab="review"]',
-      title: "Systematic reviews (PRISMA)",
-      text: "Turn a collection into a review: screen titles and abstracts, then full texts — by hand with keyboard shortcuts, or with AI suggestions you confirm. The PRISMA 2020 flow diagram is built for you.",
+      title: "Structured reviews",
+      text: "For a paper or thesis, turn a project into a structured review: pick a methodology (PRISMA, scoping review, Kitchenham SLR, mapping study, …) and describe your goal in plain words — the AI fills in the protocol, or you fill it in yourself. Search results then go through a funnel: a fast <b>System 1</b> model rates every paper, the AI reasons about the uncertain ones, you decide. The flow diagram is built for you.",
     },
     {
       target: '.tab[data-tab="items"]',

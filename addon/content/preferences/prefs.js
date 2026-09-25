@@ -31,6 +31,7 @@ var ZRPrefsPane = (() => {
     renderChecklist();
     renderAreas();
     renderLLMList();
+    renderS1();
     renderSourcesToolbar();
     renderSources();
     document.getElementById("zr-replay-tour").addEventListener("click", () => {
@@ -370,6 +371,60 @@ var ZRPrefsPane = (() => {
       );
     }
     box.append(table);
+  }
+
+  // ------------------------------------------------------------ System 1 ----
+  function renderS1() {
+    const S1 = ZR.System1;
+    const box = document.getElementById("zr-s1");
+    const status = el("span", { class: "zr-status" });
+    const current = () => {
+      const eng = S1.engine();
+      status.textContent = `In use: ${S1.ENGINES.find((e) => e.id === eng).name.split(" (")[0].split(" — ")[0]}`;
+    };
+    const engine = el(
+      "select",
+      { id: "zr-s1-engine", onchange: () => (ZR.Prefs.set("s1Engine", engine.value), current()) },
+      [el("option", { value: "", text: "Automatic — best available" }), ...S1.ENGINES.map((e) => el("option", { value: e.id, text: e.name }))]
+    );
+    engine.value = ZR.Prefs.get("s1Engine", "");
+    const model = el("input", { type: "text", size: 16, id: "zr-s1-model", value: ZR.Prefs.get("s1Model", "jev-latest"), onchange: () => ZR.Prefs.set("s1Model", model.value.trim() || "jev-latest") });
+    const testStatus = el("span", { class: "zr-status" });
+    const test = el("button", {
+      text: "Test",
+      onclick: async () => {
+        if (!ZR.Secrets.get(S1.keyName)) return (testStatus.textContent = "Add a TypeSafe key first.");
+        test.disabled = true;
+        testStatus.textContent = "Testing…";
+        try {
+          const r = await S1.test();
+          testStatus.textContent = r.ok ? `✓ Works — ${r.model}, answered in ${r.ms} ms` : "Unexpected answer from TypeSafe";
+        } catch (e) {
+          testStatus.textContent = "✗ " + e.message;
+        } finally {
+          test.disabled = false;
+          current();
+        }
+      },
+    });
+    const ts = S1.ENGINES.find((e) => e.id === "typesafe");
+    const key = secretInput(S1.keyName, "TypeSafe API key");
+    key.querySelector("input").addEventListener("change", () => setTimeout(current, 100));
+    box.replaceChildren(
+      el("div", { class: "zr-grid" }, [
+        el("label", { for: "zr-s1-engine", text: "Rate papers with" }),
+        el("div", {}, [engine, " ", status]),
+        el("label", { text: "TypeSafe Jev" }),
+        el("div", {}, [
+          key,
+          el("div", { class: "zr-actions" }, [test, testStatus]),
+          el("div", { class: "zr-help" }, ["Get a key at ", link("console.typesafe.ai", ts.keyURL), " · ", link("documentation", ts.docsURL), ". Only title, abstract, venue, type and keywords of each paper are sent, together with your review questions and criteria."]),
+        ]),
+        el("label", { for: "zr-s1-model", text: "Model" }),
+        el("div", {}, [model, el("div", { class: "zr-help", text: "jev-latest follows TypeSafe’s newest model; pin a version (e.g. jev-1.13.0) for a reproducible review." })]),
+      ])
+    );
+    current();
   }
 
   function secretInput(secretName, label) {

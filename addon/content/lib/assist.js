@@ -112,6 +112,66 @@ ZR.Assist = (() => {
     return out;
   }
 
+  /**
+   * Turn a plain-language description into a review protocol for a methodology.
+   * Returns {protocol (normalized), recommended: {methodology, why}, rationale}.
+   * @param {object} context  optional {query, titles[]} from an existing (quick) project
+   */
+  async function fillProtocol(profile, methodologyID, description, context = {}) {
+    const M = ZR.Methodologies;
+    const system =
+      "You are an experienced research librarian and review methodologist. From the user's description you draft a review protocol that a careful researcher would accept: " +
+      "focused research questions, literal and checkable inclusion/exclusion criteria (each one a single condition a yes/no answer can decide from a title and abstract), " +
+      "a high-recall boolean search query, and methodology-appropriate extras (quality checklist, data extraction fields, classification facets). Use the user's language for text fields. " +
+      QUERY_SYNTAX;
+    const extra = [
+      context.query ? `The user already searched with: ${context.query}` : "",
+      context.titles?.length ? `Papers already collected (sample):\n${context.titles.slice(0, 15).map((t) => "- " + t).join("\n")}` : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+    const user = `${M.describeForm(methodologyID)}
+
+Other methodologies available: ${M.LIST.map((m) => `${m.id} (${m.name})`).join(", ")}.
+
+User's description:
+"""${description}"""
+${extra ? "\n" + extra + "\n" : ""}
+Reply with JSON only:
+{"title": str, "objective": str, "questions": [str], "framework": str, "frameworkFields": {<field id>: str}, "inclusion": [str], "exclusion": [str], "reasons": [str], "query": str, "yearFrom": int|null, "yearTo": int|null, "languages": [str], "types": [str], "quality": [str], "extraction": [str], "facets": [str], "recommendedMethodology": str, "recommendationWhy": str, "rationale": str}`;
+    const out = await ZR.LLM.chatJSON(profile, [{ role: "user", content: user }], { system, maxTokens: 4000 });
+    const protocol = M.normalizeProtocol(methodologyID, out);
+    try {
+      ZR.Query.parse(protocol.query);
+    } catch (e) {
+      protocol.query = protocol.query.replace(/[()]/g, " ");
+    }
+    const rec = M.get(out.recommendedMethodology) ? out.recommendedMethodology : methodologyID;
+    return { protocol, recommended: { methodology: rec, why: String(out.recommendationWhy || "") }, rationale: String(out.rationale || "") };
+  }
+
+  /** Fill data-extraction fields for one paper from its abstract / full text. */
+  async function extractFields(profile, fields, paper) {
+    const system = "You extract data for a literature review. Use only the given text; write 'not reported' when the text does not say. Keep each value short (a phrase or one sentence).";
+    const user = `Paper: ${paper.title} (${paper.year || "n.d."})\n\nText:\n"""${U.truncate(paper.fulltext || paper.abstract || "", 12000)}"""\n\nFields:\n${fields.map((f) => "- " + f).join("\n")}\n\nReply with JSON only: {<field>: <value>, …} using exactly the field names above.`;
+    const out = await ZR.LLM.chatJSON(profile, [{ role: "user", content: user }], { system, maxTokens: 2000 });
+    const res = {};
+    for (const f of fields) res[f] = out?.[f] == null ? "" : String(out[f]);
+    return res;
+  }
+
+  /** Answer a quality checklist (yes / partly / no) for one paper. */
+  async function assessQuality(profile, checklist, paper) {
+    const system = "You appraise study quality for a literature review. Judge only from the given text; answer 'no' when the text gives no evidence.";
+    const user = `Paper: ${paper.title}\n\nText:\n"""${U.truncate(paper.fulltext || paper.abstract || "", 12000)}"""\n\nChecklist:\n${checklist.map((q, i) => `${i}. ${q}`).join("\n")}\n\nReply with JSON only: [{"i": <index>, "answer": "yes"|"partly"|"no", "why": "<max 15 words>"}, …] covering every index.`;
+    const out = await ZR.LLM.chatJSON(profile, [{ role: "user", content: user }], { system, maxTokens: 2000 });
+    const answers = checklist.map(() => null);
+    for (const row of Array.isArray(out) ? out : []) {
+      if (answers[row.i] === null && ["yes", "partly", "no"].includes(row.answer)) answers[row.i] = { a: row.answer, why: String(row.why || "") };
+    }
+    return answers;
+  }
+
   /** Compare papers along user-chosen dimensions; returns sanitized HTML for a Zotero note. */
   async function compare(profile, papers, instruction) {
     const system =
@@ -169,5 +229,5 @@ ZR.Assist = (() => {
       });
   }
 
-  return { planQuery, screen, screenCriteria, compare, extractMetadata, pickCandidate, sanitizeHTML, QUERY_SYNTAX };
+  return { planQuery, screen, screenCriteria, fillProtocol, extractFields, assessQuality, compare, extractMetadata, pickCandidate, sanitizeHTML, QUERY_SYNTAX };
 })();
