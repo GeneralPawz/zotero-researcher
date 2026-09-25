@@ -462,6 +462,48 @@ ZR.Query = (() => {
     return compile(ast, "canonical");
   }
 
+  // --- Highlighting ----------------------------------------------------------
+  /** Terms a record is searched for (not the negated ones): [{text, phrase, field}] */
+  function termNodes(ast, negated = false, out = []) {
+    if (!ast) return out;
+    if (ast.op === "term") {
+      if (!negated && !out.some((t) => t.text.toLowerCase() === ast.text.toLowerCase() && t.field === ast.field)) out.push({ text: ast.text, phrase: ast.phrase, field: ast.field });
+    } else if (ast.op === "not") termNodes(ast.arg, !negated, out);
+    else for (const a of ast.args || []) termNodes(a, negated, out);
+    return out;
+  }
+
+  /** Case- and accent-folded copy of a string with the same length (so offsets carry over). */
+  function fold(s) {
+    let out = "";
+    for (const c of String(s || "")) {
+      const f = c.normalize("NFKD").replace(/[̀-ͯ]/g, "").toLowerCase();
+      out += c.length === 2 ? (f[0] || "x") + "x" : f[0] || c;
+    }
+    return out;
+  }
+
+  /**
+   * Where the terms occur in a text, as offsets into the original text.
+   * @returns {{start: number, end: number, term: string}[]}
+   */
+  function termRanges(text, terms) {
+    const f = fold(text);
+    const out = [];
+    for (const t of terms) {
+      const re = new RegExp(termRegex(t.text).source, "g");
+      for (let m; (m = re.exec(f)); ) {
+        const start = m.index + m[1].length;
+        let end = m.index + m[0].length;
+        // a trailing * matches word endings: mark the whole word (build* → "building")
+        if (t.text.trim().endsWith("*")) while (end < f.length && /[a-z0-9]/.test(f[end])) end++;
+        if (end > start) out.push({ start, end, term: t.text });
+        if (m[0].length === 0) re.lastIndex++;
+      }
+    }
+    return out.sort((a, b) => a.start - b.start);
+  }
+
   return {
     QuerySyntaxError,
     tokenize,
@@ -472,6 +514,8 @@ ZR.Query = (() => {
     keywordQueries,
     matches,
     toCanonical,
+    termNodes,
+    termRanges,
     dialects: Object.keys(dialects),
   };
 })();

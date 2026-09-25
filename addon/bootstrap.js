@@ -7,6 +7,7 @@ var ZR;
 // Order matters: later files depend on earlier ones.
 const LIB_FILES = [
   "lib/util.js",
+  "lib/activity.js",
   "lib/prefs.js",
   "lib/secrets.js",
   "lib/store.js",
@@ -47,7 +48,7 @@ async function startup({ id, version, rootURI }) {
   for (const file of LIB_FILES) {
     Services.scriptloader.loadSubScript(rootURI + "content/" + file, scope);
   }
-  ZR.http = ZR.Util.zoteroHTTP;
+  ZR.http = ZR.Activity.wrapHTTP(ZR.Util.zoteroHTTP); // every request shows up in the Log
   Zotero.Researcher = ZR;
 
   await ZR.UI.startup();

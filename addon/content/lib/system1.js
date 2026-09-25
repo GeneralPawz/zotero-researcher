@@ -77,6 +77,44 @@ ZR.System1 = (() => {
     return ctx;
   }
 
+  // Publication years and languages are form fields and are checked in code — TypeSafe
+  // advises against dates and arithmetic in the model, and metadata is exact anyway.
+  const CODE_CHECKED = /\b(1[89]\d\d|20\d\d)\b|\bpublished (before|after|between|since|from|in)\b|\blanguages?\b|\bwritten in\b|\b(english|german|french|spanish|chinese)\b/i;
+  const modelCriterion = (text) => !CODE_CHECKED.test(text);
+
+  /** Year/language checks from the paper's metadata: [{kind, text, p (0 or 1), code}] */
+  function codeChecks(c, protocol) {
+    const out = [];
+    const y = Number(c.year) || null;
+    if (y && (protocol.yearFrom || protocol.yearTo)) {
+      const ok = (!protocol.yearFrom || y >= protocol.yearFrom) && (!protocol.yearTo || y <= protocol.yearTo);
+      out.push({ kind: "exclude", text: `Published outside ${protocol.yearFrom || "…"}–${protocol.yearTo || "…"}`, note: `${y}, checked from the metadata`, p: ok ? 0 : 1, code: true });
+    }
+    const lang = c.language ? ZR.Records.normLang(c.language) : "";
+    if (lang && protocol.languages?.length) {
+      const ok = protocol.languages.includes(lang);
+      out.push({ kind: "exclude", text: `Language other than ${protocol.languages.join(", ")}`, note: `${lang}, checked from the metadata`, p: ok ? 0 : 1, code: true });
+    }
+    return out;
+  }
+
+  function applyCodeChecks(results, cands, protocol) {
+    for (const c of cands) {
+      const r = results[c.key];
+      if (!r) continue;
+      const checks = codeChecks(c, protocol);
+      if (!checks.length) continue;
+      r.criteria = [...(r.criteria || []).filter((k) => !k.code), ...checks];
+      const failed = checks.find((k) => k.p === 1);
+      if (failed) {
+        r.p = 0;
+        r.exclusion = 1;
+        r.suggest = { d: "exclude", r: (protocol.reasons || []).find((x) => /language/i.test(x) && /language/i.test(failed.text)) || failed.text };
+      }
+    }
+    return results;
+  }
+
   /** Typed questions for one paper: overall relevance + one literal question per criterion. */
   function buildQuestions(protocol) {
     const q = {
@@ -93,6 +131,7 @@ ZR.System1 = (() => {
       },
     };
     (protocol.inclusion || []).forEach((text, i) => {
+      if (!modelCriterion(text)) return;
       q[`inc_${i}`] = {
         type: "noul",
         instructions: `Does the paper in \`state\` meet this inclusion criterion: "${text}"?`,
@@ -100,6 +139,7 @@ ZR.System1 = (() => {
       };
     });
     (protocol.exclusion || []).forEach((text, i) => {
+      if (!modelCriterion(text)) return;
       q[`exc_${i}`] = {
         type: "noul",
         instructions: `Does the paper in \`state\` match this exclusion criterion: "${text}"?`,
@@ -113,8 +153,8 @@ ZR.System1 = (() => {
   function combine(protocol, get) {
     const relevance = get("relevant");
     const criteria = [];
-    (protocol.inclusion || []).forEach((text, i) => criteria.push({ kind: "include", text, p: get(`inc_${i}`) }));
-    (protocol.exclusion || []).forEach((text, i) => criteria.push({ kind: "exclude", text, p: get(`exc_${i}`) }));
+    (protocol.inclusion || []).forEach((text, i) => modelCriterion(text) && criteria.push({ kind: "include", text, p: get(`inc_${i}`) }));
+    (protocol.exclusion || []).forEach((text, i) => modelCriterion(text) && criteria.push({ kind: "exclude", text, p: get(`exc_${i}`) }));
     const excl = criteria.filter((c) => c.kind === "exclude" && c.p != null);
     const exclusion = excl.length ? Math.max(...excl.map((c) => c.p)) : 0;
     const p = Math.max(0, Math.min(1, (relevance ?? 0.5) * (1 - exclusion)));
@@ -288,6 +328,7 @@ ZR.System1 = (() => {
       const any = Object.values(res).find((r) => r.learned != null);
       if (any) info = { trained: true, labels: any.labels };
     }
+    applyCodeChecks(out, cands, protocol);
     return Object.assign({ results: out }, info);
   }
 
@@ -298,8 +339,8 @@ ZR.System1 = (() => {
   async function score(cands, protocol, { engine: eng = engine(), concurrency = 8, onProgress = () => {}, onError = () => {}, all = cands } = {}) {
     const at = new Date().toISOString().slice(0, 10);
     if (eng === "rules") return stamp(scoreRules(cands, protocol), at);
-    if (eng === "local") return stamp(await scoreLocal(cands, protocol, all, onProgress), at);
-    if (eng === "llm") return stamp(await blend(await scoreLLM(cands, protocol, onProgress), cands, protocol, all), at);
+    if (eng === "local") return stamp(applyCodeChecks(await scoreLocal(cands, protocol, all, onProgress), cands, protocol), at);
+    if (eng === "llm") return stamp(applyCodeChecks(await blend(await scoreLLM(cands, protocol, onProgress), cands, protocol, all), cands, protocol), at);
     const key = apiKey();
     if (!key) throw new Error("TypeSafe API key missing — add it under Settings → System 1 model");
     const questions = buildQuestions(protocol);
@@ -313,7 +354,7 @@ ZR.System1 = (() => {
       }
       onProgress(++done, cands.length);
     });
-    return stamp(await blend(results, cands, protocol, all), at);
+    return stamp(applyCodeChecks(await blend(results, cands, protocol, all), cands, protocol), at);
   }
 
   function stamp(results, at) {
@@ -334,5 +375,5 @@ ZR.System1 = (() => {
     return { ok: typeof data.answers?.bim?.noul === "number", p: data.answers?.bim?.noul, model: data.model, ms: Date.now() - t0 };
   }
 
-  return { ENGINES, ENDPOINT, keyName, MIN_LABELS, engine, buildQuestions, paperState, combine, score, relearn, learn, protocolQuery, isLabel, test };
+  return { ENGINES, ENDPOINT, keyName, MIN_LABELS, engine, buildQuestions, codeChecks, paperState, combine, score, relearn, learn, protocolQuery, isLabel, test };
 })();
