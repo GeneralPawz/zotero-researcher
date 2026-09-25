@@ -53,7 +53,7 @@ App.panels.citations = (() => {
     const any = graph.edges.length + simEdges.length > 0;
     $("graph-empty").hidden = any;
     $("graph-legend").hidden = !any;
-    st(graph.edges.length ? `${graph.edges.length} citation links between ${new Set(graph.edges.flatMap((e) => [e.from, e.to])).size} of ${items.length} papers (click a dot to show it in Zotero)` : `${items.length} papers in scope — click “Find citation links”.`);
+    st(graph.edges.length ? `${graph.edges.length} citation links between ${new Set(graph.edges.flatMap((e) => [e.from, e.to])).size} of ${items.length} papers (click a dot to show it in Zotero)` : `${items.length} papers in scope. Click “Find citation links”.`);
     layout();
   }
 
@@ -91,7 +91,7 @@ App.panels.citations = (() => {
       const s = lastScan.stats;
       const by = Object.entries(s.found).filter(([, n]) => n).map(([k, n]) => `${ZR.Sources.get(k)?.name || k} ${n}`).join(", ");
       st(
-        `${s.edges} citation links among ${s.papers} papers · data from ${by || "—"}` +
+        `${s.edges} citation links among ${s.papers} papers · data from ${by || "-"}` +
           (s.notFound ? ` · ${s.notFound} papers unknown to the graphs (no DOI/arXiv id?)` : "") +
           ($("cite-related").checked ? ` · ${added} new “Related” links in Zotero` : "") +
           (s.errors.length ? ` · ⚠ ${s.errors[0]}` : "")
@@ -123,7 +123,7 @@ App.panels.citations = (() => {
         mode: "related",
         query: `cited by ≥2 of ${lastScan.stats.papers} papers`,
         title: "Papers your collection cites often but you don't have",
-        description: "From OpenAlex reference lists — a quick way to close gaps (citation searching in PRISMA terms).",
+        description: "From OpenAlex reference lists: a quick way to close gaps (citation searching in PRISMA terms).",
       });
       App.showTab("search");
       App.status("search", `${records.length} frequently cited papers missing from your library`);
@@ -135,7 +135,7 @@ App.panels.citations = (() => {
   }
 
   async function exportGraph(kind) {
-    if (!graph.edges.length) return st("Nothing to export yet — find citation links first.");
+    if (!graph.edges.length) return st("Nothing to export yet. Find citation links first.");
     const content = kind === "graphml" ? ZR.Citations.graphML(graph) : ZR.Citations.edgesCSV(graph);
     const f = await App.saveFile(content, kind === "graphml" ? "citations.graphml" : "citations.csv", kind === "graphml" ? "GraphML (Gephi, yEd, Cytoscape)" : "CSV", kind === "graphml" ? "*.graphml" : "*.csv");
     if (f) st("Saved " + f);
@@ -308,7 +308,7 @@ App.panels.citations = (() => {
     tip.hidden = false;
     const cites = sim.edges.filter((x) => x.s === hover && !x.similar).length;
     const similar = sim.edges.filter((x) => x.similar && (x.s === hover || x.t === hover)).length;
-    tip.textContent = `${hover.title} — ${hover.creators || ""} ${hover.year || ""} · cited by ${hover.deg} · cites ${cites} here${similar ? ` · ${similar} similar` : ""}`;
+    tip.textContent = `${hover.title} · ${hover.creators || ""} ${hover.year || ""} · cited by ${hover.deg} · cites ${cites} here${similar ? ` · ${similar} similar` : ""}`;
     tip.style.left = Math.min(mx + 14, canvas.clientWidth - 370) + "px";
     tip.style.top = my + 14 + "px";
   }

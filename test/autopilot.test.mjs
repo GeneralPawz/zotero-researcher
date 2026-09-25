@@ -85,3 +85,30 @@ test("System 1 rates passages (TypeSafe) for the annotation check", async () => 
   const out = await ZR.System1.scorePassages([{ key: "a", text: "An IFC 5 milestone was reached." }, { key: "b", text: "The weather was fine." }], protocol, { engine: "typesafe" });
   eq(out, { a: 0.9, b: 0.1 });
 });
+
+test("starting the autopilot again archives the conversation as a past session", () => {
+  const { Autopilot: A } = load();
+  const pool = {
+    autopilotLog: [
+      { at: "2026-09-25T16:05:21", who: "info", kind: "start", model: "Codex · gpt-6-astra", from: "protocol", stage: "protocol", text: "Autopilot started" },
+      { at: "2026-09-25T16:09:02", who: "ai", stage: "search", text: "I suggest …" },
+    ],
+  };
+  A.archiveSession(pool);
+  assert.equal(pool.autopilotLog.length, 0, "the new session starts empty");
+  assert.equal(pool.autopilotSessions.length, 1);
+  const s = pool.autopilotSessions[0];
+  assert.equal(s.from, "protocol");
+  assert.equal(s.model, "Codex · gpt-6-astra");
+  assert.equal(s.count, 2);
+  assert.equal(s.ended, "2026-09-25T16:09:02");
+  assert.equal(s.id, "s20260925160521");
+  A.archiveSession(pool); // nothing to archive: no empty session is kept
+  assert.equal(pool.autopilotSessions.length, 1);
+  for (let i = 0; i < 40; i++) {
+    pool.autopilotLog = [{ at: `2026-09-26T10:00:${String(i).padStart(2, "0")}`, who: "info", text: "x" }];
+    A.archiveSession(pool);
+  }
+  assert.equal(pool.autopilotSessions.length, 30, "at most 30 are kept, newest first");
+  assert.equal(pool.autopilotSessions[0].started, "2026-09-26T10:00:39");
+});

@@ -1,7 +1,7 @@
 /* global ZR */
 // Autopilot: a "harness" model that runs a structured review with you, step by step.
 //
-// The harness does not see everything — it gets condensed numbers and small samples
+// The harness does not see everything - it gets condensed numbers and small samples
 // (to save tokens) and returns small JSON decisions. The deterministic parts stay in
 // code: System 1 rates papers, the annotation model reads full texts, the plugin applies
 // decisions. At every consequential point the harness asks you (see dialog/autopilot.js).
@@ -24,8 +24,8 @@ ZR.Autopilot = (() => {
 
   /** Which databases to search and how many results per source. */
   async function planSearch(profile, protocol, sources) {
-    const list = sources.map((s) => `${s.id}: ${s.name} — ${U.truncate(s.coverage || "", 110)} (${s.access})`).join("\n");
-    const user = `Review questions: ${(protocol.questions || []).join(" | ") || protocol.objective}\nQuery: ${protocol.query}\n\nAvailable databases (id: name — coverage):\n${list}\n\nPick the databases that cover this topic well (usually 3–6; include multidisciplinary ones) and a number of results per database (10–200) that keeps screening manageable.\n\nReply with JSON only: {"sources": ["<id>", …], "limit": <int>, "why": "<one sentence>"}`;
+    const list = sources.map((s) => `${s.id}: ${s.name} · ${U.truncate(s.coverage || "", 110)} (${s.access})`).join("\n");
+    const user = `Review questions: ${(protocol.questions || []).join(" | ") || protocol.objective}\nQuery: ${protocol.query}\n\nAvailable databases (id: name · coverage):\n${list}\n\nPick the databases that cover this topic well (usually 3-6; include multidisciplinary ones) and a number of results per database (10-200) that keeps screening manageable.\n\nReply with JSON only: {"sources": ["<id>", …], "limit": <int>, "why": "<one sentence>"}`;
     const out = await ZR.LLM.chatJSON(profile, [{ role: "user", content: user }], { system: "You plan literature searches for systematic reviews.", maxTokens: 1500 });
     const ids = new Set(sources.map((s) => s.id));
     const chosen = (Array.isArray(out?.sources) ? out.sources : []).filter((id) => ids.has(id));
@@ -81,7 +81,7 @@ ZR.Autopilot = (() => {
       abstract: U.truncate(c.abstract || "(no abstract)", 450),
       p: Math.round(c.s1.p * 100) / 100,
       criteria: (c.s1.criteria || []).filter((k) => k.p != null).map((k) => `${k.kind} "${U.truncate(k.text, 90)}": ${Math.round(k.p * 100)}%`),
-      suggestion: c.s1.suggest ? `${c.s1.suggest.d}${c.s1.suggest.r ? " — " + c.s1.suggest.r : ""}` : "",
+      suggestion: c.s1.suggest ? `${c.s1.suggest.d}${c.s1.suggest.r ? ": " + c.s1.suggest.r : ""}` : "",
     }));
   }
 
@@ -119,7 +119,7 @@ ZR.Autopilot = (() => {
       "Judge whether the outcome is plausible for the research question. Too many or all papers rejected usually means over-strict or badly worded criteria (for example an exclusion criterion that is just the negation of an inclusion criterion, or one that matches most papers) or a search that missed the topic. " +
       "Nearly everything accepted means criteria that are too loose. Propose concrete, minimal changes. Keep criteria literal and checkable from a title and abstract.";
     const base = `Research questions: ${(protocol.questions || []).join(" | ") || protocol.objective}\nInclusion criteria: ${JSON.stringify(protocol.inclusion || [])}\nExclusion criteria: ${JSON.stringify(protocol.exclusion || [])}\nSearch query: ${protocol.query}\nAttempt: ${attempt + 1} of 3\n\nSystem 1 outcome (condensed): ${JSON.stringify(summary)}`;
-    const answer = `Reply with JSON only: {"drilldown": <true if you need to see sample papers before judging>, "verdict": "ok"|"adjust"|"hopeless", "explanation": "<2–4 sentences on what you see and why>", "message": "<what you propose to the user, 1–3 sentences>", "changes": {"query": "<new boolean query or empty>", "inclusion": [<full new list or omit>], "exclusion": [<full new list or omit>], "thresholds": {"excludeBelow": <0-1>, "includeAbove": <0-1>} or omit}}`;
+    const answer = `Reply with JSON only: {"drilldown": <true if you need to see sample papers before judging>, "verdict": "ok"|"adjust"|"hopeless", "explanation": "<2-4 sentences on what you see and why>", "message": "<what you propose to the user, 1-3 sentences>", "changes": {"query": "<new boolean query or empty>", "inclusion": [<full new list or omit>], "exclusion": [<full new list or omit>], "thresholds": {"excludeBelow": <0-1>, "includeAbove": <0-1>} or omit}}`;
     let out = await ZR.LLM.chatJSON(profile, [{ role: "user", content: `${base}\n\n${answer}` }], { system, maxTokens: 3000 });
     let drilled = false;
     if (out?.drilldown && getSample) {
@@ -142,9 +142,9 @@ ZR.Autopilot = (() => {
       i,
       title: U.truncate(p.title, 120),
       pdf: p.hasPDF,
-      evidence: (p.annotations || []).slice(0, 12).map((a) => `[${a.kind || "untagged"}${a.isBot ? "" : ", human"}] "${U.truncate(a.text, 180)}"${a.comment ? " — " + U.truncate(a.comment, 120) : ""}`),
+      evidence: (p.annotations || []).slice(0, 12).map((a) => `[${a.kind || "untagged"}${a.isBot ? "" : ", human"}] "${U.truncate(a.text, 180)}"${a.comment ? ": " + U.truncate(a.comment, 120) : ""}`),
     }));
-    const user = `Research questions: ${(protocol.questions || []).join(" | ") || protocol.objective}\nInclusion criteria: ${JSON.stringify(protocol.inclusion || [])}\nExclusion criteria: ${JSON.stringify(protocol.exclusion || [])}\nAllowed exclusion reasons: ${JSON.stringify(reasons)}\n\nPapers with their full-text annotations:\n${JSON.stringify(brief, null, 1)}\n\nDecide for each paper with a PDF whether it is included at full-text stage. Human annotations weigh more than the AI's. Papers without PDF: decision "none".\nReply with JSON only: {"decisions": [{"i": <index>, "decision": "include"|"exclude"|"none", "reason": "<one allowed exclusion reason, or empty>", "why": "<max 25 words>"}, …], "summary": "<2–3 sentences for the user>"}`;
+    const user = `Research questions: ${(protocol.questions || []).join(" | ") || protocol.objective}\nInclusion criteria: ${JSON.stringify(protocol.inclusion || [])}\nExclusion criteria: ${JSON.stringify(protocol.exclusion || [])}\nAllowed exclusion reasons: ${JSON.stringify(reasons)}\n\nPapers with their full-text annotations:\n${JSON.stringify(brief, null, 1)}\n\nDecide for each paper with a PDF whether it is included at full-text stage. Human annotations weigh more than the AI's. Papers without PDF: decision "none".\nReply with JSON only: {"decisions": [{"i": <index>, "decision": "include"|"exclude"|"none", "reason": "<one allowed exclusion reason, or empty>", "why": "<max 25 words>"}, …], "summary": "<2-3 sentences for the user>"}`;
     const out = await ZR.LLM.chatJSON(profile, [{ role: "user", content: user }], { system: "You make full-text eligibility decisions in a systematic review from annotated evidence. Be consistent with the criteria and say why.", maxTokens: 4000 });
     const decisions = [];
     for (const row of Array.isArray(out?.decisions) ? out.decisions : []) {
@@ -182,5 +182,21 @@ ZR.Autopilot = (() => {
     return res;
   }
 
-  return { chooseMethodology, planSearch, screeningSummary, screeningSample, normalizeChanges, assessScreening, decideFullText, discrepancies, reviewDiscrepancies };
+  /**
+   * A new autopilot run starts a new conversation. The finished one is kept (newest
+   * first, at most 30) and can be read again. Mutates pool; returns the sessions.
+   */
+  function archiveSession(pool) {
+    const log = pool.autopilotLog || [];
+    const sessions = (pool.autopilotSessions = pool.autopilotSessions || []);
+    if (log.length) {
+      const head = log.find((m) => m.kind === "start") || {};
+      sessions.unshift({ id: "s" + log[0].at.replace(/\D/g, ""), started: log[0].at, ended: log[log.length - 1].at, from: head.from || log.find((m) => m.stage)?.stage || "", model: head.model || "", count: log.length, log });
+      sessions.splice(30);
+    }
+    pool.autopilotLog = [];
+    return sessions;
+  }
+
+  return { archiveSession, chooseMethodology, planSearch, screeningSummary, screeningSample, normalizeChanges, assessScreening, decideFullText, discrepancies, reviewDiscrepancies };
 })();

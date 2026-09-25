@@ -39,7 +39,7 @@ ZR.UI = (() => {
         const btn = doc.createElement("button");
         btn.id = "zr-reader-btn";
         btn.className = "toolbar-button";
-        btn.title = "Zotero Researcher — annotate this paper for your review";
+        btn.title = "Zotero Researcher: annotate this paper for your review";
         btn.textContent = "✦ Review";
         btn.style.cssText = "width: auto; padding: 0 8px; font-size: 12px; white-space: nowrap;";
         btn.addEventListener("click", (e) => readerMenu(reader, e).catch((err) => Zotero.logError(err)));
@@ -96,7 +96,7 @@ ZR.UI = (() => {
     const line = new pw.ItemProgress(ICON, "Reading the paper…");
     pw.show();
     try {
-      if (!profile) throw new Error("No AI set up — add one in Settings → Zotero Researcher");
+      if (!profile) throw new Error("No AI set up. Add one in Settings → Zotero Researcher");
       const r = await ZR.FullText.annotateWithAI({ item: paper, protocol: project.protocol, profile, max: ZR.Prefs.get("annoMax", 10), onStatus: (m) => line.setText(m) });
       line.setText(`Added ${r.created} annotation(s)${r.notFound.length ? ` (${r.notFound.length} quote(s) not found in the PDF)` : ""}`);
       line.setProgress(100);
@@ -146,7 +146,7 @@ ZR.UI = (() => {
       btn.id = "zotero-researcher-tb";
       btn.className = "zotero-tb-button";
       btn.setAttribute("tabindex", "-1");
-      btn.setAttribute("tooltiptext", "Researcher — find papers for this collection, get full texts, retrieve metadata");
+      btn.setAttribute("tooltiptext", "Researcher: find papers for this collection, get full texts, retrieve metadata");
       btn.addEventListener("command", () => openDialog(win));
       noteBtn.after(btn);
     }
@@ -405,13 +405,13 @@ ZR.UI = (() => {
     return el;
   }
 
-  /** Remembered screening decision (tags), e.g. "Screening: excluded — Off topic". */
+  /** Remembered screening decision (tags), e.g. "Screening: excluded - Off topic". */
   function decisionLine(doc, item) {
     const d = ZR.Store.decisionFromItem(item);
     if (!d) return null;
     const s = d.ft || d.ta;
     const label = { include: "included", exclude: "excluded", maybe: "maybe" }[s?.d];
-    const text = s ? `Screening${d.ft ? " (full text)" : ""}: ${label}${s.r ? " — " + s.r : ""}` : "Screening: waiting in a review";
+    const text = s ? `Screening${d.ft ? " (full text)" : ""}: ${label}${s.r ? ": " + s.r : ""}` : "Screening: waiting in a review";
     return h(doc, "div", { class: "zr-decision " + (s?.d || ""), text });
   }
 
@@ -435,7 +435,7 @@ ZR.UI = (() => {
         decisionLine(doc, item)
       );
     } else {
-      body.append(h(doc, "div", { class: "zr-missing", text: "Standalone file — retrieve metadata to create a parent item." }));
+      body.append(h(doc, "div", { class: "zr-missing", text: "Standalone file. Retrieve metadata to create a parent item." }));
     }
 
     const profiles = ZR.Prefs.getLLMProfiles();
@@ -468,7 +468,7 @@ ZR.UI = (() => {
     const wrap = h(doc, "div", { class: "zr-proposal" });
     wrap.append(h(doc, "div", { class: "zr-source", text: `Source: ${p.source}` }));
     if (!p.changes.length && !p.typeChange) {
-      wrap.append(h(doc, "div", { text: "No differences — metadata already matches." }));
+      wrap.append(h(doc, "div", { text: "No differences: metadata already matches." }));
       return wrap;
     }
     const table = h(doc, "table", { class: "zr-diff" });

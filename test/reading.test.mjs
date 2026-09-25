@@ -48,7 +48,7 @@ test("years and languages are checked in code, not asked to the System 1 model",
   assert.ok(res.new.criteria.some((k) => k.code && k.p === 0), "checks shown as passed");
   assert.equal(res.old.p, 0);
   assert.equal(res.old.suggest.d, "exclude");
-  assert.match(res.old.suggest.r, /Published outside 2020–2026/);
+  assert.match(res.old.suggest.r, /Published outside 2020-2026/);
   assert.equal(res.fr.p, 0);
   assert.equal(res.fr.suggest.r, "Language", "mapped to the protocol's own reason");
 });

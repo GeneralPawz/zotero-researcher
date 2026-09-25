@@ -7,6 +7,7 @@
 // an in-document menu. Existing code keeps using select.value / "change" unchanged.
 //
 //   ZRDropdown.observe(document)   enhance all current and future <select>s
+//   select.zrContextMenu = (value, event) => {}   right-click on the button or an entry
 
 var ZRDropdown = (() => {
   const HTML = "http://www.w3.org/1999/xhtml";
@@ -112,6 +113,12 @@ var ZRDropdown = (() => {
         open(select, button);
       }
     });
+    button.addEventListener("contextmenu", (e) => {
+      if (!select.zrContextMenu) return;
+      e.preventDefault();
+      close();
+      select.zrContextMenu(select.value, e);
+    });
     select.zrDropdownButton = button;
     sync();
   }
@@ -136,6 +143,13 @@ var ZRDropdown = (() => {
         if (!opt.disabled) choose(select, i);
       });
       item.addEventListener("mouseenter", () => setActive(items.findIndex((x) => x.i === i)));
+      item.addEventListener("contextmenu", (e) => {
+        if (!select.zrContextMenu) return;
+        e.preventDefault();
+        e.stopPropagation();
+        close();
+        select.zrContextMenu(opt.value, e);
+      });
       menu.append(item);
       items.push({ el: item, i });
     });
@@ -238,7 +252,7 @@ var ZRDropdown = (() => {
         }
       }
     }).observe(root, { childList: true, subtree: true });
-    // The menu is position: fixed — keep it attached to its button when anything scrolls
+    // The menu is position: fixed - keep it attached to its button when anything scrolls
     doc.addEventListener("scroll", (e) => openMenu && !openMenu.menu.contains(e.target) && openMenu.place(true), true);
   }
 

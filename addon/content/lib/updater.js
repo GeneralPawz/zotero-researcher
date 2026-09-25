@@ -25,7 +25,7 @@ ZR.Updater = (() => {
           onUpdateAvailable: (a, install) => finish({ status: "available", version: install.version, install }),
           onNoUpdateAvailable: () => finish({ status: "current", version: addon.version }),
           onUpdateFinished: (a, error) => {
-            if (error) finish({ status: "error", error: `update check failed (code ${error}) — are you online?` });
+            if (error) finish({ status: "error", error: `update check failed (code ${error}): are you online?` });
             else finish({ status: "current", version: addon.version });
           },
         },

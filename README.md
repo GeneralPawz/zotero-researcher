@@ -68,7 +68,7 @@ There are four tabs. Each shows one main action; the rest stays out of the way. 
 - **Quick search:** "get me papers on X". Type the parameters and go; results go straight into the collection. A collection gets a quick project automatically the first time you add papers to it.
 - **Structured review:** a methodology-based pipeline for a paper or thesis (see *Review* below).
 
-Pick a project from the menu to switch to it (and to its collection), or create one with **+ New project…**, using the current collection or a new one. **Delete “…”** in the same menu removes a project: its settings, protocol, search log, pool, ratings, highlights and autopilot conversation. The collection, its papers and your decisions stay. A quick project can be **converted into a structured review** at any time. Its query, filters and search history carry over.
+Pick a project from the menu to switch to it (and to its collection), or create one with **+ New project…**, using the current collection or a new one. Right-click a project (the project button or an entry of its menu) for **Info** (where it adds papers, its type, searches and dates) or **Delete “…”**, which removes it: its settings, protocol, search log, pool, ratings, highlights and autopilot conversation. The collection, its papers and your decisions stay. A quick project can be **converted into a structured review** at any time. Its query, filters and search history carry over.
 
 **Search**
 - Choose **Keywords** or **Describe it (AI)**.
@@ -98,9 +98,11 @@ Pick a project from the menu to switch to it (and to its collection), or create 
 | Systematic mapping study (Petersen) | find → screen → classify → report |
 | Semi-systematic / narrative review (Snyder) | find → screen → report |
 
-1. **Protocol.** Choose the methodology, then either:
-   - **describe in your own words** what you want to achieve. The AI fills in the methodology's form (and may suggest a better-fitting methodology); or
-   - **fill in the form** yourself.
+1. **Protocol.** Choose the methodology, then either (the two icons next to *Protocol*):
+   - **let the AI fill out the form** (✦): describe in your own words what you want to achieve. The AI fills in the methodology's form (and may suggest a better-fitting methodology); or
+   - **fill out the form yourself** (✎).
+
+   Lists such as research questions, criteria and data extraction fields are edited one entry per row (RQ1, IC1, E1, …) with **+** to add more; Enter adds a row, too. The search query uses the same query builder as the Search tab. One switch next to the icons turns all of them into raw text and back. The query box grows with the query, and ✓ *Valid query* shows the query as the databases get it when you hover over it.
 
    Once the protocol is saved, **Next** leads to the following step. Adding search results to the pool from there continues straight to screening.
 
@@ -165,7 +167,11 @@ Pick a project from the menu to switch to it (and to its collection), or create 
 5. **Quality, extraction, classification:** tables filled in by the full-text model. Extraction is optional.
 6. **Report:** a summary, and optionally a note.
 
-The conversation and the state are kept with the project. The panel header has ▶/⏸ (resume or pause after the current step), ■ (stop now) and a collapse toggle. *Pause* waits for the current step to finish. **Stop now** interrupts at once: it cancels the running AI calls and web requests, and ends CLI programs together with everything they started. *Resume* starts the interrupted step again, and the autopilot can be started again from any step. Tables use short column headers (Q1, E1, C1); *Full questions* shows the complete text with line breaks.
+The conversation and the state are kept with the project. The conversation marks each step with a divider, and shows results as facts, bars and lists rather than long sentences. The query appears coloured, with a button that jumps to it in the protocol. Click **Autopilot** in the panel header for the details: status, step, harness and full-text model, question. The clock icon lists the sessions. Every new start (from the start or from any step) begins a new session, and earlier ones can be read again.
+
+**Right-click a step** to run the autopilot from there to the end, even where there are results already. *Redo from here* first clears the decisions the AI or System 1 made from that step on; yours stay.
+
+The panel header has ▶/⏸ (resume or pause after the current step), ■ (stop now) and a collapse toggle; collapsed, only the toggle stays. *Pause* waits for the current step to finish. **Stop now** interrupts at once: it cancels the running AI calls and web requests, and ends CLI programs together with everything they started. *Resume* starts the interrupted step again, and the autopilot can be started again from any step. Tables use short column headers (Q1, E1, C1); *Full questions* shows the complete text with line breaks.
 
 Decisions are kept **per review**: the same paper can be included in one review and excluded in another. Outside a review, your latest judgement is still shown as a hint.
 
@@ -308,7 +314,7 @@ Layout:
 `npm run e2e` works like this:
 1. It builds the XPI and installs it into a **throwaway profile and data directory**.
 2. It starts a separate Zotero (`-no-remote`).
-3. The in-app self-test (`content/lib/selftest.js`) drives the real UI: 45 steps covering the toolbar, multi-select, item pane, context menu, welcome pointer, tour, research areas, live searches, PDFs, metadata fixing, judging and decision memory, Settings, the AI flows (against a mock AI endpoint, with live databases), projects (automatic quick projects, new review projects, conversion, persistence), the structured review (methodology-dependent forms, AI-filled protocol, candidate pool, System 1 rating against a mock TypeSafe endpoint with threshold decisions, AI on the uncertain papers, keyboard screening, the screening card (highlights with notes into Zotero, search terms, sentence paragraphs), the activity log, stopping the autopilot mid-call and resuming it, the window's lines matching Zotero's main window, the autopilot panel controls, deleting a project, the missing-PDF strategies, the autopilot running a complete review (wizard, search plan, screening check with a proposed change, full-text check, tables, report), the search audit trail and search versions (read-only reopening, refinement #1.1), full-text annotations (AI highlights in a generated PDF, a tagged human annotation syncing back, verdicts written back to Zotero, the reader's Review button), full text, AI-filled quality and extraction tables, flow diagram and protocol note), the local model (Settings check, ranking by the protocol, duplicate exclusion, learning from keyboard decisions and re-ranking, topic clusters as a facet, passage retrieval, similar papers in the library and the citation graph), citation linking on real papers (ResNet → GoogLeNet, Attention → ResNet), and disable/re-enable with the decisions surviving.
+3. The in-app self-test (`content/lib/selftest.js`) drives the real UI: 46 steps covering the toolbar, multi-select, item pane, context menu, welcome pointer, tour, research areas, live searches, PDFs, metadata fixing, judging and decision memory, Settings, the AI flows (against a mock AI endpoint, with live databases), projects (automatic quick projects, new review projects, conversion, persistence), the structured review (methodology-dependent forms, AI-filled protocol, candidate pool, System 1 rating against a mock TypeSafe endpoint with threshold decisions, AI on the uncertain papers, keyboard screening, the screening card (highlights with notes into Zotero, search terms, sentence paragraphs), the activity log, stopping the autopilot mid-call and resuming it, the window's lines matching Zotero's main window, the autopilot panel controls and its details, sessions and structured conversation, running it from a step, the protocol's list editors and query builder, deleting a project from the right-click menu, the missing-PDF strategies, the autopilot running a complete review (wizard, search plan, screening check with a proposed change, full-text check, tables, report), the search audit trail and search versions (read-only reopening, refinement #1.1), full-text annotations (AI highlights in a generated PDF, a tagged human annotation syncing back, verdicts written back to Zotero, the reader's Review button), full text, AI-filled quality and extraction tables, flow diagram and protocol note), the local model (Settings check, ranking by the protocol, duplicate exclusion, learning from keyboard decisions and re-ranking, topic clusters as a facet, passage retrieval, similar papers in the library and the citation graph), citation linking on real papers (ResNet → GoogLeNet, Attention → ResNet), and disable/re-enable with the decisions surviving.
 4. It writes `report.json` and screenshots, then quits.
 
 Your normal profile and library are never touched. Use `--keep-open` to keep the test instance open, and `--clean` to delete the temp folder after a passing run.

@@ -2,9 +2,9 @@
 // Catalog of scholarly databases. Adapters (sources/adapters.js) attach `search()` to
 // the entries they implement; entries without it are listed for reference only.
 //
-// access:  "free"     – works without any key (a key may raise limits: keyOptional)
-//          "free-key" – requires a free registration key
-//          "paid"     – needs a subscription / institutional entitlement / paid plan
+// access:  "free"     - works without any key (a key may raise limits: keyOptional)
+//          "free-key" - requires a free registration key
+//          "paid"     - needs a subscription / institutional entitlement / paid plan
 
 ZR.Sources = (() => {
   const CATALOG = [
@@ -245,7 +245,7 @@ ZR.Sources = (() => {
     { id: "physics", name: "Physics, mathematics & astronomy", description: "arXiv", defaultOn: true },
     { id: "energy", name: "Energy & applied sciences", description: "OSTI.gov (US Dept. of Energy)", defaultOn: true },
     { id: "medicine", name: "Life sciences & medicine", description: "PubMed, Europe PMC", defaultOn: false },
-    { id: "repositories", name: "Open repositories", description: "Zenodo, HAL, CORE — reports, theses, preprints", defaultOn: true },
+    { id: "repositories", name: "Open repositories", description: "Zenodo, HAL, CORE: reports, theses, preprints", defaultOn: true },
   ];
   const DISCIPLINE_OF = {
     openalex: ["multi"],

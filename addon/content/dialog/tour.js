@@ -9,12 +9,12 @@ const Tour = (window.Tour = (() => {
     {
       target: ".project-box",
       title: "Welcome to Researcher 👋",
-      text: "Papers you find are added to the collection you had selected in Zotero — shown here. A <b>project</b> remembers a collection's search settings and history: pick one here, or create one with <b>+ New project…</b>. A collection you add papers to gets its own project automatically.",
+      text: "Papers you find are added to the collection you had selected in Zotero, shown here. A <b>project</b> remembers a collection's search settings and history: pick one here, or create one with <b>+ New project…</b>. A collection you add papers to gets its own project automatically.",
     },
     {
       target: "#mode-seg",
       title: "Two ways to search",
-      text: "<b>Keywords</b>: you write the query yourself — exact and reproducible. <b>Describe it (AI)</b>: explain what you need in plain words and an AI writes the query and rates the results.",
+      text: "<b>Keywords</b>: you write the query yourself, exact and reproducible. <b>Describe it (AI)</b>: explain what you need in plain words and an AI writes the query and rates the results.",
     },
     {
       target: ".query-row",
@@ -29,12 +29,12 @@ const Tour = (window.Tour = (() => {
     {
       target: "#options-chip",
       title: "Filters and extras",
-      text: "Limit years, keep only papers with a full text, download PDFs, and hide papers you excluded before — your judgements are remembered across searches.",
+      text: "Limit years, keep only papers with a full text, download PDFs, and hide papers you excluded before: your judgements are remembered across searches.",
     },
     {
       target: '.tab[data-tab="review"]',
       title: "Structured reviews",
-      text: "For a paper or thesis, turn a project into a structured review: pick a methodology (PRISMA, scoping review, Kitchenham SLR, mapping study, …) and describe your goal in plain words — the AI fills in the protocol, or you fill it in yourself. Search results then go through a funnel: a fast <b>System 1</b> model rates every paper, the AI reasons about the uncertain ones, you decide. The flow diagram is built for you.",
+      text: "For a paper or thesis, turn a project into a structured review: pick a methodology (PRISMA, scoping review, Kitchenham SLR, mapping study, …) and describe your goal in plain words: the AI fills in the protocol, or you fill it in yourself. Search results then go through a funnel: a fast <b>System 1</b> model rates every paper, the AI reasons about the uncertain ones, you decide. The flow diagram is built for you.",
     },
     {
       target: '.tab[data-tab="items"]',

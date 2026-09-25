@@ -189,14 +189,14 @@ ZR.Prisma = (() => {
   function noteHTML(c, review, title) {
     const li = (obj) => Object.entries(obj).map(([k, v]) => `<li>${esc(k)}: ${v}</li>`).join("");
     return (
-      `<h1>PRISMA 2020 flow — ${esc(title)}</h1>` +
+      `<h1>PRISMA 2020 flow: ${esc(title)}</h1>` +
       `<p><em>Generated ${new Date().toISOString().slice(0, 10)} by Zotero Researcher. Counts reflect the collection's tags at that time.</em></p>` +
       (review?.question ? `<p><strong>Review question:</strong> ${esc(review.question)}</p>` : "") +
       (review?.include ? `<p><strong>Inclusion criteria:</strong> ${esc(review.include)}</p>` : "") +
       (review?.exclude ? `<p><strong>Exclusion criteria:</strong> ${esc(review.exclude)}</p>` : "") +
       `<h2>Identification</h2><p>Records identified from databases: <strong>${c.identified}</strong></p><ul>${li(c.bySource)}</ul>` +
-      `<p>Other methods — citation searching: ${c.otherMethods.citation}; added manually: ${c.otherMethods.manual}</p>` +
-      `<p>Removed before screening — duplicates: ${c.removedDuplicates}; already in library: ${c.removedInLibrary}</p>` +
+      `<p>Other methods. Citation searching: ${c.otherMethods.citation}; added manually: ${c.otherMethods.manual}</p>` +
+      `<p>Removed before screening. Duplicates: ${c.removedDuplicates}; already in library: ${c.removedInLibrary}</p>` +
       `<h2>Screening</h2><p>Records screened: <strong>${c.screened}</strong> (not yet screened: ${c.pendingTA}; maybe: ${c.maybeTA})</p>` +
       `<p>Records excluded: <strong>${c.excludedTA}</strong></p><ul>${li(c.excludedTAReasons)}</ul>` +
       `<p>Reports sought for retrieval: ${c.sought}; not retrieved: ${c.notRetrieved}</p>` +

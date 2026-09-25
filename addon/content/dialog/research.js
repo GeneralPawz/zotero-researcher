@@ -74,7 +74,7 @@ const App = (window.App = {
     // The autopilot runs some steps with a model of its own
     if (App.profileOverride) return App.profileOverride;
     const p = App.ZR.Prefs.getActiveLLMProfile();
-    if (!p) throw new Error("No AI is set up yet — add one under ⚙ Settings → AI providers.");
+    if (!p) throw new Error("No AI is set up yet. Add one under ⚙ Settings → AI providers.");
     return p;
   },
 
@@ -91,7 +91,10 @@ const App = (window.App = {
     App.target = t;
     $("target").replaceChildren("Adding to ", el("b", { text: t.label }));
     $("target").classList.toggle("readonly", !t.editable);
-    $("target").title = t.editable ? "Where papers are added" : "This library or collection is read-only — adding papers is disabled";
+    $("target").title = t.editable ? "Where papers are added" : "This library or collection is read-only: adding papers is disabled";
+    // where papers go is in the project's right-click Info; the line only shows as a read-only warning
+    $("target").hidden = t.editable;
+    $("project-select").title = `Project: remembers its search settings, history and review. Adds papers to ${t.label}. Right-click: info, delete`;
     const empty = $("empty-target");
     if (empty) empty.textContent = t.label;
   },
@@ -114,8 +117,15 @@ const App = (window.App = {
       opts.push(el("option", { value: p.id, text: `${p.kind === "review" ? "◆" : "○"} ${p.name}`, title: m ? `Structured review · ${m.name}` : "Quick search project" }));
     }
     opts.push(el("option", { value: "__new", text: "+ New project…" }));
-    if (App.project) opts.push(el("option", { value: "__delete", text: `Delete “${App.project.name}”…` }));
     sel.replaceChildren(...opts);
+    // right-click on a project (the button or an entry of its menu)
+    sel.zrContextMenu = (id, e) => {
+      if (id === "__new") return;
+      const p = App.projects.find((x) => x.id === id) || null;
+      const items = [{ id: "ctx-project-info", icon: "info", label: p ? "Info" : "Where papers are added", run: () => App.projectInfo(p, e.clientX, e.clientY) }];
+      if (p) items.push("-", { id: "ctx-delete-project", icon: "trash", danger: true, label: `Delete “${p.name}”…`, run: () => App.deleteProject(p.id) });
+      PaperView.openMenu(e.clientX, e.clientY, items);
+    };
     sel.value = App.project?.id || "";
     const review = App.project?.kind === "review";
     $("review-pill").hidden = !review;
@@ -128,7 +138,6 @@ const App = (window.App = {
       $("project-select").value = App.project?.id || "";
       return App.newProject();
     }
-    if (id === "__delete") return App.deleteProject();
     const p = App.projects.find((x) => x.id === id) || null;
     if (window.Autopilot?.isRunning()) Autopilot.pause();
     window.Autopilot?.hide();
@@ -136,7 +145,7 @@ const App = (window.App = {
     if (p?.collectionKey && p.collectionKey !== App.target.collectionKey) {
       const t = App.ZR.UI.targetFor(App.target.libraryID, p.collectionKey);
       if (t) App.setTarget(t);
-      else App.status("search", `The collection of “${p.name}” no longer exists — papers go to ${App.target.label}.`);
+      else App.status("search", `The collection of “${p.name}” no longer exists: papers go to ${App.target.label}.`);
     }
     App.renderProjects();
     App.panels.review.reset();
@@ -155,7 +164,7 @@ const App = (window.App = {
     use.disabled = !col || !!taken;
     use.checked = !use.disabled;
     document.querySelector('input[name="np-col"][value="new"]').checked = use.disabled;
-    $("np-use-label").textContent = !col ? "Use the current collection (none selected — you are in the library root)" : taken ? `Use “${col}” (already belongs to project “${taken.name}”)` : `Use the current collection “${col}”`;
+    $("np-use-label").textContent = !col ? "Use the current collection (none selected: you are in the library root)" : taken ? `Use “${col}” (already belongs to project “${taken.name}”)` : `Use the current collection “${col}”`;
     // Autopilot option for review projects
     const profiles = App.profiles();
     $("np-ap-profile").replaceChildren(...profiles.map((p) => el("option", { value: p.id, text: `${p.name}${p.model ? " · " + p.model : ""}` })));
@@ -213,6 +222,20 @@ const App = (window.App = {
       stop: "M6 6h12v12H6z",
       collapse: "M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6-1.41-1.41z",
       expand: "M15.41 16.59 10.83 12l4.58-4.59L14 6l-6 6 6 6 1.41-1.41z",
+      help: "M11 18h2v-2h-2v2zm1-16C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8zm0-14c-2.21 0-4 1.79-4 4h2c0-1.1.9-2 2-2s2 .9 2 2c0 2-3 1.75-3 5h2c0-2.25 3-2.5 3-5 0-2.21-1.79-4-4-4z",
+      settings:
+        "M19.43 12.98c.04-.32.07-.64.07-.98 0-.34-.03-.66-.07-.98l2.11-1.65c.19-.15.24-.42.12-.64l-2-3.46a.5.5 0 0 0-.61-.22l-2.49 1c-.52-.4-1.08-.73-1.69-.98l-.38-2.65A.49.49 0 0 0 14 2h-4c-.25 0-.46.18-.49.42l-.38 2.65c-.61.25-1.17.59-1.69.98l-2.49-1a.57.57 0 0 0-.18-.03c-.17 0-.34.09-.43.25l-2 3.46c-.13.22-.07.49.12.64l2.11 1.65c-.04.32-.07.65-.07.98s.03.66.07.98l-2.11 1.65c-.19.15-.24.42-.12.64l2 3.46a.5.5 0 0 0 .61.22l2.49-1c.52.4 1.08.73 1.69.98l.38 2.65c.03.24.24.42.49.42h4c.25 0 .46-.18.49-.42l.38-2.65c.61-.25 1.17-.59 1.69-.98l2.49 1c.06.02.12.03.18.03.17 0 .34-.09.43-.25l2-3.46c.12-.22.07-.49-.12-.64l-2.11-1.65zm-1.98-1.71c.04.31.05.52.05.73 0 .21-.02.43-.05.73l-.14 1.13.89.7 1.08.84-.7 1.21-1.27-.51-1.04-.42-.9.68c-.43.32-.84.56-1.25.73l-1.06.43-.16 1.13-.2 1.35h-1.4l-.19-1.35-.16-1.13-1.06-.43c-.43-.18-.83-.41-1.23-.71l-.91-.7-1.06.43-1.27.51-.7-1.21 1.08-.84.89-.7-.14-1.13c-.03-.31-.05-.54-.05-.74s.02-.43.05-.73l.14-1.13-.89-.7-1.08-.84.7-1.21 1.27.51 1.04.42.9-.68c.43-.32.84-.56 1.25-.73l1.06-.43.16-1.13.2-1.35h1.39l.19 1.35.16 1.13 1.06.43c.43.18.83.41 1.23.71l.91.7 1.06-.43 1.27-.51.7 1.21-1.07.85-.89.7.14 1.13zM12 8c-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4-1.79-4-4-4zm0 6c-1.1 0-2-.9-2-2s.9-2 2-2 2 .9 2 2-.9 2-2 2z",
+      trash: "M16 9v10H8V9h8m-1.5-6h-5l-1 1H5v2h14V4h-3.5l-1-1zM18 7H6v12c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7z",
+      sparkle: "M19 9l1.25-2.75L23 5l-2.75-1.25L19 1l-1.25 2.75L15 5l2.75 1.25L19 9zm-7.5.5L9 4 6.5 9.5 1 12l5.5 2.5L9 20l2.5-5.5L17 12l-5.5-2.5zM19 15l-1.25 2.75L15 19l2.75 1.25L19 23l1.25-2.75L23 19l-2.75-1.25L19 15z",
+      pencil: "M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04a.996.996 0 0 0 0-1.41l-2.34-2.34a.996.996 0 0 0-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z",
+      history: "M13 3a9 9 0 0 0-9 9H1l3.89 3.89.07.14L9 12H6c0-3.87 3.13-7 7-7s7 3.13 7 7-3.13 7-7 7c-1.93 0-3.68-.79-4.94-2.06l-1.42 1.42A8.954 8.954 0 0 0 13 21a9 9 0 0 0 0-18zm-1 5v5l4.28 2.54.72-1.21-3.5-2.08V8H12z",
+      list: "M4 10.5c-.83 0-1.5.67-1.5 1.5s.67 1.5 1.5 1.5 1.5-.67 1.5-1.5-.67-1.5-1.5-1.5zm0-6c-.83 0-1.5.67-1.5 1.5S3.17 7.5 4 7.5 5.5 6.83 5.5 6 4.83 4.5 4 4.5zm0 12c-.83 0-1.5.68-1.5 1.5s.68 1.5 1.5 1.5 1.5-.68 1.5-1.5-.67-1.5-1.5-1.5zM7 19h14v-2H7v2zm0-6h14v-2H7v2zm0-8v2h14V5H7z",
+      text: "M14 17H4v2h10v-2zm6-8H4v2h16V9zM4 15h16v-2H4v2zM4 5v2h16V5H4z",
+      add: "M19 13h-6v6h-2v-6H5v-2h6V5h2v6h6v2z",
+      close: "M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z",
+      jump: "M12 4l-1.41 1.41L16.17 11H4v2h12.17l-5.58 5.59L12 20l8-8z",
+      replay: "M12 5V1L7 6l5 5V7c3.31 0 6 2.69 6 6s-2.69 6-6 6-6-2.69-6-6H4c0 4.42 3.58 8 8 8s8-3.58 8-8-3.58-8-8-8z",
+      info: "M11 7h2v2h-2zm0 4h2v6h-2zm1-9C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm0 18c-4.41 0-8-3.59-8-8s3.59-8 8-8 8 3.59 8 8-3.59 8-8 8z",
     };
     const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
     svg.setAttribute("viewBox", "0 0 24 24");
@@ -249,6 +272,16 @@ const App = (window.App = {
         const h = Math.round(fromBottom - ourChrome);
         if (h >= 24 && h <= 90) root.setProperty("--statusbar-h", h + "px");
       }
+      // Zotero's grey for the chrome (its header and the library pane), light or dark
+      const cs = mw.getComputedStyle(mdoc.documentElement);
+      const paint = (node) => {
+        const c = node && mw.getComputedStyle(node).backgroundColor;
+        return c && c !== "transparent" && !/^rgba\(.*,\s*0\)$/.test(c) ? c : "";
+      };
+      const side = cs.getPropertyValue("--material-sidepane").trim() || paint(mdoc.getElementById("zotero-collections-pane"));
+      if (side) root.setProperty("--chrome-bg", side);
+      const border = cs.getPropertyValue("--material-panedivider").trim();
+      if (border) root.setProperty("--chrome-line", border);
     } catch (e) {
       /* main window closed: keep the defaults */
     }
@@ -256,10 +289,156 @@ const App = (window.App = {
     if (f?.offsetHeight) root.setProperty("--subheader-h", f.offsetHeight + "px");
   },
 
-  async deleteProject() {
-    const p = App.project;
-    $("project-select").value = p?.id || "";
+  /** A boolean query as a coloured code block; top-level AND / NOT start a new line. */
+  queryCode(text, attrs = {}) {
+    const pre = el("pre", Object.assign({ class: "q-code" }, attrs));
+    const parts = App.ZR.Query.syntax(String(text || "").replace(/\s+/g, " ").trim());
+    parts.forEach((p, i) => {
+      if (p.kind === "ws") {
+        const next = parts[i + 1];
+        return pre.append(next?.kind === "op" && next.top ? "\n" : p.text);
+      }
+      const cls = p.kind === "paren" ? `qk-paren qk-d${p.depth % 4}` : "qk-" + p.kind;
+      pre.append(el("span", { class: cls, text: p.text }));
+    });
+    return pre;
+  },
+
+  /**
+   * Query builder rows (terms per row are alternatives, rows combine with AND / OR / NOT /
+   * XOR) drawn into a box. The text query stays the source of truth: onChange gets it.
+   */
+  queryBuilder(box, { onChange = () => {}, onEnter = null } = {}) {
+    const QB = () => App.ZR.QueryBuilder;
+    const emptyRow = () => ({ op: "AND", field: "any", terms: [] });
+    let blocks = [];
+    let lastCompiled = null;
+    const sync = () => {
+      lastCompiled = QB().toQuery(blocks);
+      onChange(lastCompiled);
+    };
+    /** Show a text query as rows; false when it has nesting the rows can't show. */
+    function load(q) {
+      q = String(q || "").trim();
+      if (q !== lastCompiled || !blocks.length) {
+        const b = QB().fromQuery(q);
+        if (!b) return false;
+        blocks = b;
+        lastCompiled = q;
+      }
+      if (!blocks.length) blocks = [emptyRow()];
+      return true;
+    }
+    function render(focusRow = -1) {
+      box.replaceChildren();
+      box.title = "Terms in one row are alternatives (OR). Rows combine with AND, OR, NOT or XOR. Multi-word terms are exact phrases; build* matches word endings.";
+      const multi = blocks.length > 1;
+      blocks.forEach((b, i) => {
+        const input = el("input", { type: "text", class: "qb-input", spellcheck: "false", placeholder: b.terms.length ? "or…" : i === 0 ? "Type a term and press Enter, e.g. IFC5" : "Type a term and press Enter" });
+        const addTerms = (text) => {
+          const parts = String(text).split(/[,;\n]/).map((t) => t.trim()).filter(Boolean);
+          if (!parts.length) return false;
+          b.terms.push(...parts);
+          sync();
+          render(i);
+          return true;
+        };
+        input.addEventListener("keydown", (e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            if (!addTerms(input.value)) onEnter?.();
+          } else if (e.key === "," || e.key === ";") {
+            e.preventDefault();
+            addTerms(input.value);
+          } else if (e.key === "Backspace" && !input.value && b.terms.length) {
+            b.terms.pop();
+            sync();
+            render(i);
+          }
+        });
+        input.addEventListener("paste", (e) => {
+          const text = e.clipboardData.getData("text");
+          if (/[,;\n]/.test(text)) {
+            e.preventDefault();
+            addTerms(text);
+          }
+        });
+        input.addEventListener("blur", () => input.value.trim() && addTerms(input.value));
+        const chips = el("div", { class: "qb-chips", onclick: (e) => e.target === chips && input.focus() });
+        b.terms.forEach((t, k) => {
+          if (k) chips.append(el("span", { class: "qb-or", text: "or" }));
+          chips.append(el("span", { class: "qb-chip" }, [t, el("button", { title: "Remove term", text: "×", onclick: () => (b.terms.splice(k, 1), sync(), render(i)) })]));
+        });
+        chips.append(input);
+        let lead = null;
+        if (i > 0) lead = el("span", { class: "qb-lead" }, el("select", { class: "qb-op", title: "How this row combines with the rows above", onchange: (e) => ((b.op = e.target.value), sync()) }, QB().OPS.map((o) => el("option", { value: o.id, text: o.label, title: o.hint, selected: b.op === o.id }))));
+        else if (multi) lead = el("span", { class: "qb-lead qb-first", text: "Find" });
+        box.append(
+          el("div", { class: "qb-row" }, [
+            lead,
+            el("select", { class: "qb-field", title: "Where the terms must appear", onchange: (e) => ((b.field = e.target.value), sync()) }, QB().FIELDS.map((x) => el("option", { value: x.id, text: x.label, selected: b.field === x.id }))),
+            chips,
+            multi ? el("button", { class: "qb-remove", title: "Remove this row", text: "×", onclick: () => (blocks.splice(i, 1), sync(), render()) }) : null,
+          ])
+        );
+        if (i === focusRow) setTimeout(() => input.focus(), 0);
+      });
+      box.append(el("button", { class: "link qb-add", text: "+ Add condition", title: "Add a row combined with AND, OR, NOT or XOR", onclick: () => (blocks.push(emptyRow()), render(blocks.length - 1)) }));
+    }
+    return { load, render };
+  },
+
+  /** Scroll areas fade out under the edge they scroll under (only on the side with more content). */
+  FADE: ".scroll, .queue-list, .ap-log, .ap-prompt, .anno-list, .audit-table, .ap-search-body",
+  fade(s) {
+    const more = s.scrollHeight - s.clientHeight > 2;
+    s.classList.toggle("fade-top", more && s.scrollTop > 1);
+    s.classList.toggle("fade-bottom", more && s.scrollTop + s.clientHeight < s.scrollHeight - 1);
+  },
+  fadeAll() {
+    for (const s of document.querySelectorAll(App.FADE)) if (s.offsetParent) App.fade(s);
+  },
+
+  /** Right-click → Info: where the project adds papers, its kind and history. p = null: no project. */
+  projectInfo(p, x, y) {
+    $("project-info")?.remove();
+    const t = !p || p.id === App.project?.id ? App.target : App.ZR.UI.targetFor(App.target.libraryID, p.collectionKey);
+    const m = p?.kind === "review" ? App.ZR.Methodologies.get(p.methodology) : null;
+    const date = (s) => (s ? new Date(s).toLocaleDateString() : "");
+    const rows = [
+      ["Adds papers to", t ? t.label : "(its collection no longer exists)"],
+      ...(t && !t.editable ? [["Note", "Read-only: adding papers is disabled"]] : []),
+      ...(p
+        ? [
+            ["Type", m ? `Structured review · ${m.name}` : "Quick search"],
+            ["Searches", String((p.runs || []).length)],
+            ["Created", date(p.created)],
+            ["Last change", date(p.updated)],
+          ]
+        : [["Project", "none: searches are not remembered"]]),
+    ].filter(([, v]) => v);
+    const pop = el("div", { id: "project-info", class: "project-info", role: "dialog" }, [
+      el("div", { class: "ap-pop-title", text: p ? p.name : "No project" }),
+      el("div", { class: "ap-facts" }, rows.flatMap(([k, v]) => [el("span", { class: "ap-fk", text: k }), el("span", { class: "ap-fv", text: v })])),
+    ]);
+    document.body.append(pop);
+    const r = pop.getBoundingClientRect();
+    pop.style.left = Math.max(8, Math.min(x, window.innerWidth - r.width - 8)) + "px";
+    pop.style.top = Math.max(8, Math.min(y, window.innerHeight - r.height - 8)) + "px";
+    const close = (e) => {
+      if (e.type === "keydown" ? e.key !== "Escape" : pop.contains(e.target)) return;
+      pop.remove();
+      document.removeEventListener("mousedown", close, true);
+      document.removeEventListener("keydown", close, true);
+    };
+    document.addEventListener("mousedown", close, true);
+    document.addEventListener("keydown", close, true);
+  },
+
+  async deleteProject(id = App.project?.id) {
+    const p = App.projects.find((x) => x.id === id);
     if (!p) return;
+    const current = App.project?.id === p.id;
     const c = await App.ask(
       `Delete the project “${p.name}”?`,
       "The collection and its papers stay in Zotero, and so do your decisions on the papers. Removed: the project's settings, protocol, search log and audit trail, candidate pool, System 1 ratings, highlights and the autopilot conversation. This cannot be undone.",
@@ -269,15 +448,19 @@ const App = (window.App = {
       ]
     );
     if (c !== "delete") return;
-    if (window.Autopilot?.isRunning()) Autopilot.stop();
-    window.Autopilot?.hide();
+    if (current) {
+      if (window.Autopilot?.isRunning()) Autopilot.stop();
+      window.Autopilot?.hide();
+    }
     await App.ZR.Projects.remove(App.target.libraryID, p.id);
-    App.project = null;
-    await App.loadProjects();
-    App.project = null;
-    App.renderProjects();
-    App.panels.review.reset();
-    App.panels.search.loadProject();
+    if (current) App.project = null;
+    await App.loadProjects(current ? null : App.project?.id);
+    if (current) {
+      App.project = null;
+      App.renderProjects();
+      App.panels.review.reset();
+      App.panels.search.loadProject();
+    }
     App.status(App.currentTab === "review" ? "review" : "search", `Project “${p.name}” deleted.`);
     await App.panels[App.currentTab]?.onShow?.();
   },
@@ -338,7 +521,7 @@ const App = (window.App = {
           ? rows.map((e) => {
               const ms = (e.ended || now) - e.started;
               const slow = !e.ended && ms > 60000;
-              const state = !e.ended ? (slow ? `running ${secs(ms)} — no answer yet` : `running ${secs(ms)}`) : e.ok ? secs(ms) : "failed";
+              const state = !e.ended ? (slow ? `running ${secs(ms)}: no answer yet` : `running ${secs(ms)}`) : e.ok ? secs(ms) : "failed";
               const row = el("div", { class: `log-row ${e.ended ? (e.ok ? "ok" : "err") : "run"}${slow ? " slow" : ""}`, onclick: () => (open.has(e.id) ? open.delete(e.id) : open.add(e.id), render()) }, [
                 el("span", { class: "log-time", text: clock(e.started) }),
                 el("span", { class: "log-kind k-" + e.kind, text: e.kind }),
@@ -351,7 +534,7 @@ const App = (window.App = {
               if (!open.has(e.id)) return row;
               return el("div", {}, [row, el("pre", { class: "log-detail", text: [e.detail, e.result ? (e.ok === false ? "Error: " : "Result: ") + e.result : ""].filter(Boolean).join("\n\n") || "(no details)" })]);
             })
-          : [el("div", { class: "hint log-empty", text: "Nothing yet — requests to databases, AI models, CLIs and the local model appear here while they run." })])
+          : [el("div", { class: "hint log-empty", text: "Nothing yet: requests to databases, AI models, CLIs and the local model appear here while they run." })])
       );
     }
     const panel = el("div", { id: "log-panel", class: "log-panel", role: "dialog", "aria-label": "Activity log" }, [
@@ -422,6 +605,14 @@ async function init() {
   for (const b of document.querySelectorAll(".tab")) b.addEventListener("click", () => App.showTab(b.dataset.tab));
   $("open-prefs").addEventListener("click", () => App.ZR.UI.openPreferences());
   $("help").addEventListener("click", () => Tour.start());
+  $("help").append(App.icon("help"));
+  $("open-prefs").append(App.icon("settings"));
+  // fading scroll edges: on scroll, and whenever content or size changes
+  document.addEventListener("scroll", (e) => e.target.matches?.(App.FADE) && App.fade(e.target), true);
+  let fadeQueued = false;
+  const queueFade = () => fadeQueued || ((fadeQueued = true), requestAnimationFrame(() => ((fadeQueued = false), App.fadeAll())));
+  new MutationObserver(queueFade).observe(document.body, { childList: true, subtree: true, attributes: true, attributeFilter: ["hidden", "class"] });
+  window.addEventListener("resize", queueFade);
   $("project-select").addEventListener("change", (e) => App.switchProject(e.target.value).catch((err) => (Zotero.logError(err), App.status("search", err.message))));
   $("np-cancel").addEventListener("click", () => ($("np-layer").hidden = true));
   $("np-create").addEventListener("click", () => App.createProject().catch((err) => (Zotero.logError(err), App.status("search", "Could not create the project: " + err.message))));
@@ -588,22 +779,16 @@ App.panels.search = (() => {
   // Builder rows and the text query are two views of the same query; #query always
   // holds the text that is actually searched.
   let kwView = "builder";
-  let blocks = [];
-  let lastCompiled = null;
-  const QB = () => ZR.QueryBuilder;
-  const emptyRow = () => ({ op: "AND", field: "any", terms: [] });
+  let builder = null;
 
   function setView(view) {
-    if (view === "builder") {
-      const q = $("query").value.trim();
-      if (q !== lastCompiled) {
-        const b = QB().fromQuery(q);
-        if (!b) {
-          view = "text";
-          st("This query has nested groups the builder can't show — keep editing it as text.");
-        } else blocks = b;
-      }
-      if (!blocks.length) blocks = [emptyRow()];
+    builder ||= App.queryBuilder($("builder"), {
+      onChange: (q) => (($("query").value = q), validateQuery()),
+      onEnter: () => !App.busy && run(),
+    });
+    if (view === "builder" && !builder.load($("query").value)) {
+      view = "text";
+      st("This query has nested groups the builder can't show. Keep editing it as text.");
     }
     kwView = view;
     for (const b of $("kw-view").children) {
@@ -613,92 +798,15 @@ App.panels.search = (() => {
     $("builder").hidden = view !== "builder";
     $("query").hidden = view !== "text";
     $("syntax-toggle").hidden = view !== "text";
-    if (view === "builder") renderBuilder();
+    if (view === "builder") builder.render();
     else $("query").focus();
   }
 
   /** Put query text into whichever view is active. */
   function useQueryText(text) {
     $("query").value = text;
-    lastCompiled = null;
     validateQuery();
     setView(kwView);
-  }
-
-  function syncFromBuilder() {
-    lastCompiled = QB().toQuery(blocks);
-    $("query").value = lastCompiled;
-    validateQuery();
-  }
-
-  function renderBuilder(focusRow = -1) {
-    const box = $("builder");
-    box.replaceChildren();
-    box.title = "Terms in one row are alternatives (OR). Rows combine with AND, OR, NOT or XOR. Multi-word terms are exact phrases; build* matches word endings.";
-    const multi = blocks.length > 1;
-    blocks.forEach((b, i) => {
-      const input = el("input", {
-        type: "text",
-        class: "qb-input",
-        spellcheck: "false",
-        placeholder: b.terms.length ? "or…" : i === 0 ? "Type a term and press Enter — e.g. IFC5" : "Type a term and press Enter",
-      });
-      const addTerms = (text) => {
-        const parts = String(text).split(/[,;\n]/).map((t) => t.trim()).filter(Boolean);
-        if (!parts.length) return false;
-        b.terms.push(...parts);
-        syncFromBuilder();
-        renderBuilder(i);
-        return true;
-      };
-      input.addEventListener("keydown", (e) => {
-        if (e.key === "Enter") {
-          e.preventDefault();
-          if (!addTerms(input.value) && !App.busy) run();
-        } else if (e.key === "," || e.key === ";") {
-          e.preventDefault();
-          addTerms(input.value);
-        } else if (e.key === "Backspace" && !input.value && b.terms.length) {
-          b.terms.pop();
-          syncFromBuilder();
-          renderBuilder(i);
-        }
-      });
-      input.addEventListener("paste", (e) => {
-        const text = e.clipboardData.getData("text");
-        if (/[,;\n]/.test(text)) {
-          e.preventDefault();
-          addTerms(text);
-        }
-      });
-      input.addEventListener("blur", () => input.value.trim() && addTerms(input.value));
-      const chips = el("div", { class: "qb-chips", onclick: (e) => e.target === chips && input.focus() });
-      b.terms.forEach((t, k) => {
-        if (k) chips.append(el("span", { class: "qb-or", text: "or" }));
-        chips.append(el("span", { class: "qb-chip" }, [t, el("button", { title: "Remove term", text: "×", onclick: () => (b.terms.splice(k, 1), syncFromBuilder(), renderBuilder(i)) })]));
-      });
-      chips.append(input);
-      let lead = null;
-      if (i > 0) {
-        lead = el(
-          "span",
-          { class: "qb-lead" },
-          el("select", { class: "qb-op", title: "How this row combines with the rows above", onchange: (e) => ((b.op = e.target.value), syncFromBuilder()) }, QB().OPS.map((o) => el("option", { value: o.id, text: o.label, title: o.hint, selected: b.op === o.id })))
-        );
-      } else if (multi) {
-        lead = el("span", { class: "qb-lead qb-first", text: "Find" });
-      }
-      box.append(
-        el("div", { class: "qb-row" }, [
-          lead,
-          el("select", { class: "qb-field", title: "Where the terms must appear", onchange: (e) => ((b.field = e.target.value), syncFromBuilder()) }, QB().FIELDS.map((x) => el("option", { value: x.id, text: x.label, selected: b.field === x.id }))),
-          chips,
-          multi ? el("button", { class: "qb-remove", title: "Remove this row", text: "×", onclick: () => (blocks.splice(i, 1), syncFromBuilder(), renderBuilder()) }) : null,
-        ])
-      );
-      if (i === focusRow) setTimeout(() => input.focus(), 0);
-    });
-    box.append(el("button", { class: "link qb-add", text: "+ Add condition", title: "Add a row combined with AND, OR, NOT or XOR", onclick: () => (blocks.push(emptyRow()), renderBuilder(blocks.length - 1)) }));
   }
 
   function setMode(mode) {
@@ -728,7 +836,7 @@ App.panels.search = (() => {
     const parts = [];
     const yf = $("year-from").value;
     const yt = $("year-to").value;
-    parts.push(yf || yt ? `${yf || "…"}–${yt || "…"}` : "any year");
+    parts.push(yf || yt ? `${yf || "…"}-${yt || "…"}` : "any year");
     parts.push(`${$("limit").value || 25} per source`);
     if (pickedLangs.size) parts.push([...pickedLangs].map((l) => l.toUpperCase()).join("/"));
     if (pickedTypes.size) parts.push(pickedTypes.size === 1 ? ZR.Records.TYPE_FILTERS.find((t) => pickedTypes.has(t.id)).label.toLowerCase() : `${pickedTypes.size} types`);
@@ -774,7 +882,7 @@ App.panels.search = (() => {
     fb.className = "hint";
     fb.title = "";
     if (getMode() === "llm") {
-      fb.textContent = App.profiles().length ? "The AI turns your description into a search query — you'll see it before anything is added." : "Set up an AI in ⚙ Settings to use this mode.";
+      fb.textContent = App.profiles().length ? "The AI turns your description into a search query: you'll see it before anything is added." : "Set up an AI in ⚙ Settings to use this mode.";
       return true;
     }
     const q = $("query").value.trim();
@@ -864,9 +972,9 @@ App.panels.search = (() => {
 
   async function run() {
     if (App.busy) return;
-    if (viewing && !viewing.editable) return st("This is a logged search, shown read-only — click “Edit and run again” to change it.");
+    if (viewing && !viewing.editable) return st("This is a logged search, shown read-only. Click “Edit and run again” to change it.");
     const o = readOptions();
-    if (o.mode === "structured" && !o.query) return st("Type a query first — for example: (\"IFC5\" OR IFCX) AND BIM");
+    if (o.mode === "structured" && !o.query) return st("Type a query first, for example: (\"IFC5\" OR IFCX) AND BIM");
     if (o.mode !== "structured" && !o.request) return st("Describe what you are looking for first.");
     if (o.query && !validateQuery()) return;
     if (!o.sources.length) return st("Choose at least one source (📚 chip).");
@@ -1028,7 +1136,7 @@ App.panels.search = (() => {
         el("div", { class: "r-main" }, [
           el("div", { class: "r-title" }, [
             r.existingItemID
-              ? el("a", { href: "#", text: r.title, title: "In your library — click to show it in Zotero", onclick: (e) => (e.preventDefault(), openInLibrary(r, row)) })
+              ? el("a", { href: "#", text: r.title, title: "In your library. Click to show it in Zotero", onclick: (e) => (e.preventDefault(), openInLibrary(r, row)) })
               : link
                 ? el("a", { href: "#", text: r.title, title: "Open the paper's web page", onclick: (e) => (e.preventDefault(), Zotero.launchURL(link)) })
                 : r.title,
@@ -1058,7 +1166,7 @@ App.panels.search = (() => {
             el("option", { value: "clear", text: "Forget judgement" }),
             ]),
           ]),
-          r.llmScore != null ? el("span", { class: "score " + scoreClass(r.llmScore), text: String(r.llmScore), title: "AI relevance 0–10" }) : null,
+          r.llmScore != null ? el("span", { class: "score " + scoreClass(r.llmScore), text: String(r.llmScore), title: "AI relevance 0-10" }) : null,
           r.llmReason ? el("span", { class: "reason", text: r.llmReason }) : null,
         ]),
       ]);
@@ -1068,8 +1176,8 @@ App.panels.search = (() => {
   }
 
   /**
-   * A result already in the library: jump to it in Zotero (default), or — if set in
-   * Settings — list every collection it is in, each one clickable.
+   * A result already in the library: jump to it in Zotero (default), or - if set in
+   * Settings - list every collection it is in, each one clickable.
    */
   function openInLibrary(r, row) {
     const reveal = (opts) => App.ZR.UI.revealItem(r.existingItemID, Object.assign({ preferCollectionID: App.target.collectionID }, opts));
@@ -1150,7 +1258,7 @@ App.panels.search = (() => {
     renderRunBanner();
     renderResults();
     updateImportBar();
-    if (!audit) $("results").append(el("div", { class: "empty-state", text: "The individual results of this search were not recorded (logged before version 0.7) — only its settings and counts." }));
+    if (!audit) $("results").append(el("div", { class: "empty-state", text: "The individual results of this search were not recorded (logged before version 0.7): only its settings and counts." }));
     st(`Search ${label} from ${run.at}: ${run.identified ?? "?"} found, ${run.imported ?? "?"} into the pool.`);
   }
 
@@ -1162,7 +1270,7 @@ App.panels.search = (() => {
     box.replaceChildren(
       el("div", { class: "run-banner" }, [
         el("b", { text: viewing.editable ? `Editing a copy of search ${viewing.label}` : `Search ${viewing.label} · ${r.at}` }),
-        el("span", { class: "hint", text: viewing.editable ? "Change keywords or filters and run it — you will be asked whether it refines the original or is a new search." : `${r.identified ?? "?"} found · ${r.imported ?? "?"} into the pool · read-only` }),
+        el("span", { class: "hint", text: viewing.editable ? "Change keywords or filters and run it: you will be asked whether it refines the original or is a new search." : `${r.identified ?? "?"} found · ${r.imported ?? "?"} into the pool · read-only` }),
         el("span", { class: "spacer" }),
         viewing.editable ? null : el("button", { id: "run-edit", class: "primary", text: "Edit and run again", onclick: () => ((viewing.editable = true), renderRunBanner(), renderResults(), updateImportBar()) }),
         el("button", { id: "run-close", text: "Close", onclick: () => closeRunView() }),
@@ -1205,7 +1313,7 @@ App.panels.search = (() => {
     if (!lastRun) return;
     if (!App.target.editable) return st("This library or collection is read-only.");
     const recs = lastRun.records.filter((r) => r.selected);
-    if (!recs.length) return st(auto ? "Automatic mode: nothing scored high enough — nothing was added." : "Nothing selected.");
+    if (!recs.length) return st(auto ? "Automatic mode: nothing scored high enough, so nothing was added." : "Nothing selected.");
     App.setBusy("search", true);
     try {
       const libraryID = App.target.libraryID;

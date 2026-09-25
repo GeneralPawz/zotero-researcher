@@ -2,7 +2,7 @@
 // Durable plugin memory that lives in the Zotero library itself, so it syncs (group
 // libraries share it) and survives uninstalling/reinstalling the plugin:
 //
-//  • Tags on items — the source of truth for screening decisions on library items:
+//  • Tags on items - the source of truth for screening decisions on library items:
 //      zr:include / zr:exclude / zr:maybe        title/abstract screening
 //      zr:ft:include / zr:ft:exclude             full-text screening
 //      zr:why:<reason>                           exclusion reason
@@ -30,7 +30,7 @@ ZR.Store = (() => {
     ta: { include: TAG.include, exclude: TAG.exclude, maybe: TAG.maybe },
     ft: { include: TAG.ftInclude, exclude: TAG.ftExclude },
   };
-  const LEDGER_TITLE = "Zotero Researcher — data ledger";
+  const LEDGER_TITLE = "Zotero Researcher: data ledger";
   const SHARD_CHARS = 120000; // Zotero notes sync up to ~250k chars; stay well below
   const today = () => new Date().toISOString().slice(0, 10);
 
@@ -100,7 +100,7 @@ ZR.Store = (() => {
     const s = prior.ft || prior.ta;
     if (!s) return "";
     const label = { include: "Included", exclude: "Excluded", maybe: "Marked maybe" }[s.d] || s.d;
-    return `${label}${prior.ft ? " (full text)" : ""}${s.at ? " " + s.at : ""}${s.r ? " — " + s.r : ""}${s.by === "llm" ? " · by AI" : s.by === "s1" ? " · by System 1" : s.by === "dup" ? " · duplicate check" : ""}`;
+    return `${label}${prior.ft ? " (full text)" : ""}${s.at ? " " + s.at : ""}${s.r ? ": " + s.r : ""}${s.by === "llm" ? " · by AI" : s.by === "s1" ? " · by System 1" : s.by === "dup" ? " · duplicate check" : ""}`;
   }
 
   // ---------------------------------------------------------- ledger storage ----

@@ -60,7 +60,7 @@ ZR.Methodologies = (() => {
     title: { label: "Working title", type: "text", hint: "e.g. IFC 5 and IFCX in BIM data exchange: a systematic review" },
     objective: { label: "Objective", type: "textarea", hint: "What should this review establish, and for whom?" },
     questions: { label: "Research questions", type: "list", hint: "One per line, e.g. RQ1: How is IFC 5 used for …?" },
-    inclusion: { label: "Include papers that…", type: "list", hint: "One criterion per line — written so a yes/no answer is possible" },
+    inclusion: { label: "Include papers that…", type: "list", hint: "One criterion per line: written so a yes/no answer is possible" },
     exclusion: { label: "Exclude papers that…", type: "list", hint: "One criterion per line" },
     reasons: { label: "Exclusion reasons", type: "list", hint: "Shown when you exclude a paper; used in the flow diagram" },
     query: { label: "Search query", type: "query", hint: 'Boolean query, e.g. ("IFC5" OR IFCX) AND BIM' },
@@ -110,7 +110,7 @@ ZR.Methodologies = (() => {
     {
       id: "scoping",
       name: "Scoping review (PRISMA-ScR / JBI)",
-      short: "Maps what is known about a broad topic, the kinds of evidence and the gaps — no quality appraisal.",
+      short: "Maps what is known about a broad topic, the kinds of evidence and the gaps: no quality appraisal.",
       reference: "Tricco et al. (2018), Ann Intern Med 169:467; Peters et al., JBI Manual",
       framework: "PCC",
       frameworks: ["PCC", "none"],
@@ -143,7 +143,7 @@ ZR.Methodologies = (() => {
     {
       id: "mapping",
       name: "Systematic mapping study (Petersen)",
-      short: "Classifies a research field by topic, research type and venue to show trends and gaps — breadth over depth.",
+      short: "Classifies a research field by topic, research type and venue to show trends and gaps: breadth over depth.",
       reference: "Petersen, Vakkalanka & Kuzniarz (2015), IST 64:1",
       framework: "none",
       frameworks: ["none", "PCC"],
@@ -222,9 +222,9 @@ ZR.Methodologies = (() => {
   /** Plain-text description of the form, for the LLM that fills it. */
   function describeForm(id) {
     const m = get(id);
-    const fwLines = m.frameworks.map((f) => `  ${f}: ${FRAMEWORKS[f].fields.map((x) => `${x.id} (${x.label})`).join(", ") || "—"}`).join("\n");
+    const fwLines = m.frameworks.map((f) => `  ${f}: ${FRAMEWORKS[f].fields.map((x) => `${x.id} (${x.label})`).join(", ") || "-"}`).join("\n");
     return [
-      `Methodology: ${m.name} — ${m.short}`,
+      `Methodology: ${m.name} · ${m.short}`,
       `Allowed question frameworks (field ids):\n${fwLines}`,
       `Fields to fill: ${m.fields.map((f) => `${f} (${FIELDS[f].label})`).join(", ")}`,
       `Publication type ids: ${ZR.Records.TYPE_FILTERS.map((t) => t.id).join(", ")}. Language codes: ISO 639-1 (en, de, …).`,

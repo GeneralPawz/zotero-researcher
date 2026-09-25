@@ -1,6 +1,6 @@
 /* global ZR, Zotero, IOUtils, PathUtils */
 // Local embeddings (this computer, e.g. Ollama with nomic-embed-text) and what is built
-// on them — all offline, free and private:
+// on them - all offline, free and private:
 //   - a relevance model that learns from your screening decisions (System 1 "local")
 //   - duplicate detection (preprint vs. journal version, re-worded titles)
 //   - "similar papers" in your library, clusters for mapping-study facets
@@ -19,7 +19,7 @@ ZR.Embed = (() => {
   ];
 
   const MODELS = [
-    { id: "nomic-embed-text", size: "274 MB", note: "recommended — good quality, fast on CPU" },
+    { id: "nomic-embed-text", size: "274 MB", note: "recommended: good quality, fast on CPU" },
     { id: "embeddinggemma", size: "622 MB", note: "multilingual, higher quality" },
     { id: "mxbai-embed-large", size: "670 MB", note: "high quality, slower" },
     { id: "all-minilm", size: "46 MB", note: "tiny and very fast, English, lower quality" },

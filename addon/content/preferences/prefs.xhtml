@@ -20,14 +20,14 @@
 
   <groupbox>
     <label><html:h2>AI providers</html:h2></label>
-    <html:p class="zr-help">Optional. Add one or more AI models and choose the active one — used to turn descriptions into queries, rate and screen papers, compare papers and read PDFs for metadata. Keys are stored in Zotero’s encrypted password store. Local models (Ollama, LM Studio) need no key.</html:p>
+    <html:p class="zr-help">Optional. Add one or more AI models and choose the active one: used to turn descriptions into queries, rate and screen papers, compare papers and read PDFs for metadata. Keys are stored in Zotero’s encrypted password store. Local models (Ollama, LM Studio) need no key.</html:p>
     <html:div id="zr-llm-list"></html:div>
     <html:div id="zr-llm-editor"></html:div>
   </groupbox>
 
   <groupbox>
     <label><html:h2>System 1 model (fast screening)</html:h2></label>
-    <html:p class="zr-help">In a structured review, a System 1 model estimates for every paper how likely it is to be relevant — quickly and cheaply, as a probability instead of long reasoning. The AI provider above sets up the review and reasons about the uncertain papers; the two complement each other. Without either, papers are rated by whether they match the review’s query.</html:p>
+    <html:p class="zr-help">In a structured review, a System 1 model estimates for every paper how likely it is to be relevant: quickly and cheaply, as a probability instead of long reasoning. The AI provider above sets up the review and reasons about the uncertain papers; the two complement each other. Without either, papers are rated by whether they match the review’s query.</html:p>
     <html:div id="zr-s1"></html:div>
   </groupbox>
 
@@ -46,13 +46,13 @@
 
   <groupbox>
     <label><html:h2>Local models (this computer)</html:h2></label>
-    <html:p class="zr-help">A small embedding model running on your computer — free, offline and private. It powers the <html:b>local System 1 model</html:b> that learns from your screening decisions, <html:b>duplicate detection</html:b>, <html:b>similar papers</html:b> in your library and the citation graph, <html:b>topic clusters</html:b> for mapping studies, and <html:b>passage retrieval</html:b>: for long full texts the AI gets only the relevant parts. Everything falls back gracefully when it is not running.</html:p>
+    <html:p class="zr-help">A small embedding model running on your computer: free, offline and private. It powers the <html:b>local System 1 model</html:b> that learns from your screening decisions, <html:b>duplicate detection</html:b>, <html:b>similar papers</html:b> in your library and the citation graph, <html:b>topic clusters</html:b> for mapping studies, and <html:b>passage retrieval</html:b>: for long full texts the AI gets only the relevant parts. Everything falls back gracefully when it is not running.</html:p>
     <html:div id="zr-local"></html:div>
   </groupbox>
 
   <groupbox>
     <label><html:h2>Web search &amp; crawlers (finding PDFs)</html:h2></label>
-    <html:p class="zr-help">When the usual open-access sources have no PDF for a paper, a web search or crawl API can look for one — in the review's full-text step and in the autopilot. Every file found is checked (it must be a PDF of exactly that paper) before it is attached. AI providers with web access (Codex and Claude Code CLIs, Perplexity, OpenRouter) can do this too, without a key here.</html:p>
+    <html:p class="zr-help">When the usual open-access sources have no PDF for a paper, a web search or crawl API can look for one: in the review's full-text step and in the autopilot. Every file found is checked (it must be a PDF of exactly that paper) before it is attached. AI providers with web access (Codex and Claude Code CLIs, Perplexity, OpenRouter) can do this too, without a key here.</html:p>
     <html:div id="zr-crawlers"></html:div>
   </groupbox>
 
@@ -65,7 +65,7 @@
 
   <groupbox>
     <label><html:h2>Your data</html:h2></label>
-    <html:p class="zr-help">Your judgements stay in your Zotero library — not in the plugin — so they sync (group members share them) and survive uninstalling: tags on papers (<html:code>zr:include</html:code>, <html:code>zr:exclude</html:code>, <html:code>zr:why:…</html:code>, <html:code>zr:unscreened</html:code>) plus one note per library called “Zotero Researcher — data ledger” for papers you judged but did not add, projects and their review protocols, search logs and citation directions. A review’s candidate pool and model ratings are kept locally in the Zotero data folder (<html:code>zotero-researcher/projects</html:code>).</html:p>
+    <html:p class="zr-help">Your judgements stay in your Zotero library, not in the plugin, so they sync (group members share them) and survive uninstalling: tags on papers (<html:code>zr:include</html:code>, <html:code>zr:exclude</html:code>, <html:code>zr:why:…</html:code>, <html:code>zr:unscreened</html:code>) plus one note per library called “Zotero Researcher: data ledger” for papers you judged but did not add, projects and their review protocols, search logs and citation directions. A review’s candidate pool and model ratings are kept locally in the Zotero data folder (<html:code>zotero-researcher/projects</html:code>).</html:p>
     <html:div class="zr-actions"><html:button id="zr-show-ledger">Show the data ledger note</html:button><html:span id="zr-ledger-status" class="zr-help"></html:span></html:div>
   </groupbox>
 

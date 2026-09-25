@@ -7,7 +7,8 @@ test("Anthropic protocol: headers, system prompt, response parsing", async () =>
     assert.equal(url, "https://api.anthropic.com/v1/messages");
     assert.equal(o.headers["x-api-key"], "sk-ant");
     assert.equal(o.headers["anthropic-version"], "2023-06-01");
-    assert.equal(o.body.system, "SYS");
+    assert.match(o.body.system, /^SYS\n\n/);
+    assert.match(o.body.system, /do not use em dashes or en dashes/, "every AI is told to write without dashes");
     assert.equal(o.body.model, "claude-sonnet-5");
     assert.ok(o.body.max_tokens > 0);
     return { content: [{ type: "text", text: "hello" }], stop_reason: "end_turn" };

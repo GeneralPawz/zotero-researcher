@@ -84,3 +84,18 @@ test("wildcards are stripped only for APIs that reject them", () => {
   assert.equal(Q.compile(ast, "scopus"), 'TITLE-ABS-KEY(IFC) AND TITLE-ABS-KEY("building information model*") AND TITLE-ABS-KEY(build*)');
   eq(Q.keywordQueries(ast), ["IFC building information model build"]);
 });
+
+test("syntax colouring splits a query into pieces that join back to it", () => {
+  const Q = ZR.Query;
+  const q = '(BIM OR "building information model*" OR Bauwerksinformationsmodell*) AND (construction OR title:"site logistics") NOT -survey';
+  const parts = Q.syntax(q);
+  assert.equal(parts.map((p) => p.text).join(""), q);
+  const kinds = (k) => parts.filter((p) => p.kind === k).map((p) => p.text);
+  eq(kinds("op"), ["OR", "OR", "AND", "OR", "NOT", "-"]);
+  eq(kinds("phrase"), ['"building information model*"', '"site logistics"']);
+  eq(kinds("field"), ["title:"]);
+  eq(kinds("wild"), ["*"]);
+  eq(parts.filter((p) => p.kind === "op" && p.top).map((p) => p.text), ["AND", "NOT", "-"]);
+  eq(parts.filter((p) => p.kind === "paren").map((p) => p.depth), [0, 0, 0, 0]);
+  assert.equal(Q.syntax('(unfinished "phr').map((p) => p.text).join(""), '(unfinished "phr');
+});

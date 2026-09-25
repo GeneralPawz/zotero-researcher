@@ -22,10 +22,10 @@ ZR.Util = (() => {
   const STATUS_HINTS = {
     400: "request rejected",
     401: "API key missing or invalid",
-    403: "access denied — key invalid or no entitlement (institutional access needed?)",
+    403: "access denied: key invalid or no entitlement (institutional access needed?)",
     404: "not found",
-    429: "rate limit or daily quota exceeded — wait, or add an API key in Settings",
-    529: "service overloaded — try again shortly",
+    429: "rate limit or daily quota exceeded. Wait, or add an API key in Settings",
+    529: "service overloaded. Try again shortly",
   };
 
   class HTTPError extends Error {
@@ -263,6 +263,15 @@ ZR.Util = (() => {
     return results;
   }
 
+  /** Text written by an AI, for the UI: without em / en dashes. */
+  function undash(s) {
+    return String(s ?? "")
+      .replace(/(\d)\s*[\u2013\u2014]\s*(\d)/g, "$1-$2")
+      .replace(/\s*[\u2013\u2014]\s*/g, ", ")
+      .replace(/, ([,.;:)])/g, "$1")
+      .replace(/^, /gm, "");
+  }
+
   function truncate(s, n) {
     s = String(s ?? "");
     return s.length > n ? s.slice(0, n - 1) + "…" : s;
@@ -287,5 +296,6 @@ ZR.Util = (() => {
     extractJSON,
     mapLimit,
     truncate,
+    undash,
   };
 })();
