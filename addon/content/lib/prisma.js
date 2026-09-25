@@ -215,6 +215,10 @@ ZR.Prisma = (() => {
     const perSource = {};
     for (const [id, s] of Object.entries(runInfo.perSource || {})) perSource[id] = { count: s.count || 0, ...(s.error ? { error: U.truncate(s.error, 120) } : {}) };
     return {
+      id: runInfo.id || "r" + Date.now().toString(36),
+      parent: runInfo.parent || null, // the search this one refines
+      settings: runInfo.settings || null, // to reopen it in the Search tab
+      removed: (runInfo.dropped || []).length,
       at: runInfo.started,
       mode: runInfo.mode?.startsWith("related") ? "related" : runInfo.mode,
       query: runInfo.query,

@@ -1033,6 +1033,57 @@ ZR.SelfTest = (() => {
         return res;
       });
 
+      await step("logged searches: audit trail with the full chain, reopen read-only, refine as #1.1", async () => {
+        const d = rv();
+        await goStep("search", (x) => x.querySelector("#rv-runs table"));
+        const labelsBefore = [...d.querySelectorAll("#rv-runs .run-label")].map((t) => t.textContent);
+        // audit trail
+        d.getElementById("rv-audit").click();
+        const layer = await waitFor(() => d.getElementById("audit-layer"), 5000);
+        await waitFor(() => layer.querySelectorAll("table.audit tr").length > 1, 5000);
+        const outcomes = [...new Set([...layer.querySelectorAll("table.audit td.a-outcome")].map((t) => t.textContent))];
+        const searchResults = [...new Set([...layer.querySelectorAll("table.audit tr td:nth-child(5)")].map((t) => t.textContent))];
+        const summary = layer.querySelector(".audit-summary").textContent;
+        await shot(rw, "12a-audit-trail.png");
+        await pick(layer.querySelector("#audit-outcome"), "Not added");
+        const notAddedRows = layer.querySelectorAll("table.audit tr").length - 1;
+        layer.remove();
+        // reopen search #1 read-only
+        d.querySelector("#rv-runs .run-query").click();
+        await waitFor(() => !d.getElementById("panel-search").hidden && d.body.dataset.readonly === "1", 5000);
+        const shownResults = d.querySelectorAll("#results .result").length;
+        const fateTags = [...new Set([...d.querySelectorAll("#results .tag")].map((t) => t.textContent).filter((t) => /pool|added|selected/.test(t)))];
+        const readOnlyImportHidden = d.getElementById("import-bar").hidden;
+        await shot(rw, "12b-search-readonly.png");
+        // edit, change the query, run → asked: refinement or new
+        d.getElementById("run-edit").click();
+        const q0 = d.getElementById("query").value;
+        rw.App.panels.search.useQueryText(q0 + " AND exchange");
+        d.getElementById("run").click();
+        const ask = await waitFor(() => d.getElementById("ask-layer"), 5000);
+        const askText = ask.textContent;
+        ask.querySelector('[data-choice="refine"]').click();
+        await waitFor(() => !d.getElementById("run").disabled && /papers found|failed/.test(d.getElementById("search-status").textContent), 120000);
+        d.getElementById("import").click();
+        await waitFor(() => /screening pool|Adding failed/.test(d.getElementById("search-status").textContent), 60000);
+        const p = await ZR.Projects.get(libraryID, reviewProject.id);
+        rw.App.showTab("review");
+        await goStep("search", (x) => x.querySelectorAll("#rv-runs .run-label").length === 2);
+        const labelsAfter = [...d.querySelectorAll("#rv-runs .run-label")].map((t) => t.textContent);
+        await shot(rw, "12c-search-versions.png");
+        // search terms have their own colours
+        await goStep("screen", (x) => x.querySelector("#queue-filter"));
+        d.getElementById("queue-filter").value = "all";
+        d.getElementById("queue-filter").dispatchEvent(new rw.Event("change"));
+        const hues = await waitFor(() => {
+          const set = new Set([...d.querySelectorAll("#screen-card .kw, #screen-card .kw-chip")].map((k) => k.style.getPropertyValue("--kw-h")).filter(Boolean));
+          return set.size >= 2 && [...set];
+        }, 5000).catch(() => []);
+        const res = { labelsBefore, outcomes, searchResults, summary: summary.slice(0, 160), notAddedRows, shownResults, fateTags, readOnlyImportHidden, askText: askText.slice(0, 80), refinementParent: p.runs[1]?.parent === p.runs[0]?.id, labelsAfter, hues };
+        if (!outcomes.some((o) => /^Excluded/.test(o)) || !outcomes.some((o) => /^(Passed|Included)/.test(o)) || !shownResults || !readOnlyImportHidden || !res.refinementParent || labelsAfter.join() !== "#1,↳ #1.1" || hues.length < 2) throw new Error(JSON.stringify(res));
+        return res;
+      });
+
       await step("full text: the AI annotates the PDF (real Zotero annotations), your tagged annotations sync back", async () => {
         const d = rv();
         // A paper with a two-page PDF that has a real text layer
