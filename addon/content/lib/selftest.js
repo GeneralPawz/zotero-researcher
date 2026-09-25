@@ -1322,6 +1322,87 @@ ZR.SelfTest = (() => {
         return res;
       });
 
+      await step("projects share a collection: papers reused, decisions kept apart, project tags, tag tree in Zotero's tag pane", async () => {
+        const d = rv();
+        const A = await ZR.Projects.get(libraryID, reviewProject.id);
+        await pick(d.getElementById("project-select"), "New project");
+        await waitFor(() => !d.getElementById("np-layer").hidden, 5000);
+        const other = d.getElementById("np-col-other");
+        d.getElementById("np-name").value = "IFC review B";
+        d.querySelector('input[name="np-kind"][value="review"]').checked = true;
+        other.value = reviewCol.key;
+        other.dispatchEvent(new rw.Event("change"));
+        const note = d.getElementById("np-other-note").textContent;
+        const chosen = d.querySelector('input[name="np-col"]:checked').value;
+        await shot(rw, "08b-new-project-shared.png");
+        d.getElementById("np-create").click();
+        await waitFor(() => rw.App.project?.name === "IFC review B", 15000);
+        const B = rw.App.project;
+        const candsA = await ZR.Projects.candidates(libraryID, A);
+        const candsB = await ZR.Projects.candidates(libraryID, B);
+        const incA = candsA.filter((c) => c.itemID && c.ta === "include");
+        const untaggedBefore = incA.filter((c) => !Zotero.Items.get(c.itemID).hasTag(A.tag)).map((c) => `${c.title.slice(0, 40)} (by ${c.taInfo?.by || "?"})`);
+        // include in B a paper that A excluded: the Zotero item is reused and tagged for B; A keeps its decision
+        const target = candsB.find((c) => c.itemID && candsA.find((a) => a.key === c.key)?.ta === "exclude") || candsB.find((c) => c.itemID);
+        await rw.App.panels.review.refresh();
+        await rw.App.panels.review.api.decideByKey(target.key, "ta", "include", "", "me");
+        const item = Zotero.Items.get(target.itemID);
+        const hashTags = item.getTags().map((t) => t.tag).filter((t) => t.startsWith("#"));
+        const aBefore = candsA.find((a) => a.key === target.key)?.ta || null;
+        const aAfter = (await ZR.Store.prior(libraryID, { key: target.key, item, collectionKey: ZR.Projects.reviewKey(A) }))?.ta?.d || null;
+        const bAfter = (await ZR.Store.prior(libraryID, { key: target.key, item, collectionKey: ZR.Projects.reviewKey(B) }))?.ta?.d || null;
+        // the tag tree in Zotero's tag pane
+        const mdoc = win.document;
+        await zp.collectionsView.selectCollection(reviewCol.id);
+        await U.sleep(800);
+        const tabs = [...mdoc.querySelectorAll("#zr-tagtabs button")].map((b) => b.textContent);
+        mdoc.querySelector('#zr-tagtabs button[data-mode="tree"]').click();
+        const reviewRow = await waitFor(() => mdoc.querySelector('#zr-tagtree .zr-tt-row[data-path="#review"]'), 8000);
+        if (reviewRow.getAttribute("aria-expanded") !== "true") reviewRow.querySelector(".zr-tt-twisty").click();
+        const child = await waitFor(() => mdoc.querySelector(`#zr-tagtree .zr-tt-row[data-path="${B.tag}"]`), 5000);
+        const rows = [...mdoc.querySelectorAll("#zr-tagtree .zr-tt-row")].map((r) => r.dataset.path);
+        child.querySelector(".zr-tt-label").click();
+        await waitFor(() => zp.tagSelector.getTagSelection().has(B.tag), 5000);
+        await waitFor(() => zp.itemsView.rowCount === 1, 5000).catch(() => null);
+        const shown = zp.itemsView.rowCount;
+        const selectedRow = !!mdoc.querySelector(`#zr-tagtree .zr-tt-row.selected[data-path="${B.tag}"]`);
+        const filterVisible = !!mdoc.querySelector(".tag-selector-filter-container")?.getClientRects().length;
+        await shot(win, "16-tag-tree.png");
+        mdoc.querySelector(`#zr-tagtree .zr-tt-row[data-path="${B.tag}"] .zr-tt-label`).click();
+        await waitFor(() => !zp.tagSelector.getTagSelection().has(B.tag), 5000);
+        mdoc.querySelector('#zr-tagtabs button[data-mode="list"]').click();
+        const listBack = !!mdoc.querySelector(".tag-selector-list-container")?.getClientRects().length;
+        await rw.App.switchProject(reviewProject.id);
+        await waitFor(() => incA.every((c) => Zotero.Items.get(c.itemID).hasTag(A.tag)), 5000).catch(() => null);
+        const taggedA = incA.filter((c) => Zotero.Items.get(c.itemID).hasTag(A.tag)).length;
+        const res = {
+          untaggedBefore,
+          chosen,
+          note,
+          decisionKey: B.decisionKey,
+          collectionShared: B.collectionKey === reviewCol.key,
+          tags: { A: A.tag, B: B.tag },
+          itemsA: candsA.filter((c) => c.itemID).length,
+          itemsB: candsB.filter((c) => c.itemID).length,
+          decidedInB: candsB.filter((c) => c.ta).length,
+          includedA: incA.length,
+          taggedA,
+          reused: { title: target.title.slice(0, 50), hashTags, aBefore, aAfter, bAfter },
+          tabs,
+          rows,
+          selectedRow,
+          shown,
+          filterVisible,
+          listBack,
+        };
+        const ok =
+          chosen === "other" && /Shared with project/.test(note) && /^p:/.test(B.decisionKey || "") && res.collectionShared && res.itemsB === res.itemsA && res.itemsB > 0 && res.decidedInB === 0 &&
+          incA.length > 0 && taggedA === incA.length && hashTags.includes(B.tag) && aAfter === aBefore && bAfter === "include" &&
+          rows.includes("#review") && rows.includes(B.tag) && selectedRow && shown === 1 && filterVisible && listBack;
+        if (!ok) throw new Error(JSON.stringify(res));
+        return res;
+      });
+
       await step("autopilot: Stop now cancels a running AI call at once; Resume restarts the step", async () => {
         const col = new Zotero.Collection({ name: "zr-stop", libraryID });
         await col.saveTx();

@@ -108,14 +108,18 @@ ZR.Importer = (() => {
   /**
    * @returns {Promise<{item: Zotero.Item, existing: boolean}>}
    */
-  async function importRecord(rec, { libraryID, collectionID, tags = [], skipExisting = true, addExistingToCollection = true }) {
+  /** tagExisting: a paper already in Zotero gets the tags too (e.g. the project's tag). */
+  async function importRecord(rec, { libraryID, collectionID, tags = [], skipExisting = true, addExistingToCollection = true, tagExisting = false }) {
     if (skipExisting) {
       const existing = await findExisting(libraryID, rec);
       if (existing) {
+        let changed = false;
         if (addExistingToCollection && collectionID && !existing.inCollection(collectionID)) {
           existing.addToCollection(collectionID);
-          await existing.saveTx();
+          changed = true;
         }
+        if (tagExisting) for (const t of tags) if (t && !existing.hasTag(t)) changed = existing.addTag(t) || changed;
+        if (changed) await existing.saveTx();
         return { item: existing, existing: true };
       }
     }

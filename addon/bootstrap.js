@@ -33,6 +33,7 @@ const LIB_FILES = [
   "lib/search.js",
   "lib/enrich.js",
   "lib/updater.js",
+  "lib/tagtree.js",
   "lib/ui.js",
   "lib/selftest.js",
 ];

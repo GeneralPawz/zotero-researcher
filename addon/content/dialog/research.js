@@ -128,9 +128,24 @@ const App = (window.App = {
     App.projects = await App.ZR.Projects.list(App.target.libraryID);
     let p = preferID ? App.projects.find((x) => x.id === preferID) : null;
     if (!p && App.project) p = App.projects.find((x) => x.id === App.project.id);
-    if (!p && App.target.collectionKey) p = App.projects.find((x) => x.collectionKey === App.target.collectionKey);
+    if (!p && App.target.collectionKey) {
+      // several projects can share a collection: the one used last there, else the latest
+      const last = App.ZR.Prefs.getJSON("lastProjects", {})[`${App.target.libraryID}:${App.target.collectionKey}`];
+      p = App.projects.find((x) => x.id === last && x.collectionKey === App.target.collectionKey) || App.projects.find((x) => x.collectionKey === App.target.collectionKey);
+    }
+    App.rememberProject(p);
     App.project = p || null;
     App.renderProjects();
+  },
+
+  /** Remember which project was used on its collection (for the next time the window opens there). */
+  rememberProject(p) {
+    if (!p?.collectionKey) return;
+    const map = App.ZR.Prefs.getJSON("lastProjects", {});
+    const k = `${App.target.libraryID}:${p.collectionKey}`;
+    if (map[k] === p.id) return;
+    map[k] = p.id;
+    App.ZR.Prefs.setJSON("lastProjects", map);
   },
 
   renderProjects() {
@@ -166,6 +181,7 @@ const App = (window.App = {
     if (window.Autopilot?.isRunning()) Autopilot.pause();
     window.Autopilot?.hide();
     App.project = p;
+    App.rememberProject(p);
     if (p?.collectionKey && p.collectionKey !== App.target.collectionKey) {
       const t = App.ZR.UI.targetFor(App.target.libraryID, p.collectionKey);
       if (t) App.setTarget(t);
@@ -184,11 +200,22 @@ const App = (window.App = {
     const taken = col && App.projects.find((p) => p.collectionKey === t.collectionKey);
     $("np-name").value = col && !taken ? col : "";
     for (const r of document.querySelectorAll('input[name="np-kind"]')) r.checked = r.value === kind;
+    // Any collection can be used, also one that another project works with: its papers are
+    // reused, and each project keeps its own decisions.
+    const sharedNote = (p) => (p ? `Shared with project “${p.name}”: its papers are reused, each project keeps its own decisions.` : "");
     const use = document.querySelector('input[name="np-col"][value="use"]');
-    use.disabled = !col || !!taken;
-    use.checked = !use.disabled;
-    document.querySelector('input[name="np-col"][value="new"]').checked = use.disabled;
-    $("np-use-label").textContent = !col ? "Use the current collection (none selected: you are in the library root)" : taken ? `Use “${col}” (already belongs to project “${taken.name}”)` : `Use the current collection “${col}”`;
+    use.disabled = !col;
+    use.checked = !!col && !taken;
+    document.querySelector('input[name="np-col"][value="new"]').checked = !use.checked;
+    $("np-use-label").textContent = col ? `Use the current collection “${col}”` : "Use the current collection (none selected: you are in the library root)";
+    $("np-use-note").textContent = sharedNote(taken);
+    const cols = App.collectionList(t.libraryID);
+    const other = $("np-col-other");
+    other.replaceChildren(...cols.map((c) => el("option", { value: c.key, text: c.label + (App.projects.some((p) => p.collectionKey === c.key) ? "  ◆" : ""), selected: c.key === t.collectionKey })));
+    const showOther = () => ($("np-other-note").textContent = sharedNote(App.projects.find((p) => p.collectionKey === other.value)));
+    other.onchange = () => ((document.querySelector('input[name="np-col"][value="other"]').checked = true), showOther());
+    showOther();
+    $("np-other-wrap").hidden = !cols.length;
     // Autopilot option for review projects
     const profiles = App.profiles();
     $("np-ap-profile").replaceChildren(...profiles.map((p) => el("option", { value: p.id, text: `${p.name}${p.model ? " · " + p.model : ""}` })));
@@ -205,10 +232,11 @@ const App = (window.App = {
     const name = $("np-name").value.trim();
     if (!name) return $("np-name").focus();
     const kind = document.querySelector('input[name="np-kind"]:checked').value;
-    const newCol = document.querySelector('input[name="np-col"]:checked').value === "new";
+    const choice = document.querySelector('input[name="np-col"]:checked').value;
+    const newCol = choice === "new";
     const library = Zotero.Libraries.get(App.target.libraryID);
     if (!library.editable) return App.status("search", "This library is read-only.");
-    let collectionKey = App.target.collectionKey;
+    let collectionKey = choice === "other" ? $("np-col-other").value : App.target.collectionKey;
     if (newCol) {
       const col = new Zotero.Collection();
       col.libraryID = App.target.libraryID;
@@ -224,7 +252,7 @@ const App = (window.App = {
       // a new quick project starts from the current search settings
       search: kind === "quick" ? App.panels.search.currentState() : {},
     });
-    if (newCol) App.setTarget(ZR.UI.targetFor(App.target.libraryID, collectionKey));
+    if (collectionKey !== App.target.collectionKey) App.setTarget(ZR.UI.targetFor(App.target.libraryID, collectionKey));
     $("np-layer").hidden = true;
     await App.loadProjects(p.id);
     App.panels.review.reset();
@@ -236,6 +264,20 @@ const App = (window.App = {
     }
     App.status("search", `Project “${name}” created: its search settings and history are remembered.`);
     await App.panels[App.currentTab]?.onShow?.();
+  },
+
+  /** Every collection of a library as {key, label: "Parent › Child"}, in tree order. */
+  collectionList(libraryID) {
+    const out = [];
+    const walk = (cols, path) => {
+      for (const c of cols.slice().sort((a, b) => a.name.localeCompare(b.name))) {
+        const label = path ? `${path} › ${c.name}` : c.name;
+        out.push({ key: c.key, label });
+        walk(Zotero.Collections.getByParent(c.id), label);
+      }
+    };
+    walk(Zotero.Collections.getByLibrary(libraryID), "");
+    return out;
   },
 
   /** Small SVG icons (Material paths). */
@@ -1409,7 +1451,8 @@ App.panels.search = (() => {
           collectionKey: App.target.collectionKey,
           attachPDFs: $("attach-pdfs").checked,
           fulltextOnly: $("fulltext-only").checked,
-          tags: tag ? [tag] : [],
+          tags: [tag, App.project && ZR.Prefs.get("projectTags", true) ? await ZR.Projects.ensureTag(libraryID, App.project) : ""].filter(Boolean),
+          tagExisting: !!App.project, // a paper already in Zotero joins the project too
           protocolNote: $("protocol").checked,
         },
         st

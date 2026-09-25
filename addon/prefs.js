@@ -8,6 +8,7 @@ pref("extensions.zotero-researcher.maxPerSource", 25);
 pref("extensions.zotero-researcher.attachPDFs", true);
 pref("extensions.zotero-researcher.fulltextOnly", false);
 pref("extensions.zotero-researcher.tagImported", true);
+pref("extensions.zotero-researcher.projectTags", true);
 pref("extensions.zotero-researcher.importTag", "zr:imported");
 pref("extensions.zotero-researcher.searchProtocolNote", true);
 pref("extensions.zotero-researcher.llmScreeningMinScore", 6);
