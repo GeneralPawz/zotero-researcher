@@ -33,6 +33,7 @@ var ZRPrefsPane = (() => {
     renderLLMList();
     renderS1();
     renderLocal();
+    renderCrawlers();
     renderSourcesToolbar();
     renderSources();
     document.getElementById("zr-replay-tour").addEventListener("click", () => {
@@ -536,6 +537,23 @@ var ZRPrefsPane = (() => {
       ])
     );
     check();
+  }
+
+  function renderCrawlers() {
+    const box = document.getElementById("zr-crawlers");
+    box.replaceChildren(
+      el(
+        "table",
+        { class: "zr-table" },
+        ZR.PDFHunt.CRAWLERS.map((c) =>
+          el("tr", {}, [
+            el("td", { class: "zr-name" }, [c.name, el("div", { class: "zr-help", text: c.note })]),
+            el("td", {}, secretInput(ZR.PDFHunt.keyName(c.id), `${c.name} API key`)),
+            el("td", {}, link("Get a key", c.keyURL)),
+          ])
+        )
+      )
+    );
   }
 
   function secretInput(secretName, label) {

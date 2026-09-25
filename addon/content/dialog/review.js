@@ -135,6 +135,7 @@ App.panels.review = (() => {
     const rated = cands.filter((c) => c.s1).length;
     if (cands.length) box.append(el("span", { class: "hint funnel-s1", text: `System 1 rated ${rated}/${cands.length}` }));
     const ap = p.autopilot;
+    setTimeout(() => App.syncLayout(), 0);
     box.append(
       el("button", {
         id: "ap-open",
@@ -503,6 +504,8 @@ App.panels.review = (() => {
     candidates: () => cands,
     method: () => method(),
     findPDFs,
+    missingPDFs: () => missingPDFs(),
+    huntPDFs,
     annotateAll,
     tableAI,
     saveNote,
@@ -818,12 +821,12 @@ App.panels.review = (() => {
     $("ai-accept").hidden = !nConf;
     let pdfs = $("ft-pdfs");
     if (!pdfs) {
-      pdfs = el("button", { id: "ft-pdfs", onclick: findPDFs });
+      pdfs = el("button", { id: "ft-pdfs", "data-busy": "1", onclick: openPDFHunt, title: "Open-access sources, AI agents with web search, web crawlers" });
       $("s1-panel").append(pdfs);
     }
-    const missing = pop.filter((c) => c.itemID && !c.hasPDF && !c.ft).length;
+    const missing = ft ? missingPDFs().length : 0;
     pdfs.hidden = !ft || !missing;
-    pdfs.textContent = `Find PDFs for ${missing} paper(s)`;
+    pdfs.textContent = `Find missing PDFs (${missing})…`;
     let annoAll = $("ft-annotate");
     if (!annoAll) {
       annoAll = el("button", { id: "ft-annotate", "data-busy": "1", onclick: annotateAll, title: "The AI annotates every full text that has a PDF and no AI annotations yet" });
@@ -1266,6 +1269,86 @@ App.panels.review = (() => {
         highlightList(c),
       ])
     );
+  }
+
+  // ------------------------------------------------------ missing PDFs (step 4) ----
+  /** Papers at the full-text step that have no PDF yet. */
+  function missingPDFs() {
+    return population().filter((c) => {
+      if (!c.itemID || c.ft) return false;
+      const item = Zotero.Items.get(c.itemID);
+      return item && !ZR.PDFHunt.hasPDF(item);
+    });
+  }
+
+  /**
+   * Run PDF strategies one after another for the papers without PDF.
+   * @returns {Promise<{strategy, found, tried, failed}[]>}
+   */
+  async function huntPDFs(strategyIDs, { onLine = () => {} } = {}) {
+    await pdfChain;
+    const out = [];
+    const labels = new Map(ZR.PDFHunt.strategies().map((s) => [s.id, s.label]));
+    for (const sid of strategyIDs) {
+      if (ZR.Activity.stopping) break;
+      const list = missingPDFs();
+      if (!list.length) break;
+      const items = list.map((c) => Zotero.Items.get(c.itemID));
+      const records = new Map(list.map((c) => [c.itemID, c.record]));
+      onLine(`${labels.get(sid) || sid}: ${items.length} paper(s)…`);
+      const r = await ZR.PDFHunt.run(items, sid, { records, onProgress: (n, total, item) => st(`${labels.get(sid)}: ${n}/${total} — ${ZR.Util.truncate(item.getField("title"), 50)}`) });
+      for (const x of r.results) {
+        const c = cands.find((y) => y.itemID === x.itemID);
+        if (c) c.hasPDF = true;
+      }
+      out.push(Object.assign({ strategy: labels.get(sid) || sid }, r));
+      onLine(`${labels.get(sid) || sid}: found ${r.found} of ${r.tried}${r.failed.length ? ` (${r.failed.length} error(s): ${ZR.Util.truncate(r.failed[0], 80)})` : ""}`);
+    }
+    return out;
+  }
+
+  /** Dialog: pick one or more strategies, run them, repeat as often as you like. */
+  function openPDFHunt() {
+    const layer = el("div", { class: "modal-layer", id: "hunt-layer" });
+    const log = el("div", { class: "hunt-log" });
+    const count = el("div", { class: "hunt-count" });
+    const list = el("div", { class: "hunt-strategies" });
+    const runBtn = el("button", { class: "primary", id: "hunt-run", text: "Run the selected strategies" });
+    const renderCount = () => {
+      const n = missingPDFs().length;
+      count.textContent = n ? `${n} paper(s) at the full-text step have no PDF — without one they cannot be read or annotated.` : "Every paper at this step has a PDF.";
+      runBtn.disabled = !n || App.busy;
+    };
+    const strategies = ZR.PDFHunt.strategies();
+    list.replaceChildren(
+      ...strategies.map((s, i) => el("label", { class: "ap-check" }, [el("input", { type: "checkbox", value: s.id, checked: i === 0 }), " " + s.label])),
+      ZR.PDFHunt.configuredCrawlers().length ? null : el("div", { class: "hint", text: "Web crawlers (Firecrawl, SerpApi Google Scholar, Tavily, Exa, Brave) appear here once you add a key in ⚙ Settings → Web search & crawlers." })
+    );
+    runBtn.addEventListener("click", async () => {
+      const chosen = [...list.querySelectorAll("input:checked")].map((i) => i.value);
+      if (!chosen.length) return;
+      App.setBusy("review", true);
+      runBtn.disabled = true;
+      try {
+        await huntPDFs(chosen, { onLine: (t) => log.append(el("div", { text: t })) });
+      } finally {
+        App.setBusy("review", false);
+        renderCount();
+        renderScreen();
+      }
+    });
+    layer.append(
+      el("div", { class: "modal hunt-modal", role: "dialog" }, [
+        el("div", { class: "row-between" }, [el("h2", { text: "Find missing PDFs" }), el("button", { class: "icon-btn", text: "×", title: "Close", onclick: () => layer.remove() })]),
+        count,
+        el("p", { class: "hint", text: "Strategies run one after another; papers found by one are skipped by the next. Every file is checked before it is attached — it must be a PDF of exactly that paper. You can run again with other strategies." }),
+        list,
+        el("div", { class: "actions" }, [el("span", { class: "spacer" }), el("button", { text: "Close", onclick: () => layer.remove() }), runBtn]),
+        log,
+      ])
+    );
+    document.body.append(layer);
+    renderCount();
   }
 
   // ------------------------------------------------ full-text annotations (step 4) ----

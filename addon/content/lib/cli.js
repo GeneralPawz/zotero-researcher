@@ -222,14 +222,16 @@ ZR.CLI = (() => {
   }
 
   /** Chat through a CLI; returns the reply text. */
-  async function chat(profile, messages, { system, timeout = 180000 } = {}) {
+  /** web: allow web search for this call (finding PDFs) — Claude: WebSearch/WebFetch tools; Codex: --search */
+  async function chat(profile, messages, { system, timeout = 180000, web = false } = {}) {
     const kind = profile.provider;
     const path = profile.baseURL || (await detect(kind));
     if (!path) throw new Error(`${TOOLS[kind].label} CLI not found — install it or set its path in the AI provider settings`);
     const dir = await tempDir();
     try {
       if (kind === "claude-cli") {
-        const args = ["-p", "--output-format", "json", "--tools", "", "--no-session-persistence", "--strict-mcp-config"];
+        const args = ["-p", "--output-format", "json", "--tools", web ? "WebSearch,WebFetch" : "", "--no-session-persistence", "--strict-mcp-config"];
+        if (web) args.push("--allowedTools", "WebSearch,WebFetch");
         if (profile.model) args.push("--model", profile.model);
         if (system) args.push("--system-prompt", system);
         const r = await exec(path, args, transcript(messages, system, false), { timeout, workdir: dir });
@@ -245,6 +247,7 @@ ZR.CLI = (() => {
       if (kind === "codex-cli") {
         const outFile = PathUtils.join(dir, "reply.txt");
         const args = ["exec", "--skip-git-repo-check", "--ephemeral", "--sandbox", "read-only", "--color", "never", "-C", dir, "-o", outFile];
+        if (web) args.push("--search");
         if (profile.model) args.push("-m", profile.model);
         args.push("-");
         const r = await exec(path, args, transcript(messages, system, true), { timeout, workdir: dir });

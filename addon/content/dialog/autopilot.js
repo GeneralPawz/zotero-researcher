@@ -29,7 +29,7 @@ const Autopilot = (window.Autopilot = (() => {
   let closeDialog = null;
 
   // Review operations the autopilot calls: after a stop, none of them starts any more
-  const ASYNC_OPS = new Set(["persistProtocol", "rate", "bulk", "aiUncertain", "acceptAll", "decideRest", "decideByKey", "setThresholds", "findPDFs", "annotateAll", "tableAI", "saveNote"]);
+  const ASYNC_OPS = new Set(["persistProtocol", "rate", "bulk", "aiUncertain", "acceptAll", "decideRest", "decideByKey", "setThresholds", "findPDFs", "huntPDFs", "annotateAll", "tableAI", "saveNote"]);
   const checkStop = () => {
     if (stopRequested) throw new (ZR().Activity.Stopped)();
   };
@@ -89,13 +89,11 @@ const Autopilot = (window.Autopilot = (() => {
     if (p) return p;
     p = el("div", { id: "ap-panel", class: "ap-panel", role: "complementary", "aria-label": "Autopilot" }, [
       el("div", { class: "ap-head" }, [
-        el("b", { text: "✦ Autopilot" }),
-        el("span", { class: "hint", id: "ap-model" }),
+        el("div", { class: "ap-title" }, [el("b", { text: "✦ Autopilot" }), el("span", { class: "hint", id: "ap-model" })]),
         el("span", { class: "spacer" }),
-        el("button", { id: "ap-pause", text: "Pause", title: "Pause after the current step", onclick: pause }),
-        el("button", { id: "ap-stop", class: "danger-soft", text: "Stop now", title: "Stop immediately: cancels running AI calls, CLI programs and requests", onclick: () => stop() }),
-        el("button", { id: "ap-resume", class: "primary", text: "Resume", onclick: () => run() }),
-        el("button", { class: "icon-btn", text: "×", title: "Hide the panel (the autopilot keeps its state)", onclick: hide }),
+        el("button", { id: "ap-toggle", class: "ap-icon", onclick: () => (running ? pause() : state()?.on ? run() : (expand(), renderSetup())) }, App.icon("play")),
+        el("button", { id: "ap-stop", class: "ap-icon danger", title: "Stop now: cancels running AI calls, CLI programs and requests", onclick: () => stop() }, App.icon("stop")),
+        el("button", { id: "ap-collapse", class: "ap-icon", onclick: () => ($("ap-panel").classList.contains("collapsed") ? expand() : collapse()) }, App.icon("collapse")),
       ]),
       el("div", { class: "ap-log", id: "ap-log" }),
       el("div", { class: "ap-prompt", id: "ap-prompt" }),
@@ -106,8 +104,7 @@ const Autopilot = (window.Autopilot = (() => {
 
   async function show() {
     if (App.project?.kind !== "review") return App.status("review", "The autopilot runs structured reviews — start or convert a review project first.");
-    panel().hidden = false;
-    document.body.classList.add("ap-open");
+    expand();
     await renderLog();
     renderHead();
     if (!state()?.on && !running) renderSetup();
@@ -115,7 +112,21 @@ const Autopilot = (window.Autopilot = (() => {
 
   function hide() {
     if ($("ap-panel")) $("ap-panel").hidden = true;
-    document.body.classList.remove("ap-open");
+    document.body.classList.remove("ap-open", "ap-collapsed");
+  }
+
+  function collapse() {
+    $("ap-panel").classList.add("collapsed");
+    document.body.classList.add("ap-collapsed");
+    renderHead();
+  }
+
+  function expand() {
+    panel().hidden = false;
+    $("ap-panel").classList.remove("collapsed");
+    document.body.classList.remove("ap-collapsed");
+    document.body.classList.add("ap-open");
+    renderHead();
   }
 
   function renderHead() {
@@ -128,9 +139,17 @@ const Autopilot = (window.Autopilot = (() => {
       label = "(model missing)";
     }
     $("ap-model").textContent = label + (s?.stage ? ` · ${ZR().Methodologies.STAGES[s.stage]?.short || s.stage}` : "");
-    $("ap-pause").hidden = !running || stopRequested;
-    $("ap-stop").hidden = !running || stopRequested;
-    $("ap-resume").hidden = running || !s?.on;
+    const toggle = $("ap-toggle");
+    toggle.replaceChildren(App.icon(running ? "pause" : "play"));
+    toggle.title = running ? (pauseRequested ? "Pausing after the current step…" : "Pause after the current step") : s?.on ? "Resume" : "Start the autopilot";
+    toggle.disabled = running && (pauseRequested || stopRequested);
+    toggle.classList.toggle("primary", !running && !!s?.on);
+    $("ap-stop").hidden = !running;
+    $("ap-stop").disabled = stopRequested;
+    const collapsed = $("ap-panel").classList.contains("collapsed");
+    $("ap-collapse").replaceChildren(App.icon(collapsed ? "expand" : "collapse"));
+    $("ap-collapse").title = collapsed ? "Show the autopilot" : "Collapse the autopilot panel";
+    App.syncLayout?.();
   }
 
   async function logStore() {
@@ -173,8 +192,7 @@ const Autopilot = (window.Autopilot = (() => {
    */
   function ask(text, choices, { inputs = [] } = {}) {
     if (stopRequested) return Promise.reject(new (ZR().Activity.Stopped)());
-    panel().hidden = false;
-    document.body.classList.add("ap-open");
+    expand();
     return new Promise((resolve) => {
       const fields = {};
       const box = $("ap-prompt");
@@ -597,6 +615,7 @@ const Autopilot = (window.Autopilot = (() => {
     else await saveState({ ftProfileID: null });
     await say("Looking for PDFs…", "info");
     await API().findPDFs();
+    if ((await missingPDFStep()) === "pause") return "pause";
     await say(`**${modelName(ftModel())}** annotates the full texts (real Zotero annotations, author “${ZR().FullText.botName()}”)…`, "info");
     await withProfile(ftModel(), () => API().annotateAll());
     let papers = fullTextPapers();
@@ -641,6 +660,38 @@ const Autopilot = (window.Autopilot = (() => {
     await R().go("fulltext");
     await say(`Full-text decisions applied (${dec.decisions.length}).`);
     return nextAfter("fulltext");
+  }
+
+  /** Papers without PDF can't be assessed: warn, and offer strategies to get them (repeatable). */
+  async function missingPDFStep() {
+    for (;;) {
+      const missing = API().missingPDFs();
+      if (!missing.length) return;
+      const total = API().population().length;
+      const off = state().lastSettings?.attachPDFs === false;
+      const strategies = ZR().PDFHunt.strategies().filter((x) => x.id !== "oa");
+      const harnessID = "ai:" + state().profileID;
+      const a = await ask(
+        `${off ? "“Download PDFs” was switched off in the search plan. " : ""}${missing.length} of ${total} papers at this step have no PDF — they can't be read or annotated, so no full-text assessment is possible for them. They are in Zotero already; I can try to find their PDFs with the strategies below (one after another; you can try again with others afterwards).`,
+        [
+          { id: "try", label: "Try the selected strategies", primary: true },
+          { id: "skip", label: "Continue without them" },
+          { id: "pause", label: "Pause" },
+        ],
+        { inputs: strategies.map((x) => ({ id: x.id, type: "checkbox", label: x.label, value: x.kind === "crawler" || (x.id === harnessID && x.label.includes("web search")) })) }
+      );
+      if (a.choice === "pause") return "pause";
+      if (a.choice === "skip") {
+        await say(`Continuing: ${missing.length} paper(s) without PDF stay open (“reports not retrieved” in the flow diagram).`, "info");
+        return;
+      }
+      const chosen = strategies.filter((x) => a.values[x.id]).map((x) => x.id);
+      if (!chosen.length) continue;
+      await say("Looking for the missing PDFs…", "info");
+      await API().huntPDFs(chosen, { onLine: (t) => say(t, "info") });
+      const still = API().missingPDFs().length;
+      await say(`${missing.length - still} PDF(s) found, ${still} still missing.`);
+    }
   }
 
   function fullTextPapers() {
@@ -700,5 +751,5 @@ const Autopilot = (window.Autopilot = (() => {
     report: doReport,
   };
 
-  return { show, hide, start, run, pause, stop, isRunning: () => running, isStopping: () => stopRequested, state, say, ask };
+  return { show, hide, collapse, expand, start, run, pause, stop, isRunning: () => running, isStopping: () => stopRequested, state, say, ask };
 })());

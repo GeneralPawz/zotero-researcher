@@ -108,6 +108,7 @@ ZR.Projects = (() => {
     const l = await ledger(libraryID);
     delete l.projects[id];
     await ZR.Store.flush(libraryID);
+    pools.delete(`${libraryID}/${id}`);
     await IOUtils.remove(poolPath(libraryID, id), { ignoreAbsent: true }).catch(() => {});
   }
 

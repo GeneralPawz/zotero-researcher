@@ -68,7 +68,7 @@ There are four tabs. Each shows one main action; the rest stays out of the way. 
 - **Quick search:** "get me papers on X". Type the parameters and go; results go straight into the collection. A collection gets a quick project automatically the first time you add papers to it.
 - **Structured review:** a methodology-based pipeline for a paper or thesis (see *Review* below).
 
-Pick a project from the menu to switch to it (and to its collection), or create one with **+ New project…**, using the current collection or a new one. A quick project can be **converted into a structured review** at any time. Its query, filters and search history carry over.
+Pick a project from the menu to switch to it (and to its collection), or create one with **+ New project…**, using the current collection or a new one. **Delete “…”** in the same menu removes a project: its settings, protocol, search log, pool, ratings, highlights and autopilot conversation. The collection, its papers and your decisions stay. A quick project can be **converted into a structured review** at any time. Its query, filters and search history carry over.
 
 **Search**
 - Choose **Keywords** or **Describe it (AI)**.
@@ -128,7 +128,12 @@ Pick a project from the menu to switch to it (and to its collection), or create 
    - **Years and languages** from the protocol are checked from the metadata in code, not asked to the model.
 
    Papers are added to the Zotero collection **when you include them**.
-4. **Check full texts.** Only papers that passed screening appear. The card works like the screening card: decision and reason at the top, the same abstract view. When a paper is included at screening, its PDF is downloaded in the background (unless *Download PDFs* is off). *Find PDF* and *Find PDFs for all* fetch missing ones, trying the links the search found (arXiv, DOAJ, CORE, …) first, then DOI resolvers and Unpaywall.
+4. **Check full texts.** Only papers that passed screening appear. The card works like the screening card: decision and reason at the top, the same abstract view. When a paper is included at screening, its PDF is downloaded in the background (unless *Download PDFs* is off). *Find missing PDFs…* runs one or more strategies one after another, as often as you like:
+     - **open-access sources:** links from the search (arXiv, DOAJ, CORE, …), DOI resolvers, Unpaywall;
+     - **AI agents:** any AI provider. The Codex and Claude Code CLIs get web search for this task, Perplexity searches by design, and OpenRouter uses the model's `:online` variant. Other providers can only answer from memory.
+     - **web crawlers and search APIs:** Firecrawl, SerpApi (Google Scholar, with direct PDF links), Tavily, Exa, Brave Search, each with a key under Settings → *Web search & crawlers*.
+
+     Every file is checked before it is attached: it must be a PDF whose first pages contain the paper's title. Wrong papers and invented links are removed again.
    - **Full-text annotations:**
      - *Annotate with AI* reads the PDF and writes **real Zotero annotations**. Each is a highlight on a verbatim passage, with a short comment and a tag: `include`, `maybe` or `exclude`, coloured green, yellow or red.
      - They carry their own author name, "Bot" by default, set in Settings → *Reading papers*.
@@ -153,13 +158,14 @@ Pick a project from the menu to switch to it (and to its collection), or create 
    - It explains what it sees and proposes changes to query, criteria or thresholds. You apply them, keep things as they are, or adjust them yourself. After a refined search it re-rates; after three attempts without improvement it says so, and you close the review or continue anyway.
    - Then thresholds, the AI for the uncertain middle, and the decisions.
 4. **Full text:** you choose the model that reads the full texts. It finds PDFs and annotates them.
+   - If papers are still without PDF, it warns you that they can't be assessed (and whether *Download PDFs* was off in the search plan). It then offers the PDF strategies (AI agents, crawlers), one or several, repeatable, until you continue.
    - The harness proposes decisions from the annotations.
    - On request, System 1 checks whether the annotation verdicts make sense, and the harness arbitrates the discrepancies.
    - You confirm before anything is applied.
 5. **Quality, extraction, classification:** tables filled in by the full-text model. Extraction is optional.
 6. **Report:** a summary, and optionally a note.
 
-The conversation and the state are kept with the project. *Pause* waits for the current step to finish. **Stop now** interrupts at once: it cancels the running AI calls and web requests, and ends CLI programs together with everything they started. *Resume* starts the interrupted step again, and the autopilot can be started again from any step. Tables use short column headers (Q1, E1, C1); *Full questions* shows the complete text with line breaks.
+The conversation and the state are kept with the project. The panel header has ▶/⏸ (resume or pause after the current step), ■ (stop now) and a collapse toggle. *Pause* waits for the current step to finish. **Stop now** interrupts at once: it cancels the running AI calls and web requests, and ends CLI programs together with everything they started. *Resume* starts the interrupted step again, and the autopilot can be started again from any step. Tables use short column headers (Q1, E1, C1); *Full questions* shows the complete text with line breaks.
 
 Decisions are kept **per review**: the same paper can be included in one review and excluded in another. Outside a review, your latest judgement is still shown as a hint.
 
@@ -219,7 +225,7 @@ You can add any number of AI profiles and switch between them:
   - Claude runs with every tool disabled and without saving the session.
   - Codex runs read-only and ephemeral, in an empty temporary folder.
   - Replies take a few seconds longer than the APIs.
-- **Cloud APIs:** Anthropic (Claude), OpenAI, Google Gemini, Mistral, Groq, OpenRouter (many models behind one key), DeepSeek, xAI
+- **Cloud APIs:** Anthropic (Claude), OpenAI, Google Gemini, Mistral, Groq, OpenRouter (many models behind one key), Perplexity (Sonar models answer with live web search and sources), DeepSeek, xAI
 - **Local models:** Ollama, LM Studio
 - **Custom:** any OpenAI-compatible endpoint
 
@@ -302,7 +308,7 @@ Layout:
 `npm run e2e` works like this:
 1. It builds the XPI and installs it into a **throwaway profile and data directory**.
 2. It starts a separate Zotero (`-no-remote`).
-3. The in-app self-test (`content/lib/selftest.js`) drives the real UI: 44 steps covering the toolbar, multi-select, item pane, context menu, welcome pointer, tour, research areas, live searches, PDFs, metadata fixing, judging and decision memory, Settings, the AI flows (against a mock AI endpoint, with live databases), projects (automatic quick projects, new review projects, conversion, persistence), the structured review (methodology-dependent forms, AI-filled protocol, candidate pool, System 1 rating against a mock TypeSafe endpoint with threshold decisions, AI on the uncertain papers, keyboard screening, the screening card (highlights with notes into Zotero, search terms, sentence paragraphs), the activity log, stopping the autopilot mid-call and resuming it, the autopilot running a complete review (wizard, search plan, screening check with a proposed change, full-text check, tables, report), the search audit trail and search versions (read-only reopening, refinement #1.1), full-text annotations (AI highlights in a generated PDF, a tagged human annotation syncing back, verdicts written back to Zotero, the reader's Review button), full text, AI-filled quality and extraction tables, flow diagram and protocol note), the local model (Settings check, ranking by the protocol, duplicate exclusion, learning from keyboard decisions and re-ranking, topic clusters as a facet, passage retrieval, similar papers in the library and the citation graph), citation linking on real papers (ResNet → GoogLeNet, Attention → ResNet), and disable/re-enable with the decisions surviving.
+3. The in-app self-test (`content/lib/selftest.js`) drives the real UI: 45 steps covering the toolbar, multi-select, item pane, context menu, welcome pointer, tour, research areas, live searches, PDFs, metadata fixing, judging and decision memory, Settings, the AI flows (against a mock AI endpoint, with live databases), projects (automatic quick projects, new review projects, conversion, persistence), the structured review (methodology-dependent forms, AI-filled protocol, candidate pool, System 1 rating against a mock TypeSafe endpoint with threshold decisions, AI on the uncertain papers, keyboard screening, the screening card (highlights with notes into Zotero, search terms, sentence paragraphs), the activity log, stopping the autopilot mid-call and resuming it, the window's lines matching Zotero's main window, the autopilot panel controls, deleting a project, the missing-PDF strategies, the autopilot running a complete review (wizard, search plan, screening check with a proposed change, full-text check, tables, report), the search audit trail and search versions (read-only reopening, refinement #1.1), full-text annotations (AI highlights in a generated PDF, a tagged human annotation syncing back, verdicts written back to Zotero, the reader's Review button), full text, AI-filled quality and extraction tables, flow diagram and protocol note), the local model (Settings check, ranking by the protocol, duplicate exclusion, learning from keyboard decisions and re-ranking, topic clusters as a facet, passage retrieval, similar papers in the library and the citation graph), citation linking on real papers (ResNet → GoogLeNet, Attention → ResNet), and disable/re-enable with the decisions surviving.
 4. It writes `report.json` and screenshots, then quits.
 
 Your normal profile and library are never touched. Use `--keep-open` to keep the test instance open, and `--clean` to delete the temp folder after a passing run.
