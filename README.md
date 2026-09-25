@@ -63,10 +63,20 @@ To test the whole update path locally, run `npm run e2e -- --update`. It install
 There are four tabs. Each shows one main action; the rest stays out of the way.
 
 **Search**
-- Choose **Keywords** (e.g. `("IFC5" OR IFCX) AND BIM`) or **Describe it (AI)**.
-- Below the search box, two chips summarize and open the **sources** and the **options**. Options include years, full text only, open access only, download PDFs, and hide papers you excluded before.
+- Choose **Keywords** or **Describe it (AI)**.
+- In Keywords mode you can switch between two editors:
+  - **Builder:** one line per condition. Type a term and press Enter to add it as a chip; terms on one line are alternatives (OR). Each line can target *Anywhere*, *Title*, *Abstract* or *Author*, and lines combine with **AND / OR / NOT / XOR**.
+  - **Text:** type the query directly, e.g. `("IFC5" OR IFCX) AND BIM`.
+
+  Both editors stay in sync.
+- Below the search box, two chips summarize and open the **sources** and the **options**:
+  - **Results:** years, max results per source, full text only, open access only, strict match
+  - **Filters:** languages, publication types, minimum citations, has abstract, has DOI. When a source doesn't report a value (e.g. language), the paper is kept.
+  - **Your library:** hide papers you already have or excluded before, download PDFs, save a search log, tag new items
+- Results can be sorted by best match, most cited, newest, oldest, or title. Hover the status line to see each database's result count and response time. A database that doesn't answer within 45 s is skipped rather than holding up the search.
 - For each result you can see whether it is already in your library, whether you judged it before (and why), and when it appeared in an earlier search.
-- Use *Judge ▾* on any result to record a verdict without adding the paper.
+- **Clicking a paper that's already in your library** jumps to it in Zotero, preferring the current collection. Under Settings → Advanced you can switch this to list every collection the paper is in instead, each one clickable.
+- Use *Judge* on any result to record a verdict without adding the paper.
 - In AI mode, *Add results automatically* is the hands-off "YOLO" mode: it searches, rates and adds without a review step.
 
 **Review (PRISMA 2020)** turns a collection into a systematic review:
@@ -125,8 +135,13 @@ Listed for reference only, with no search support: Lens.org, Dimensions, OpenAIR
 
 You can add any number of AI profiles and switch between them:
 
-- **Cloud:** OpenAI, Anthropic (Claude), Google Gemini, Mistral, Groq, OpenRouter, DeepSeek, xAI
-- **Local:** Ollama, LM Studio
+- **Your subscription, no API key:** Claude Code CLI (Claude plan) and Codex CLI (ChatGPT plan). The plugin runs your installed `claude` or `codex` program with the account you're signed in with in the terminal:
+  - The program is found automatically; if not, click *Detect* or enter its path.
+  - Claude runs with every tool disabled and without saving the session.
+  - Codex runs read-only and ephemeral, in an empty temporary folder.
+  - Replies take a few seconds longer than the APIs.
+- **Cloud APIs:** Anthropic (Claude), OpenAI, Google Gemini, Mistral, Groq, OpenRouter (many models behind one key), DeepSeek, xAI
+- **Local models:** Ollama, LM Studio
 - **Custom:** any OpenAI-compatible endpoint
 
 *Fetch available models* lists the models your key can use, and *Test* checks the connection.
@@ -134,10 +149,11 @@ You can add any number of AI profiles and switch between them:
 ## Development
 
 ```
-npm test          # 32 unit tests (Node's built-in runner, no dependencies)
+npm test          # 42 unit tests (Node's built-in runner, no dependencies)
 npm run build     # build/zotero-researcher-<version>.xpi
 npm run e2e       # end-to-end test inside a real Zotero (see below)
 npm run e2e -- --update   # update path: old build → Check for updates → latest release
+ZR_E2E_CLI=1 npm run e2e  # also makes real calls through your installed Claude Code / Codex CLIs
 ```
 
 Layout:

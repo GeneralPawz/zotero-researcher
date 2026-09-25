@@ -14,6 +14,11 @@ ZR.Search = (() => {
   function describeFilters(o) {
     const parts = [];
     if (o.yearFrom || o.yearTo) parts.push(`years ${o.yearFrom || "…"}–${o.yearTo || "…"}`);
+    if (o.languages?.length) parts.push("language: " + o.languages.join("/"));
+    if (o.types?.length) parts.push("types: " + o.types.join("/"));
+    if (o.minCitations > 0) parts.push(`≥ ${o.minCitations} citations`);
+    if (o.hasAbstract) parts.push("with abstract");
+    if (o.hasDOI) parts.push("with DOI");
     if (o.oaOnly) parts.push("open access only");
     if (o.fulltextOnly) parts.push("full-text PDF required");
     if (o.strict) parts.push("strict boolean match on title/abstract/keywords");
@@ -22,6 +27,39 @@ ZR.Search = (() => {
     parts.push(`≤ ${o.limit} per source`);
     return parts.join("; ");
   }
+
+  /**
+   * Deterministic post-filters. Values a source doesn't report (language, citations)
+   * never cause removal — only known values that fail a filter do.
+   * @returns {{records: object[], removed: object}}
+   */
+  function applyFilters(recs, o) {
+    const removed = { language: 0, type: 0, citations: 0, abstract: 0, doi: 0 };
+    const langs = new Set(o.languages || []);
+    const types = new Set((o.types || []).flatMap((id) => ZR.Records.TYPE_FILTERS.find((t) => t.id === id)?.types || []));
+    const drop = (reason) => {
+      removed[reason]++;
+      return false;
+    };
+    const records = recs.filter((r) => {
+      if (langs.size && r.language && !langs.has(r.language)) return drop("language");
+      if (types.size && !types.has(r.itemType)) return drop("type");
+      if (o.minCitations > 0 && r.citationCount != null && r.citationCount < o.minCitations) return drop("citations");
+      if (o.hasAbstract && (r.abstract || "").length < 50) return drop("abstract");
+      if (o.hasDOI && !r.doi) return drop("doi");
+      return true;
+    });
+    return { records, removed };
+  }
+
+  /** Result orderings offered in the results header. */
+  const SORTS = {
+    relevance: null,
+    cited: (a, b) => (b.citationCount ?? -1) - (a.citationCount ?? -1),
+    newest: (a, b) => (b.year ?? 0) - (a.year ?? 0),
+    oldest: (a, b) => (a.year ?? 9999) - (b.year ?? 9999),
+    title: (a, b) => a.title.localeCompare(b.title),
+  };
 
   function sortRecords(recs, screened) {
     return recs.sort(
@@ -72,24 +110,30 @@ ZR.Search = (() => {
         stat.error = why;
         return [];
       }
+      const t0 = Date.now();
       try {
-        const out = await src.search({
+        const out = await withDeadline(src.search({
           ast,
           limit: o.limit,
           yearFrom: o.yearFrom,
           yearTo: o.yearTo,
           oaOnly: o.oaOnly,
           fulltextOnly: o.fulltextOnly,
+          languages: o.languages,
+          types: o.types,
+          minCitations: o.minCitations,
           key: ZR.Sources.keyFor(id),
           secret: (sid) => ZR.Sources.secretFor(id, sid),
           email,
-        });
+        }), o.sourceTimeout || SOURCE_TIMEOUT);
+        stat.ms = Date.now() - t0;
         stat.count = out.records.length;
         stat.total = out.total;
         stat.query = out.query;
         status(`${src.name}: ${out.records.length} result(s)`);
         return out.records;
       } catch (e) {
+        stat.ms = Date.now() - t0;
         stat.error = e.message || String(e);
         U.log(`Source ${id} failed`, stat.error);
         status(`${src.name}: ${stat.error}`);
@@ -103,6 +147,9 @@ ZR.Search = (() => {
     runInfo.deduped = recs.length;
 
     if (o.strict) recs = recs.filter((r) => ZR.Query.matches(ast, r));
+    const filtered = applyFilters(recs, o);
+    recs = filtered.records;
+    runInfo.removedByFilters = filtered.removed;
     if (o.oaOnly || o.fulltextOnly) recs = recs.filter(ZR.Records.hasFullText);
 
     if (o.libraryID != null && typeof Zotero !== "undefined") {
@@ -129,6 +176,16 @@ ZR.Search = (() => {
     if (typeof Zotero !== "undefined") ZR.Store.markSeen(recs).catch((e) => U.log("markSeen failed", e.message));
     status(`${recs.length} unique result(s) after de-duplication and filters`);
     return runInfo;
+  }
+
+  // One slow or hanging database must not hold up the whole search.
+  const SOURCE_TIMEOUT = 45000;
+  function withDeadline(promise, ms) {
+    let timer;
+    const deadline = new Promise((_, reject) => {
+      timer = setTimeout(() => reject(new Error(`no answer within ${Math.round(ms / 1000)} s — skipped`)), ms);
+    });
+    return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));
   }
 
   const isExcluded = (r) => (r.prior?.ft?.d || r.prior?.ta?.d) === "exclude";
@@ -220,5 +277,5 @@ ZR.Search = (() => {
     return records;
   }
 
-  return { run, importRecords, related, describeFilters, sortRecords };
+  return { run, importRecords, related, describeFilters, sortRecords, applyFilters, SORTS };
 })();

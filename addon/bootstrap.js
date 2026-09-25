@@ -15,6 +15,7 @@ const LIB_FILES = [
   "lib/records.js",
   "sources/registry.js",
   "sources/adapters.js",
+  "lib/cli.js",
   "lib/llm.js",
   "lib/assist.js",
   "lib/prisma.js",

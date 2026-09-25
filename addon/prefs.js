@@ -18,3 +18,5 @@ pref("extensions.zotero-researcher.tourSeen", false);
 pref("extensions.zotero-researcher.welcomeShown", false);
 pref("extensions.zotero-researcher.selftestMode", "");
 pref("extensions.zotero-researcher.lastVersion", "");
+pref("extensions.zotero-researcher.resultClick", "jump");
+pref("extensions.zotero-researcher.selftestCLI", false);

@@ -69,6 +69,8 @@
     if (o.yearFrom) filters.push(`from_publication_date:${o.yearFrom}-01-01`);
     if (o.yearTo) filters.push(`to_publication_date:${o.yearTo}-12-31`);
     if (o.oaOnly || o.fulltextOnly) filters.push("is_oa:true");
+    if (o.languages?.length) filters.push("language:" + o.languages.join("|"));
+    if (o.minCitations > 0) filters.push(`cited_by_count:>${o.minCitations - 1}`);
     const select =
       "id,doi,title,display_name,publication_year,publication_date,authorships,primary_location,best_oa_location,open_access,abstract_inverted_index,biblio,type,language,cited_by_count,keywords,ids,locations";
     const records = [];
@@ -167,7 +169,10 @@
     const fields = "title,abstract,year,publicationDate,authors,externalIds,venue,journal,publicationTypes,openAccessPdf,isOpenAccess,url,citationCount";
     let year = "";
     if (o.yearFrom || o.yearTo) year = `${o.yearFrom || ""}-${o.yearTo || ""}`;
-    const params = { query, fields, year, sort: "citationCount:desc" };
+    const S2_TYPES = { journal: "JournalArticle", conference: "Conference", book: "Book,BookSection" };
+    const publicationTypes = (o.types || []).map((t) => S2_TYPES[t]).filter(Boolean).join(",");
+    const onlyS2Types = (o.types || []).every((t) => S2_TYPES[t]);
+    const params = { query, fields, year, sort: "citationCount:desc", minCitationCount: o.minCitations > 0 ? o.minCitations : "", publicationTypes: onlyS2Types ? publicationTypes : "" };
     let url = "https://api.semanticscholar.org/graph/v1/paper/search/bulk?" + U.qs(params);
     if (o.oaOnly || o.fulltextOnly) url += "&openAccessPdf";
     await ZR.Sources.throttle("semanticscholar", 1100);

@@ -312,22 +312,36 @@ table.diff { width: 100%; border-collapse: collapse; font-size: 12px; table-layo
 .zr-dd.mark .zr-dd-btn:hover { border-color: var(--line); color: var(--fg); }
 .chip .zr-dd-btn { border: 0; padding: 0 2px; background: transparent; font-size: 12px; }
 
-/* query builder */
+/* query builder — one compact box that looks like the text field */
 .mode-row { display: flex; align-items: center; gap: 8px; }
 .seg.small button { padding: 2px 10px; font-size: 12px; }
-.builder { flex: 1; display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--line); border-radius: var(--radius); padding: 8px; background: var(--bg); }
-.qb-row { display: flex; align-items: center; gap: 6px; }
-.qb-first { width: 74px; flex: none; color: var(--fg-2); font-size: 12px; padding-left: 4px; }
-.qb-row .zr-dd.qb-op { width: 74px; flex: none; }
-.qb-row .zr-dd.qb-op .zr-dd-btn { width: 100%; font-weight: 600; }
-.qb-row .zr-dd.qb-field { flex: none; }
-.qb-chips { flex: 1; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; min-height: 30px; padding: 2px 6px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg-2); cursor: text; }
-.qb-chips:focus-within { border-color: var(--accent); }
-.qb-chip { display: inline-flex; align-items: center; gap: 4px; background: var(--accent-soft); color: var(--accent); border-radius: 12px; padding: 1px 4px 1px 9px; font-family: ui-monospace, Consolas, monospace; font-size: 12px; }
-.qb-chip button { border: 0; background: none; color: inherit; padding: 0 3px; cursor: pointer; font-size: 13px; line-height: 1; }
+.query-row { align-items: flex-start; }
+.query-row #run { min-height: 40px; }
+.builder { flex: 1; display: flex; flex-direction: column; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg); min-width: 0; }
+.builder:focus-within { border-color: var(--accent); }
+.qb-row { display: flex; align-items: center; gap: 6px; min-height: 38px; padding: 3px 6px 3px 8px; }
+.qb-row + .qb-row { border-top: 1px dashed var(--line); }
+.qb-row .qb-lead { width: 58px; flex: none; }
+.qb-first { color: var(--fg-3); font-size: 11px; text-transform: uppercase; letter-spacing: 0.04em; padding-left: 6px; }
+.zr-dd.qb-op .zr-dd-btn { width: 100%; justify-content: space-between; border: 0; border-radius: 11px; padding: 2px 8px; font-size: 11px; font-weight: 700; background: var(--accent-soft); color: var(--accent); }
+.zr-dd.qb-field .zr-dd-btn { border: 0; border-radius: 11px; padding: 2px 8px; font-size: 12px; background: var(--bg-3); color: var(--fg-2); }
+.qb-chips { flex: 1; min-width: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 4px; cursor: text; }
+.qb-chip { display: inline-flex; align-items: center; gap: 2px; background: var(--bg-3); color: var(--fg); border-radius: 12px; padding: 1px 2px 1px 9px; font-family: ui-monospace, Consolas, monospace; font-size: 12.5px; line-height: 20px; }
+.qb-chip button { border: 0; background: none; color: var(--fg-3); padding: 0 5px; cursor: pointer; font-size: 13px; line-height: 1; border-radius: 50%; }
+.qb-chip button:hover { color: var(--bad); background: transparent; }
 .qb-or { color: var(--fg-3); font-size: 11px; }
-.qb-input { flex: 1; min-width: 120px; border: 0 !important; background: transparent !important; padding: 3px 2px !important; font-family: ui-monospace, Consolas, monospace; }
+.qb-input { flex: 1; min-width: 140px; border: 0 !important; background: transparent !important; padding: 4px 2px !important; font-family: ui-monospace, Consolas, monospace; font-size: 13px; }
 .qb-input:focus-visible { outline: none; }
-.qb-remove { border: 0; background: none; color: var(--fg-3); cursor: pointer; font-size: 15px; padding: 0 4px; }
-.qb-remove:hover { color: var(--bad); }
-.qb-foot { display: flex; align-items: center; gap: 10px; padding-left: 4px; }
+.qb-remove { border: 0; background: none; color: var(--fg-3); cursor: pointer; font-size: 15px; padding: 0 6px; visibility: hidden; }
+.qb-row:hover .qb-remove, .qb-remove:focus-visible { visibility: visible; }
+.qb-remove:hover { color: var(--bad); background: none !important; }
+.qb-add { align-self: flex-start; margin: 0 0 6px 8px; font-size: 12px; }
+
+/* filter picks */
+.opt-label { font-size: 12px; color: var(--fg-2); margin-top: 2px; }
+.picks { display: flex; flex-wrap: wrap; gap: 4px; }
+.pick { border: 1px solid var(--line); background: var(--bg); color: var(--fg-2); border-radius: 12px; padding: 1px 9px; font-size: 12px; }
+.pick[aria-pressed="true"] { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); font-weight: 600; }
+.r-title a.web { font-weight: normal; margin-left: 6px; font-size: 12px; color: var(--fg-3); }
+.in-cols { margin-top: 4px; display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 12px; }
+.in-cols .hint { margin-right: 2px; }

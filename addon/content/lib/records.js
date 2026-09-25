@@ -51,6 +51,45 @@ ZR.Records = (() => {
     REPORT: "report",
   };
 
+  // Languages offered as filters; sources report ISO 639-1 ("en") or 639-2 ("eng"/"ger").
+  const LANGUAGES = [
+    { code: "en", name: "English" },
+    { code: "de", name: "German" },
+    { code: "fr", name: "French" },
+    { code: "es", name: "Spanish" },
+    { code: "it", name: "Italian" },
+    { code: "pt", name: "Portuguese" },
+    { code: "nl", name: "Dutch" },
+    { code: "pl", name: "Polish" },
+    { code: "zh", name: "Chinese" },
+    { code: "ja", name: "Japanese" },
+    { code: "ko", name: "Korean" },
+    { code: "ru", name: "Russian" },
+  ];
+  const LANG_ALIASES = {
+    eng: "en", english: "en", ger: "de", deu: "de", german: "de", deutsch: "de", fre: "fr", fra: "fr", french: "fr",
+    spa: "es", spanish: "es", ita: "it", italian: "it", por: "pt", portuguese: "pt", dut: "nl", nld: "nl", dutch: "nl",
+    pol: "pl", polish: "pl", chi: "zh", zho: "zh", chinese: "zh", jpn: "ja", japanese: "ja", kor: "ko", korean: "ko", rus: "ru", russian: "ru",
+  };
+
+  /** Normalize a language value to ISO 639-1 ("en"), or "" if unknown. */
+  function normLang(v) {
+    const s = String(Array.isArray(v) ? v[0] || "" : v || "").trim().toLowerCase().split(/[-_]/)[0];
+    if (!s) return "";
+    if (s.length === 2) return s;
+    return LANG_ALIASES[s] || "";
+  }
+
+  // Publication-type filters, as groups of Zotero item types
+  const TYPE_FILTERS = [
+    { id: "journal", label: "Journal articles", types: ["journalArticle", "magazineArticle"] },
+    { id: "conference", label: "Conference papers", types: ["conferencePaper"] },
+    { id: "preprint", label: "Preprints", types: ["preprint"] },
+    { id: "book", label: "Books & chapters", types: ["book", "bookSection"] },
+    { id: "thesis", label: "Theses", types: ["thesis"] },
+    { id: "report", label: "Reports & standards", types: ["report", "standard", "document"] },
+  ];
+
   function mapType(t, fallback = "journalArticle") {
     if (!t) return fallback;
     return TYPE_MAP[t] || TYPE_MAP[String(t).toLowerCase()] || fallback;
@@ -80,7 +119,7 @@ ZR.Records = (() => {
       url: f.url || (doi ? `https://doi.org/${doi}` : ""),
       pdfURLs,
       isOA: !!f.isOA || pdfURLs.length > 0,
-      language: f.language || "",
+      language: normLang(f.language),
       citationCount: typeof f.citationCount === "number" ? f.citationCount : null,
       doi,
     };
@@ -147,5 +186,5 @@ ZR.Records = (() => {
     return names.slice(0, max).join(", ") + " et al.";
   }
 
-  return { make, mapType, dedupe, mergeInto, hasFullText, creatorsToString };
+  return { make, mapType, dedupe, mergeInto, hasFullText, creatorsToString, normLang, LANGUAGES, TYPE_FILTERS };
 })();

@@ -53,6 +53,8 @@ const prefs = {
   "extensions.zotero-researcher.selftest": out,
   "extensions.zotero-researcher.selftestQuit": !keepOpen,
   "extensions.zotero-researcher.selftestMode": updateTest ? "update" : "",
+  // ZR_E2E_CLI=1 also makes real calls through the installed Claude Code / Codex CLIs
+  "extensions.zotero-researcher.selftestCLI": process.env.ZR_E2E_CLI === "1",
 };
 writeFileSync(join(profile, "user.js"), Object.entries(prefs).map(([k, v]) => `user_pref(${js(k)}, ${js(v)});`).join("\n") + "\n");
 

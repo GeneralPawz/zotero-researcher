@@ -334,7 +334,7 @@ ZR.SelfTest = (() => {
       await U.sleep(50);
       type(0, "IFCX");
       await U.sleep(50);
-      [...d.querySelectorAll("#builder .qb-foot button")].find((b) => /Add row/.test(b.textContent)).click();
+      d.querySelector("#builder .qb-add").click();
       await U.sleep(50);
       type(1, "BIM");
       await U.sleep(50);
@@ -353,7 +353,12 @@ ZR.SelfTest = (() => {
       w.App.panels.search.useQueryText('"digital twin" NOT title:review');
       d.querySelector('#kw-view button[data-view="builder"]').click();
       const rows = [...d.querySelectorAll("#builder .qb-row")].map((r) => [...r.querySelectorAll(".zr-dd-label")].map((l) => l.textContent).concat([...r.querySelectorAll(".qb-chip")].map((c) => c.firstChild.textContent)).join(" · "));
-      const res = { built, xor, feedback: d.getElementById("query-feedback").textContent, opMenuVisible: opPick.visible, rowsFromText: rows };
+      const firstRow = d.querySelector("#builder .qb-row");
+      const styled = w.getComputedStyle(firstRow).display === "flex" && w.getComputedStyle(d.getElementById("builder")).borderTopStyle !== "none";
+      const cssURL = d.querySelector('link[rel="stylesheet"]').getAttribute("href");
+      const res = { built, xor, feedback: d.getElementById("query-feedback").textContent, opMenuVisible: opPick.visible, rowsFromText: rows, styled, cssURL };
+      if (!styled) throw new Error("builder CSS not applied " + JSON.stringify(res));
+      if (!cssURL.includes("?v=" + ZR.version)) throw new Error("stylesheet URL not version-stamped: " + cssURL);
       w.close();
       if (built !== '("IFC5" OR IFCX) AND title:BIM') throw new Error("unexpected query " + JSON.stringify(res));
       if (!/AND NOT/.test(xor)) throw new Error("XOR not compiled " + xor);
@@ -395,6 +400,76 @@ ZR.SelfTest = (() => {
       w.close();
       if (!badge) throw new Error("no excluded badge: " + JSON.stringify(res));
       return res;
+    });
+
+    await step("filters (language, type, abstract) and sort order", async () => {
+      const w = await openResearch(win, { tab: "find", itemIDs: [] });
+      const d = w.document;
+      d.querySelector('#mode-seg button[data-mode="structured"]').click();
+      w.App.panels.search.useQueryText('"building information model*" AND IFC');
+      for (const cb of d.querySelectorAll("#sources input")) cb.checked = ["openalex", "crossref", "doaj"].includes(cb.value);
+      d.getElementById("options-chip").click();
+      const clickPick = (box, label) => [...d.querySelectorAll(`#${box} .pick`)].find((p) => p.textContent === label).click();
+      clickPick("lang-picks", "English");
+      clickPick("type-picks", "Journal articles");
+      d.getElementById("has-abstract").checked = true;
+      d.getElementById("has-abstract").dispatchEvent(new w.Event("change"));
+      await U.sleep(200);
+      await shot(w, "04b-filters.png");
+      const chip = d.getElementById("options-chip").textContent;
+      d.getElementById("limit").value = "6";
+      d.getElementById("skip-existing").checked = false;
+      d.getElementById("run").click();
+      await waitFor(() => !d.getElementById("run").disabled && /papers found/.test(d.getElementById("search-status").textContent), 120000);
+      await pick(d.getElementById("res-sort"), "Newest first");
+      const years = [...d.querySelectorAll("#results .r-meta")].map((m) => parseInt((m.textContent.match(/\b(19|20)\d\d\b/) || [])[0], 10)).filter(Boolean);
+      const sortedDesc = years.every((y, i) => i === 0 || years[i - 1] >= y);
+      const res = { chip, status: d.getElementById("search-status").textContent, results: d.querySelectorAll("#results .result").length, years, sortedDesc };
+      w.close();
+      if (!/EN/.test(chip) || !/with abstract/.test(chip)) throw new Error("options chip lacks filters: " + chip);
+      if (years.length < 2 || !sortedDesc) throw new Error("not sorted newest first: " + years);
+      return res;
+    });
+
+    await step("clicking a paper already in the library jumps to it / lists its collections", async () => {
+      ZR.Prefs.setJSON("dialogState", {}); // the previous step's filters are remembered by design
+      await zp.collectionsView.selectCollection(collection.id);
+      await U.sleep(400);
+      const w = await openResearch(win, { tab: "find", itemIDs: [] });
+      const d = w.document;
+      d.querySelector('#mode-seg button[data-mode="structured"]').click();
+      w.App.panels.search.useQueryText('IFC AND "building information model*"');
+      for (const cb of d.querySelectorAll("#sources input")) cb.checked = ["crossref", "arxiv", "doaj"].includes(cb.value);
+      d.getElementById("limit").value = "4";
+      d.getElementById("skip-existing").checked = false;
+      d.getElementById("run").click();
+      await waitFor(() => !d.getElementById("run").disabled && /papers found|failed/.test(d.getElementById("search-status").textContent), 150000);
+      if (!d.querySelector("#results .tag.lib")) {
+        throw new Error("no in-library result: " + JSON.stringify({ status: d.getElementById("search-status").textContent, detail: d.getElementById("search-status").title, rows: d.querySelectorAll("#results .result").length, skipExisting: d.getElementById("skip-existing").checked, hideExcluded: d.getElementById("hide-excluded").checked, inCollection: collection.getChildItems().filter((i) => i.isRegularItem()).map((i) => i.getField("title").slice(0, 40)) }));
+      }
+      const timings = d.getElementById("search-status").title;
+      const row = d.querySelector("#results .tag.lib").closest(".result");
+      const title = row.querySelector(".r-title a").textContent;
+      // default: jump
+      await zp.collectionsView.selectLibrary(libraryID);
+      await U.sleep(300);
+      ZR.Prefs.set("resultClick", "jump");
+      row.querySelector(".r-title a").click();
+      await waitFor(() => zp.getSelectedItems()[0]?.getField("title") === title, 10000);
+      const jumpedTo = zp.getCollectionTreeRows()[0]?.ref?.name;
+      // alternative: list collections
+      ZR.Prefs.set("resultClick", "collections");
+      row.querySelector(".r-title a").click();
+      const cols = await waitFor(() => row.querySelector(".in-cols"), 5000);
+      await shot(w, "04c-in-collections.png");
+      const listed = [...cols.querySelectorAll("a")].map((a) => a.textContent);
+      await zp.collectionsView.selectLibrary(libraryID);
+      cols.querySelector("a").click();
+      await waitFor(() => zp.getSelectedItems()[0]?.getField("title") === title, 10000);
+      ZR.Prefs.set("resultClick", "jump");
+      w.close();
+      if (jumpedTo !== "zr-selftest") throw new Error("jumped to " + jumpedTo);
+      return { title, jumpedTo, listed, webLink: !!row.querySelector(".r-title a.web"), timings };
     });
 
     await step("decision is stored in the library ledger and recognised in a new search", async () => {
@@ -445,11 +520,14 @@ ZR.SelfTest = (() => {
       await U.sleep(300);
       const prov = await pick(d.getElementById("zr-llm-provider"), "Anthropic");
       const baseAfterPick = [...d.querySelectorAll("#zr-llm-editor input")].map((i) => i.value).find((v) => v.startsWith("http"));
+      await pick(d.getElementById("zr-llm-provider"), "Claude Code CLI");
+      const program = await waitFor(() => [...d.querySelectorAll("#zr-llm-editor input")].map((i) => i.value).find((v) => /claude(.exe|.cmd)?$/i.test(v)), 15000).catch(() => "not detected");
+      const keyRowHidden = [...d.querySelectorAll("#zr-llm-editor label")].find((l) => l.textContent === "API key")?.hidden;
       d.getElementById("zr-llm-provider").zrDropdownButton.click();
       await U.sleep(200);
       await shot(pw, "06b-preferences-dropdown.png");
       d.querySelector(".zr-dd-menu .zr-dd-item")?.click();
-      const res = { checklist: d.querySelectorAll("#zr-checklist .zr-check-row").length, areas: d.querySelectorAll("#zr-areas .zr-area").length, databasesShown: rowsDefault, pubmedListed, aiEditor: !!d.querySelector("#zr-llm-editor .zr-editor"), providerMenuVisible: prov.visible, baseAfterPick };
+      const res = { checklist: d.querySelectorAll("#zr-checklist .zr-check-row").length, areas: d.querySelectorAll("#zr-areas .zr-area").length, databasesShown: rowsDefault, pubmedListed, aiEditor: !!d.querySelector("#zr-llm-editor .zr-editor"), providerMenuVisible: prov.visible, baseAfterPick, cliProgram: program, cliHidesKey: keyRowHidden };
       pw.close();
       if (pubmedListed) throw new Error("PubMed listed although medicine is off");
       return res;
@@ -644,6 +722,20 @@ ZR.SelfTest = (() => {
       if (!res.resnetRelatedToGoogLeNet || !res.directionStored) throw new Error(JSON.stringify(res));
       return res;
     });
+
+    if (ZR.Prefs.get("selftestCLI", false)) {
+      for (const [provider, label] of [["claude-cli", "Claude Code"], ["codex-cli", "Codex"]]) {
+        await step(`real AI call through the ${label} CLI (subscription, no API key)`, async () => {
+          const path = await ZR.CLI.detect(provider);
+          if (!path) throw new Error(label + " CLI not installed");
+          const profile = { id: "cli-" + provider, name: label, provider, model: "", baseURL: "" };
+          const t = await ZR.LLM.test(profile);
+          const plan = await ZR.Assist.planQuery(profile, "Papers on IFC-based BIM data exchange, since 2019");
+          if (!t.ok) throw new Error("test reply: " + t.reply);
+          return { path, testReply: t.reply, ms: t.ms, plannedQuery: plan.query, validSyntax: !!ZR.Query.parse(plan.query) };
+        });
+      }
+    }
 
     await step("disable/enable: UI removed and restored, decisions survive via the library", async () => {
       const { AddonManager } = ChromeUtils.importESModule("resource://gre/modules/AddonManager.sys.mjs");
