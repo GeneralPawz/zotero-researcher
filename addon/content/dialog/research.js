@@ -70,6 +70,8 @@ const App = (window.App = {
 
   /** Active profile or a clear error that points to Settings. */
   profile() {
+    // The autopilot runs some steps with a model of its own
+    if (App.profileOverride) return App.profileOverride;
     const p = App.ZR.Prefs.getActiveLLMProfile();
     if (!p) throw new Error("No AI is set up yet — add one under ⚙ Settings → AI providers.");
     return p;
@@ -125,6 +127,8 @@ const App = (window.App = {
       return App.newProject();
     }
     const p = App.projects.find((x) => x.id === id) || null;
+    if (window.Autopilot?.isRunning()) Autopilot.pause();
+    window.Autopilot?.hide();
     App.project = p;
     if (p?.collectionKey && p.collectionKey !== App.target.collectionKey) {
       const t = App.ZR.UI.targetFor(App.target.libraryID, p.collectionKey);
@@ -149,6 +153,13 @@ const App = (window.App = {
     use.checked = !use.disabled;
     document.querySelector('input[name="np-col"][value="new"]').checked = use.disabled;
     $("np-use-label").textContent = !col ? "Use the current collection (none selected — you are in the library root)" : taken ? `Use “${col}” (already belongs to project “${taken.name}”)` : `Use the current collection “${col}”`;
+    // Autopilot option for review projects
+    const profiles = App.profiles();
+    $("np-ap-profile").replaceChildren(...profiles.map((p) => el("option", { value: p.id, text: `${p.name}${p.model ? " · " + p.model : ""}` })));
+    $("np-ap-on").checked = false;
+    $("np-ap-on").disabled = !profiles.length;
+    $("np-ap-fields").hidden = true;
+    $("np-ap").hidden = kind !== "review";
     $("np-layer").hidden = false;
     setTimeout(() => $("np-name").focus(), 0);
   },
@@ -182,7 +193,11 @@ const App = (window.App = {
     await App.loadProjects(p.id);
     App.panels.review.reset();
     App.panels.search.loadProject();
-    if (kind === "review") return App.showTab("review");
+    if (kind === "review") {
+      App.showTab("review");
+      if ($("np-ap-on").checked && $("np-ap-question").value.trim()) Autopilot.start({ profileID: $("np-ap-profile").value, question: $("np-ap-question").value.trim(), stage: "protocol" });
+      return;
+    }
     App.status("search", `Project “${name}” created: its search settings and history are remembered.`);
     await App.panels[App.currentTab]?.onShow?.();
   },
@@ -325,6 +340,8 @@ async function init() {
   $("np-cancel").addEventListener("click", () => ($("np-layer").hidden = true));
   $("np-create").addEventListener("click", () => App.createProject().catch((err) => (Zotero.logError(err), App.status("search", "Could not create the project: " + err.message))));
   $("np-name").addEventListener("keydown", (e) => e.key === "Enter" && $("np-create").click());
+  for (const r of document.querySelectorAll('input[name="np-kind"]')) r.addEventListener("change", () => ($("np-ap").hidden = document.querySelector('input[name="np-kind"]:checked').value !== "review"));
+  $("np-ap-on").addEventListener("change", () => ($("np-ap-fields").hidden = !$("np-ap-on").checked));
   document.addEventListener("keydown", (e) => e.key === "Escape" && !$("np-layer").hidden && ($("np-layer").hidden = true));
   for (const b of document.querySelectorAll(".log-btn")) b.addEventListener("click", () => App.toggleLog());
   const offBadges = App.ZR.Activity.subscribe(() => App.updateLogBadges());
@@ -986,6 +1003,38 @@ App.panels.search = (() => {
     renderResults();
   }
 
+  /**
+   * Run a search straight into the review's pool (the autopilot): the form shows the
+   * settings, everything found goes into the pool and the search is logged.
+   * @returns {{run, pool: {added, known, notAdded, runID}}}
+   */
+  async function searchIntoPool(settings, { parent = null } = {}) {
+    if (viewing) closeRunView();
+    applyState(Object.assign({}, ZR.Prefs.getJSON("dialogState", {}), settings));
+    const o = Object.assign(readOptions(), { libraryID: App.target.libraryID });
+    saveState(o);
+    App.setBusy("search", true);
+    try {
+      lastRun = await ZR.Search.run(o, st);
+      lastRun.id = "r" + Date.now().toString(36);
+      lastRun.parent = parent;
+      lastRun.settings = stateOf(o);
+      for (const r of lastRun.records) r.selected = true;
+      renderResults();
+    } finally {
+      App.setBusy("search", false);
+    }
+    const flow = App.reviewFlow;
+    App.reviewFlow = false;
+    try {
+      await importSelected(false);
+    } finally {
+      App.reviewFlow = flow;
+    }
+    return { run: lastRun, pool: lastPoolImport };
+  }
+  let lastPoolImport = null;
+
   // ------------------------------------------------------ logged searches ----
   // A search logged in a review can be opened again: read-only first (settings and the
   // list of what it found, with what happened to each paper), then editable. Running an
@@ -1088,6 +1137,7 @@ App.panels.search = (() => {
         ];
         await P.saveRunAudit(libraryID, App.project.id, run.id, audit);
         await P.addRun(libraryID, App.project.id, run);
+        lastPoolImport = { added, known, notAdded: audit.filter((a) => a.fate === "removed" || a.fate === "unselected").length, runID: run.id };
         for (const r of recs) r.selected = false;
         renderResults();
         const msg = `${auto ? "Automatic mode: " : ""}Added ${added} paper(s) to the screening pool of “${App.project.name}”${known ? `, ${known} were already in it` : ""}.`;
@@ -1143,5 +1193,5 @@ App.panels.search = (() => {
     }
   }
 
-  return { init, renderSources, runRelated, showRecords, updateImportBar, setMode, setView, useQueryText, loadProject, currentState, showRun, closeRunView, onShow: updateImportBar };
+  return { init, renderSources, runRelated, showRecords, updateImportBar, setMode, setView, useQueryText, loadProject, currentState, showRun, closeRunView, searchIntoPool, onShow: updateImportBar };
 })();

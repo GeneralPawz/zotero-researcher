@@ -109,7 +109,7 @@ Pick a project from the menu to switch to it (and to its collection), or create 
    - **Versions:** searches are numbered #1, #2, …
      - Click a search's query to open it again in the Search tab. It opens **read-only**, with its settings and the list of what it found, each paper marked with what happened to it.
      - *Edit and run again* unlocks it. When you run the edited search, you choose whether it is a **refinement** of the original (#1 → #1.1, #1.2, …) or a **new search**. The table shows refinements under their parent.
-   - **Audit trail:** *Not added — why?* on a search, or *Audit trail…*, lists every paper the searches found with its complete chain:
+   - **Audit trail:** click a search's row, or its *Not added* number, to list every paper the searches found with its complete chain (the *Into pool* number takes you to screening):
      - how the search handled it: merged duplicate, removed by a filter (language, type, citations, abstract, DOI, open access), strict matching, already in your library, excluded earlier, not selected, added, or already in the pool;
      - what happened next: excluded at screening or at full text, maybe, passed, included — with the reason, who decided (you, System 1, the AI, the duplicate check) and the date.
 
@@ -123,7 +123,7 @@ Pick a project from the menu to switch to it (and to its collection), or create 
      - The decision buttons and the exclusion reason sit at the top of the card.
      - Each System 1 row is tinted by what it says: green for include, yellow for maybe, red for exclude.
      - The abstract is justified and hyphenated. Settings → *Reading papers* can start a new paragraph after each sentence.
-   - **Search terms:** *Search terms* marks where your queries' terms occur in the title, authors and abstract, and lists which terms were found where. Each term gets its own colour, chosen to differ as much as possible from the others. This shows why a paper came in and helps to improve the search.
+   - **Search terms:** *Search terms* marks where your queries' terms occur in the title, authors and abstract, and lists which terms were found where. Each term gets its own colour, chosen to differ as much as possible from the others. Hover a term's chip to see where it occurs; click chips to keep several terms highlighted while you move through the papers. This shows why a paper came in and helps to improve the search.
    - **Highlights:** select text in the abstract and right-click to highlight it as evidence for include (green), maybe (yellow) or exclude (red), or to add a note. When the paper is included, your highlights go to Zotero as a *Screening highlights* note on the item.
    - **Years and languages** from the protocol are checked from the metadata in code, not asked to the model.
 
@@ -144,6 +144,24 @@ Pick a project from the menu to switch to it (and to its collection), or create 
    - Positions come from Zotero's own text extraction, so a highlight covers exactly the quoted text. Quotes the AI did not copy verbatim are skipped and reported.
 5. **Assess quality / extract data / classify.** A table of the included papers against the protocol's checklist, fields or facets. You fill it by hand or with *Fill with AI* (full text where indexed, otherwise the abstract), then export it as CSV.
 6. **Report.** The PRISMA flow diagram is computed from the logged searches and every decision. Mapping studies also get facet counts. *Save as note* writes the protocol plus the flow summary into the collection, ready for the method section. The diagram can also be exported as SVG.
+
+**Autopilot.** Switch it on when you create a review project, or click **✦ Autopilot** in the review. Choose the *harness* model (any AI provider and model, e.g. Codex CLI with GPT-6-Astra) and write your research question. The harness runs the review with you in a side panel and asks you at every decision. Each step can use a different model: the harness reasons, System 1 estimates, and the full-text model reads.
+1. **Protocol:** picks the best-fitting methodology and fills in its form.
+2. **Find:** proposes databases and results per database in a popup where you can change anything, then searches.
+3. **Screen:** System 1 rates the pool, and the harness checks the outcome.
+   - The harness sees condensed numbers, not every paper, to save tokens. If something looks off, such as nearly everything rejected, it drills into sample papers.
+   - It explains what it sees and proposes changes to query, criteria or thresholds. You apply them, keep things as they are, or adjust them yourself. After a refined search it re-rates; after three attempts without improvement it says so, and you close the review or continue anyway.
+   - Then thresholds, the AI for the uncertain middle, and the decisions.
+4. **Full text:** you choose the model that reads the full texts. It finds PDFs and annotates them.
+   - The harness proposes decisions from the annotations.
+   - On request, System 1 checks whether the annotation verdicts make sense, and the harness arbitrates the discrepancies.
+   - You confirm before anything is applied.
+5. **Quality, extraction, classification:** tables filled in by the full-text model. Extraction is optional.
+6. **Report:** a summary, and optionally a note.
+
+The conversation and the state are kept with the project. *Pause* and *Resume* continue where the autopilot stopped, and it can be started again from any step. Tables use short column headers (Q1, E1, C1); *Full questions* shows the complete text with line breaks.
+
+Decisions are kept **per review**: the same paper can be included in one review and excluded in another. Outside a review, your latest judgement is still shown as a hint.
 
 The LLM and the System 1 model complement each other. The LLM reasons: it sets up the protocol, handles the uncertain papers, and fills in quality and extraction tables. The System 1 model makes quick, calibrated guesses for every paper.
 
@@ -284,7 +302,7 @@ Layout:
 `npm run e2e` works like this:
 1. It builds the XPI and installs it into a **throwaway profile and data directory**.
 2. It starts a separate Zotero (`-no-remote`).
-3. The in-app self-test (`content/lib/selftest.js`) drives the real UI: 42 steps covering the toolbar, multi-select, item pane, context menu, welcome pointer, tour, research areas, live searches, PDFs, metadata fixing, judging and decision memory, Settings, the AI flows (against a mock AI endpoint, with live databases), projects (automatic quick projects, new review projects, conversion, persistence), the structured review (methodology-dependent forms, AI-filled protocol, candidate pool, System 1 rating against a mock TypeSafe endpoint with threshold decisions, AI on the uncertain papers, keyboard screening, the screening card (highlights with notes into Zotero, search terms, sentence paragraphs), the activity log, the search audit trail and search versions (read-only reopening, refinement #1.1), full-text annotations (AI highlights in a generated PDF, a tagged human annotation syncing back, verdicts written back to Zotero, the reader's Review button), full text, AI-filled quality and extraction tables, flow diagram and protocol note), the local model (Settings check, ranking by the protocol, duplicate exclusion, learning from keyboard decisions and re-ranking, topic clusters as a facet, passage retrieval, similar papers in the library and the citation graph), citation linking on real papers (ResNet → GoogLeNet, Attention → ResNet), and disable/re-enable with the decisions surviving.
+3. The in-app self-test (`content/lib/selftest.js`) drives the real UI: 43 steps covering the toolbar, multi-select, item pane, context menu, welcome pointer, tour, research areas, live searches, PDFs, metadata fixing, judging and decision memory, Settings, the AI flows (against a mock AI endpoint, with live databases), projects (automatic quick projects, new review projects, conversion, persistence), the structured review (methodology-dependent forms, AI-filled protocol, candidate pool, System 1 rating against a mock TypeSafe endpoint with threshold decisions, AI on the uncertain papers, keyboard screening, the screening card (highlights with notes into Zotero, search terms, sentence paragraphs), the activity log, the autopilot running a complete review (wizard, search plan, screening check with a proposed change, full-text check, tables, report), the search audit trail and search versions (read-only reopening, refinement #1.1), full-text annotations (AI highlights in a generated PDF, a tagged human annotation syncing back, verdicts written back to Zotero, the reader's Review button), full text, AI-filled quality and extraction tables, flow diagram and protocol note), the local model (Settings check, ranking by the protocol, duplicate exclusion, learning from keyboard decisions and re-ranking, topic clusters as a facet, passage retrieval, similar papers in the library and the citation graph), citation linking on real papers (ResNet → GoogLeNet, Attention → ResNet), and disable/re-enable with the decisions surviving.
 4. It writes `report.json` and screenshots, then quits.
 
 Your normal profile and library are never touched. Use `--keep-open` to keep the test instance open, and `--clean` to delete the temp folder after a passing run.

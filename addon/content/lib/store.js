@@ -217,8 +217,16 @@ ZR.Store = (() => {
       e.t = U.truncate(o.title || item?.getField("title") || e.t || "", 120);
       if (item) e.i = item.key;
       if (o.collectionKey) e.c = o.collectionKey;
-      if (o.d) e[o.stage] = { d: o.d, r: o.r || "", by: o.by || "me", at: today() };
+      const entry = { d: o.d, r: o.r || "", by: o.by || "me", at: today() };
+      if (o.d) e[o.stage] = entry;
       else delete e[o.stage];
+      // Per review: the same paper can be included in one review and excluded in another
+      if (o.collectionKey) {
+        e.cols = e.cols || {};
+        const ce = (e.cols[o.collectionKey] = e.cols[o.collectionKey] || {});
+        if (o.d) ce[o.stage] = entry;
+        else delete ce[o.stage];
+      }
       scheduleSave(o.libraryID);
     }
   }
@@ -237,12 +245,23 @@ ZR.Store = (() => {
   }
 
   /** Prior decision for a paper: item tags win, ledger fills in (reason, date, by). */
-  async function prior(libraryID, { key, item }) {
+  async function prior(libraryID, { key, item, collectionKey }) {
     const ledger = await load(libraryID);
     key = key || (item ? keyForItem(item) : "");
     const fromLedger = key ? ledger.decisions[key] : null;
     const fromTags = item ? decisionFromItem(item) : null;
     if (!fromLedger && !fromTags) return null;
+    // Within a review, only that review's decisions count
+    if (collectionKey) {
+      const cols = fromLedger?.cols;
+      if (cols?.[collectionKey]) {
+        const own = {};
+        for (const stage of ["ta", "ft"]) if (cols[collectionKey][stage]) own[stage] = cols[collectionKey][stage];
+        return Object.keys(own).length ? own : null;
+      }
+      if (cols && Object.keys(cols).length) return null; // decided only in other reviews
+      if (!item && fromLedger?.c && fromLedger.c !== collectionKey) return null; // older decision from another review
+    }
     const out = {};
     for (const stage of ["ta", "ft"]) {
       const t = fromTags?.[stage];

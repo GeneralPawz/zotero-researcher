@@ -261,7 +261,7 @@ ZR.Projects = (() => {
     for (const item of col ? col.getChildItems(false).filter((i) => i.isRegularItem()) : []) {
       const key = ZR.Store.keyForItem(item);
       if (!key || out.has(key)) continue;
-      const prior = await ZR.Store.prior(libraryID, { key, item });
+      const prior = await ZR.Store.prior(libraryID, { key, item, collectionKey: project.collectionKey });
       out.set(key, {
         key,
         itemID: item.id,
@@ -284,7 +284,7 @@ ZR.Projects = (() => {
     }
     for (const [key, r] of Object.entries(pool.records)) {
       if (out.has(key)) continue;
-      const prior = await ZR.Store.prior(libraryID, { key });
+      const prior = await ZR.Store.prior(libraryID, { key, collectionKey: project.collectionKey });
       out.set(key, {
         key,
         itemID: null,
