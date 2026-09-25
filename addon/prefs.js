@@ -27,3 +27,5 @@ pref("extensions.zotero-researcher.embedAPI", "ollama");
 pref("extensions.zotero-researcher.embedURL", "");
 pref("extensions.zotero-researcher.embedModel", "nomic-embed-text");
 pref("extensions.zotero-researcher.s1Blend", true);
+pref("extensions.zotero-researcher.abstractSentences", false);
+pref("extensions.zotero-researcher.showQueryTerms", true);

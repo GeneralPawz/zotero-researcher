@@ -62,7 +62,7 @@ To test the whole update path locally, run `npm run e2e -- --update`. It install
 
 ## The Researcher window
 
-There are four tabs. Each shows one main action; the rest stays out of the way.
+There are four tabs. Each shows one main action; the rest stays out of the way. Every tab's status bar has a **Log** button. It lists what is happening behind the scenes: each database request, AI call, CLI run and local-model call, with its running time and whether it succeeded. Click an entry to see the request and the answer. A call that runs for a long time is flagged, so you can tell a slow step from a stuck one.
 
 **Projects.** The top right shows the current project and the collection papers go to. A project is bound to a collection and remembers its search settings and search history. There are two kinds:
 - **Quick search:** "get me papers on X". Type the parameters and go; results go straight into the collection. A collection gets a quick project automatically the first time you add papers to it.
@@ -102,6 +102,8 @@ Pick a project from the menu to switch to it (and to its collection), or create 
    - **describe in your own words** what you want to achieve. The AI fills in the methodology's form (and may suggest a better-fitting methodology); or
    - **fill in the form** yourself.
 
+   Once the protocol is saved, **Next** leads to the following step. Adding search results to the pool from there continues straight to screening.
+
    Either way you end up with the same form: working title, objective, research questions, a question framework (PICO, PICOS, PCC, SPIDER or PEO), inclusion and exclusion criteria, exclusion reasons, the search query, years, languages and publication types. Depending on the methodology it also asks for a quality checklist, data extraction fields or classification facets. Saving the protocol pre-fills the Search tab.
 2. **Find papers.** Search results go into the project's **candidate pool**, not into your library. Every search is logged for the report.
 3. **Screen titles & abstracts: the funnel.** Thousands of candidates are narrowed down to the relevant few:
@@ -109,6 +111,13 @@ Pick a project from the menu to switch to it (and to its collection), or create 
    - Two **thresholds** settle the clear cases in bulk: *exclude below* and *include above*. Each needs a second click to confirm. The decisions are recorded as "by System 1".
    - The **AI** reasons about the uncertain middle band and suggests a decision with a reason. *Accept confident AI suggestions* applies those with at least 80% confidence.
    - You decide the rest. Keys: `I` include, `M` maybe, `E` exclude, `1–9` pick a reason, `↑/↓` move.
+   - **Reading a paper:**
+     - The decision buttons and the exclusion reason sit at the top of the card.
+     - Each System 1 row is tinted by what it says: green for include, yellow for maybe, red for exclude.
+     - The abstract is justified and hyphenated. Settings → *Reading papers* can start a new paragraph after each sentence.
+   - **Search terms:** *Search terms* marks where your queries' terms occur in the title, authors and abstract, and lists which terms were found where. This shows why a paper came in and helps to improve the search.
+   - **Highlights:** select text in the abstract and right-click to highlight it as evidence for include (green), maybe (yellow) or exclude (red), or to add a note. When the paper is included, your highlights go to Zotero as a *Screening highlights* note on the item.
+   - **Years and languages** from the protocol are checked from the metadata in code, not asked to the model.
 
    Papers are added to the Zotero collection **when you include them**.
 4. **Check full texts.** Only included papers appear, with *Open PDF*, *Find PDF* and *Find PDFs for all*. The AI can read the indexed full text.
@@ -254,7 +263,7 @@ Layout:
 `npm run e2e` works like this:
 1. It builds the XPI and installs it into a **throwaway profile and data directory**.
 2. It starts a separate Zotero (`-no-remote`).
-3. The in-app self-test (`content/lib/selftest.js`) drives the real UI: 38 steps covering the toolbar, multi-select, item pane, context menu, welcome pointer, tour, research areas, live searches, PDFs, metadata fixing, judging and decision memory, Settings, the AI flows (against a mock AI endpoint, with live databases), projects (automatic quick projects, new review projects, conversion, persistence), the structured review (methodology-dependent forms, AI-filled protocol, candidate pool, System 1 rating against a mock TypeSafe endpoint with threshold decisions, AI on the uncertain papers, keyboard screening, full text, AI-filled quality and extraction tables, flow diagram and protocol note), the local model (Settings check, ranking by the protocol, duplicate exclusion, learning from keyboard decisions and re-ranking, topic clusters as a facet, passage retrieval, similar papers in the library and the citation graph), citation linking on real papers (ResNet → GoogLeNet, Attention → ResNet), and disable/re-enable with the decisions surviving.
+3. The in-app self-test (`content/lib/selftest.js`) drives the real UI: 40 steps covering the toolbar, multi-select, item pane, context menu, welcome pointer, tour, research areas, live searches, PDFs, metadata fixing, judging and decision memory, Settings, the AI flows (against a mock AI endpoint, with live databases), projects (automatic quick projects, new review projects, conversion, persistence), the structured review (methodology-dependent forms, AI-filled protocol, candidate pool, System 1 rating against a mock TypeSafe endpoint with threshold decisions, AI on the uncertain papers, keyboard screening, the screening card (highlights with notes into Zotero, search terms, sentence paragraphs), the activity log, full text, AI-filled quality and extraction tables, flow diagram and protocol note), the local model (Settings check, ranking by the protocol, duplicate exclusion, learning from keyboard decisions and re-ranking, topic clusters as a facet, passage retrieval, similar papers in the library and the citation graph), citation linking on real papers (ResNet → GoogLeNet, Attention → ResNet), and disable/re-enable with the decisions surviving.
 4. It writes `report.json` and screenshots, then quits.
 
 Your normal profile and library are never touched. Use `--keep-open` to keep the test instance open, and `--clean` to delete the temp folder after a passing run.

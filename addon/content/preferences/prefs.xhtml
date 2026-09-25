@@ -32,6 +32,13 @@
   </groupbox>
 
   <groupbox>
+    <label><html:h2>Reading papers while screening</html:h2></label>
+    <checkbox id="zr-abstract-sentences" label="Start a new paragraph after each sentence of an abstract" preference="extensions.zotero-researcher.abstractSentences"/>
+    <checkbox id="zr-query-terms" label="Mark the search terms in titles, authors and abstracts" preference="extensions.zotero-researcher.showQueryTerms"/>
+    <html:p class="zr-help">Abstracts are justified and hyphenated. Select text in an abstract and right-click to highlight it as evidence for include, maybe or exclude, or to add a note; your highlights are kept with the paper as a note in Zotero.</html:p>
+  </groupbox>
+
+  <groupbox>
     <label><html:h2>Local models (this computer)</html:h2></label>
     <html:p class="zr-help">A small embedding model running on your computer — free, offline and private. It powers the <html:b>local System 1 model</html:b> that learns from your screening decisions, <html:b>duplicate detection</html:b>, <html:b>similar papers</html:b> in your library and the citation graph, <html:b>topic clusters</html:b> for mapping studies, and <html:b>passage retrieval</html:b>: for long full texts the AI gets only the relevant parts. Everything falls back gracefully when it is not running.</html:p>
     <html:div id="zr-local"></html:div>

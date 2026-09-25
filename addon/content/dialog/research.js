@@ -187,6 +187,87 @@ const App = (window.App = {
     await App.panels[App.currentTab]?.onShow?.();
   },
 
+  // ------------------------------------------------------------ activity log ----
+  /** The Log panel: every web request, AI call, CLI run and local-model call, live. */
+  toggleLog() {
+    const existing = $("log-panel");
+    if (existing) return App.closeLog();
+    const Act = App.ZR.Activity;
+    let filter = "all";
+    const open = new Set();
+    const list = el("div", { class: "log-list" });
+    const kinds = [
+      ["all", "All"],
+      ["ai", "AI"],
+      ["web", "Web"],
+      ["cli", "CLI"],
+      ["local", "Local"],
+    ];
+    const seg = el(
+      "div",
+      { class: "seg small" },
+      kinds.map(([k, label]) => el("button", { "data-k": k, class: k === filter ? "on" : "", text: label, onclick: () => ((filter = k), [...seg.children].forEach((b) => b.classList.toggle("on", b.dataset.k === k)), render()) }))
+    );
+    const secs = (ms) => (ms < 10000 ? (ms / 1000).toFixed(1) : Math.round(ms / 1000)) + " s";
+    const clock = (t) => new Date(t).toTimeString().slice(0, 8);
+    function render() {
+      const now = Date.now();
+      const rows = Act.list()
+        .filter((e) => filter === "all" || e.kind === filter)
+        .reverse()
+        .slice(0, 250);
+      list.replaceChildren(
+        ...(rows.length
+          ? rows.map((e) => {
+              const ms = (e.ended || now) - e.started;
+              const slow = !e.ended && ms > 60000;
+              const state = !e.ended ? (slow ? `running ${secs(ms)} — no answer yet` : `running ${secs(ms)}`) : e.ok ? secs(ms) : "failed";
+              const row = el("div", { class: `log-row ${e.ended ? (e.ok ? "ok" : "err") : "run"}${slow ? " slow" : ""}`, onclick: () => (open.has(e.id) ? open.delete(e.id) : open.add(e.id), render()) }, [
+                el("span", { class: "log-time", text: clock(e.started) }),
+                el("span", { class: "log-kind k-" + e.kind, text: e.kind }),
+                el("span", { class: "log-label", text: e.label }),
+                el("span", { class: "log-state", text: state }),
+              ]);
+              if (!open.has(e.id)) return row;
+              return el("div", {}, [row, el("pre", { class: "log-detail", text: [e.detail, e.result ? (e.ok === false ? "Error: " : "Result: ") + e.result : ""].filter(Boolean).join("\n\n") || "(no details)" })]);
+            })
+          : [el("div", { class: "hint log-empty", text: "Nothing yet — requests to databases, AI models, CLIs and the local model appear here while they run." })])
+      );
+    }
+    const panel = el("div", { id: "log-panel", class: "log-panel", role: "dialog", "aria-label": "Activity log" }, [
+      el("div", { class: "log-head" }, [
+        el("b", { text: "Activity" }),
+        seg,
+        el("span", { class: "spacer" }),
+        el("button", { text: "Copy", title: "Copy the log as text (for a bug report)", onclick: () => Zotero.Utilities.Internal.copyTextToClipboard(Act.text()) }),
+        el("button", { text: "Clear finished", onclick: () => Act.clear() }),
+        el("button", { class: "icon-btn", text: "×", title: "Close", onclick: () => App.closeLog() }),
+      ]),
+      el("div", { class: "hint log-sub", text: "Click an entry for the request and the answer. Running entries count up; long-running AI calls can take a minute or more." }),
+      list,
+    ]);
+    document.body.append(panel);
+    render();
+    App._logOff = Act.subscribe(render);
+    App._logTimer = setInterval(() => Act.running().length && render(), 500);
+  },
+
+  closeLog() {
+    $("log-panel")?.remove();
+    App._logOff?.();
+    clearInterval(App._logTimer);
+  },
+
+  /** Running-count badge on the Log buttons. */
+  updateLogBadges() {
+    const n = App.ZR.Activity.running().length;
+    for (const b of document.querySelectorAll(".log-count")) {
+      b.hidden = !n;
+      b.textContent = String(n);
+    }
+    for (const b of document.querySelectorAll(".log-btn")) b.classList.toggle("busy", !!n);
+  },
+
   async saveFile(content, defaultName, filterTitle, pattern) {
     const { FilePicker } = ChromeUtils.importESModule("chrome://zotero/content/modules/filePicker.mjs");
     const fp = new FilePicker();
@@ -225,6 +306,9 @@ async function init() {
   $("np-create").addEventListener("click", () => App.createProject().catch((err) => (Zotero.logError(err), App.status("search", "Could not create the project: " + err.message))));
   $("np-name").addEventListener("keydown", (e) => e.key === "Enter" && $("np-create").click());
   document.addEventListener("keydown", (e) => e.key === "Escape" && !$("np-layer").hidden && ($("np-layer").hidden = true));
+  for (const b of document.querySelectorAll(".log-btn")) b.addEventListener("click", () => App.toggleLog());
+  const offBadges = App.ZR.Activity.subscribe(() => App.updateLogBadges());
+  window.addEventListener("unload", () => (offBadges(), App.closeLog()));
 
   await App.loadProjects();
   for (const p of Object.values(App.panels)) await p.init?.();
@@ -882,8 +966,16 @@ App.panels.search = (() => {
         await ZR.Projects.addRun(libraryID, App.project.id, run);
         for (const r of recs) r.selected = false;
         renderResults();
-        st(`${auto ? "Automatic mode: " : ""}Added ${added} paper(s) to the screening pool of “${App.project.name}”${known ? `, ${known} were already in it` : ""}. Screen them in the Review tab.`);
+        const msg = `${auto ? "Automatic mode: " : ""}Added ${added} paper(s) to the screening pool of “${App.project.name}”${known ? `, ${known} were already in it` : ""}.`;
+        st(msg + " Screen them in the Review tab.");
         App.panels.review.reset();
+        // Came here from the review's "Find papers" step: continue with screening
+        if (App.reviewFlow) {
+          App.reviewFlow = false;
+          App.panels.review.setStep("screen");
+          App.status("review", msg + " Next: rate them with System 1, then screen.");
+          App.showTab("review");
+        }
         return;
       }
       // Quick search: a collection remembers its searches in a project (created on first use)

@@ -152,7 +152,20 @@ ZR.LLM = (() => {
    * @param {{system?:string, maxTokens?:number, temperature?:number, timeout?:number}} opts
    * @returns {Promise<string>}
    */
-  async function chat(profile, messages, opts = {}) {
+  /** Send a chat; recorded in the activity log (prompt and reply excerpts, timing). */
+  function chat(profile, messages, opts = {}) {
+    if (!ZR.Activity || !profile) return chatRaw(profile, messages, opts);
+    const last = messages[messages.length - 1]?.content || "";
+    return ZR.Activity.track(
+      "ai",
+      `${profile.name || profile.provider}${profile.model ? " · " + profile.model : ""}: ${U.truncate(String(last).replace(/\s+/g, " "), 90)}`,
+      (opts.system ? "System: " + U.truncate(opts.system, 600) + "\n\n" : "") + "Prompt: " + U.truncate(String(last), 4000),
+      () => chatRaw(profile, messages, opts),
+      (reply) => `${reply.length.toLocaleString()} characters\n${U.truncate(reply, 3000)}`
+    );
+  }
+
+  async function chatRaw(profile, messages, opts = {}) {
     const { provider, baseURL, apiKey } = resolve(profile);
     // Local CLI (Claude Code / Codex): the user's subscription, no API key
     if (provider.protocol === "cli") return ZR.CLI.chat(profile, messages, { system: opts.system, timeout: opts.timeout || 240000 });

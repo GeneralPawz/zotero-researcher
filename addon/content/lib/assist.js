@@ -123,6 +123,9 @@ ZR.Assist = (() => {
       "You are an experienced research librarian and review methodologist. From the user's description you draft a review protocol that a careful researcher would accept: " +
       "focused research questions, literal and checkable inclusion/exclusion criteria (each one a single condition a yes/no answer can decide from a title and abstract), " +
       "a high-recall boolean search query, and methodology-appropriate extras (quality checklist, data extraction fields, classification facets). Use the user's language for text fields. " +
+      "Rules for criteria: 2–4 inclusion and 1–4 exclusion criteria. An exclusion criterion must add a new condition — never the negation of an inclusion criterion. " +
+      "Do NOT write publication years or languages into criteria: they are separate fields (yearFrom, yearTo, languages) and are checked automatically. " +
+      "Only exclude reviews, surveys or opinion pieces if the user asks for primary studies; for questions about the state or development of a field they are relevant. " +
       QUERY_SYNTAX;
     const extra = [
       context.query ? `The user already searched with: ${context.query}` : "",

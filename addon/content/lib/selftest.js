@@ -248,6 +248,8 @@ ZR.SelfTest = (() => {
     });
     await step("welcome pointer on the toolbar button (first run)", async () => {
       ZR.Prefs.set("welcomeShown", false);
+      win.focus(); // popups only open in the active window
+      await U.sleep(300);
       ZR.UI.showWelcome(win);
       const panel = await waitFor(() => doc.getElementById("zotero-researcher-welcome")?.state === "open" && doc.getElementById("zotero-researcher-welcome"), 5000);
       await U.sleep(400);
@@ -737,7 +739,10 @@ ZR.SelfTest = (() => {
 
       await step("review search: pre-filled from the protocol; results go into the pool, not the library", async () => {
         const d = rv();
-        await goStep("search", (x) => !x.getElementById("rv-search").hidden);
+        const next = d.getElementById("rv-next");
+        const nextLabel = !next.hidden && next.textContent;
+        next.click();
+        await waitFor(() => !d.getElementById("rv-search").hidden, 5000);
         d.getElementById("rv-add-search").click();
         await waitFor(() => !d.getElementById("panel-search").hidden, 5000);
         const prefilled = d.getElementById("query").value;
@@ -752,8 +757,10 @@ ZR.SelfTest = (() => {
         await waitFor(() => /screening pool|Adding failed/.test(d.getElementById("search-status").textContent), 60000);
         const pool = await ZR.Projects.loadPool(libraryID, reviewProject.id);
         const p = await ZR.Projects.get(libraryID, reviewProject.id);
-        const res = { prefilled, importLabel: label, pool: Object.keys(pool.records).length, inCollection: reviewCol.getChildItems().filter((i) => i.isRegularItem()).length, runsLogged: p.runs.length, status: d.getElementById("search-status").textContent };
-        if (!/screening pool/.test(label) || res.pool < 3 || res.inCollection !== 0 || res.runsLogged !== 1) throw new Error(JSON.stringify(res));
+        // came from the review: continues with screening
+        const jumped = await waitFor(() => !d.getElementById("panel-review").hidden && !d.getElementById("rv-screen").hidden, 10000).catch(() => false);
+        const res = { nextLabel, prefilled, importLabel: label, pool: Object.keys(pool.records).length, inCollection: reviewCol.getChildItems().filter((i) => i.isRegularItem()).length, runsLogged: p.runs.length, jumpedToScreening: !!jumped, status: d.getElementById("search-status").textContent };
+        if (!/Next: Find papers/.test(nextLabel || "") || !jumped || !/screening pool/.test(label) || res.pool < 3 || res.inCollection !== 0 || res.runsLogged !== 1) throw new Error(JSON.stringify(res));
         return res;
       });
 
@@ -801,6 +808,101 @@ ZR.SelfTest = (() => {
           decidedByS1: byS1.length,
         };
         if (!res.typesafeCalls || !res.questions.includes("relevant") || !res.questions.some((q) => q.startsWith("exc_")) || res.includedIntoCollection !== toInclude || res.decidedByS1 !== toExclude + toInclude) throw new Error(JSON.stringify(res));
+        return res;
+      });
+
+      await step("screening card: decisions on top, tinted criteria, search terms, highlights with a note → Zotero", async () => {
+        const d = rv();
+        // a paper with an abstract long enough to highlight in
+        const cands = rw.App.panels.review.candidates;
+        const target = cands.find((c) => !c.ta && (c.abstract || "").length > 200);
+        if (!target) throw new Error("no undecided paper with an abstract");
+        d.querySelector(`#queue .q-item[data-key="${target.key}"]`).click();
+        await waitFor(() => d.querySelector("#screen-card .abstract span[data-o]"), 5000);
+        const card = d.querySelector("#screen-card .paper-card");
+        const order = [...card.children].map((n) => n.className.split(" ")[0]);
+        const decideFirst = order.indexOf("decide") < order.indexOf("s1-box");
+        const tinted = [...card.querySelectorAll(".crit")].filter((r) => /v-(inc|may|exc)/.test(r.className)).length;
+        const abs = card.querySelector(".abstract");
+        const cs = rw.getComputedStyle(abs);
+        const style = { textAlign: cs.textAlign, hyphens: cs.hyphens }; // read now: the card is re-rendered below
+        const kwMarks = card.querySelectorAll(".kw").length;
+        const foundBy = card.querySelector(".found-by")?.textContent || "";
+        // select a passage and right-click it
+        const span = [...abs.querySelectorAll("span[data-o]")].find((s) => s.textContent.length > 40) || abs.querySelector("span[data-o]");
+        const range = d.createRange();
+        range.setStart(span.firstChild, 5);
+        range.setEnd(span.firstChild, Math.min(span.firstChild.length, 35));
+        const quote = range.toString().trim();
+        d.getSelection().removeAllRanges();
+        d.getSelection().addRange(range);
+        const rect = span.getBoundingClientRect();
+        span.dispatchEvent(new rw.MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: rect.left + 20, clientY: rect.top + 5 }));
+        const menu = await waitFor(() => d.querySelector(".ctx-menu"), 3000);
+        const menuItems = [...menu.querySelectorAll(".ctx-item")].map((b) => b.textContent);
+        await shot(rw, "11a-highlight-menu.png");
+        menu.querySelector('.ctx-item[data-kind="include"]').click();
+        const mark = await waitFor(() => d.querySelector("#screen-card .abstract .hl-include"), 5000);
+        // right-click the highlight to add a note
+        const r2 = mark.getBoundingClientRect();
+        mark.dispatchEvent(new rw.MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: r2.left + 4, clientY: r2.top + 4 }));
+        const menu2 = await waitFor(() => d.querySelector(".ctx-menu"), 3000);
+        [...menu2.querySelectorAll(".ctx-item")].find((b) => /note/i.test(b.textContent)).click();
+        const pop = await waitFor(() => d.querySelector(".note-pop textarea"), 3000);
+        pop.value = "Reports a concrete IFC 5 milestone";
+        d.querySelector(".note-pop .primary").click();
+        await waitFor(() => d.querySelector("#screen-card .hl-notetext"), 5000);
+        await shot(rw, "11b-highlight-note.png");
+        const pool = await ZR.Projects.loadPool(libraryID, reviewProject.id);
+        const stored = pool.notes?.[target.key] || [];
+        // one sentence per paragraph (Settings)
+        ZR.Prefs.set("abstractSentences", true);
+        d.querySelector(`#queue .q-item[data-key="${target.key}"]`).click();
+        const sentences = await waitFor(() => d.querySelectorAll("#screen-card .abstract p.sentence").length, 5000).catch(() => 0);
+        ZR.Prefs.set("abstractSentences", false);
+        // including the paper takes the highlights into Zotero
+        d.querySelector(`#queue .q-item[data-key="${target.key}"]`).click();
+        await U.sleep(200);
+        key("i");
+        const note = await waitFor(() => {
+          const c = rw.App.panels.review.candidates.find((x) => x.key === target.key);
+          const item = c?.itemID && Zotero.Items.get(c.itemID);
+          return item && item.getNotes().map((id) => Zotero.Items.get(id)).find((n) => n.hasTag("zr:highlights"));
+        }, 20000);
+        const html = note.getNote();
+        const res = {
+          decideFirst,
+          tinted,
+          textAlign: style.textAlign,
+          hyphens: style.hyphens,
+          lang: abs.getAttribute("lang"),
+          kwMarks,
+          foundBy: foundBy.slice(0, 120),
+          menuItems,
+          quote,
+          stored: stored.map((h) => [h.kind, h.text, h.note]),
+          sentences,
+          noteInZotero: html.includes("Screening highlights") && html.includes("IFC 5 milestone"),
+        };
+        if (!decideFirst || !tinted || style.textAlign !== "justify" || !kwMarks || stored.length !== 1 || stored[0].note !== "Reports a concrete IFC 5 milestone" || sentences < 2 || !res.noteInZotero) throw new Error(JSON.stringify(res));
+        return res;
+      });
+
+      await step("activity log: web, AI and System 1 calls with timing and details", async () => {
+        const d = rv();
+        d.querySelector("#panel-review .log-btn").click();
+        const panel = await waitFor(() => d.getElementById("log-panel"), 3000);
+        const kinds = [...new Set([...panel.querySelectorAll(".log-kind")].map((k) => k.textContent))];
+        const rows = panel.querySelectorAll(".log-row").length;
+        panel.querySelector(".log-row").click();
+        const detail = await waitFor(() => panel.querySelector(".log-detail")?.textContent, 3000);
+        [...panel.querySelectorAll(".seg button")].find((b) => b.textContent === "AI").click();
+        await U.sleep(100);
+        const aiRows = panel.querySelectorAll(".log-row").length;
+        await shot(rw, "11c-activity-log.png");
+        rw.App.closeLog();
+        const res = { rows, kinds, aiRows, detail: detail.slice(0, 120) };
+        if (!rows || !kinds.includes("web") || !aiRows) throw new Error(JSON.stringify(res));
         return res;
       });
 

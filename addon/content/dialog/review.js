@@ -37,7 +37,9 @@ App.panels.review = (() => {
     $("rv-fill").addEventListener("click", fillWithAI);
     $("rv-description").addEventListener("keydown", (e) => e.key === "Enter" && (e.ctrlKey || e.metaKey) && !App.busy && fillWithAI());
     $("rv-save").addEventListener("click", saveProtocol);
+    $("rv-next").addEventListener("click", () => nextStage() && go(nextStage()));
     $("rv-add-search").addEventListener("click", () => {
+      App.reviewFlow = true; // adding to the pool continues with screening
       App.panels.search.loadProject();
       App.showTab("search");
     });
@@ -194,9 +196,22 @@ App.panels.review = (() => {
     return draft;
   }
 
+  const nextStage = () => {
+    const stages = method()?.stages || [];
+    return stages[stages.indexOf(step) + 1] || null;
+  };
+
+  function renderNext() {
+    const next = nextStage();
+    const saved = protocolFilled(project().protocol) && draft?.methodology === project().methodology;
+    $("rv-next").hidden = !next || !saved;
+    if (next) $("rv-next").textContent = `Next: ${ZR.Methodologies.STAGES[next].label} →`;
+  }
+
   function renderProtocol() {
     ensureDraft();
     renderMethods();
+    renderNext();
     setProtocolMode(protocolMode || (protocolFilled(draft.protocol) ? "form" : "describe"));
   }
 
@@ -223,9 +238,10 @@ App.panels.review = (() => {
           el("small", { text: m.stages.slice(1, -1).map((s) => ZR.Methodologies.STAGES[s].label).join(" → ") }),
         ])
       ),
-      collapsed ? el("button", { class: "link method-change", text: "Change methodology…", onclick: () => ((draft.showAll = true), renderMethods()) }) : null
+      ...(collapsed ? [el("button", { class: "link method-change", text: "Change methodology…", onclick: () => ((draft.showAll = true), renderMethods()) })] : [])
     );
     $("rv-method-current").textContent = draft.methodology !== project().methodology ? "Changed — save the protocol to apply it." : "";
+    renderNext();
   }
 
   function chooseMethod(id) {
@@ -885,6 +901,7 @@ App.panels.review = (() => {
   function renderCard(c) {
     const box = $("screen-card");
     box.replaceChildren();
+    PaperView.closeMenu();
     const s = dstage();
     if (!c) {
       const pop = population();
@@ -909,18 +926,44 @@ App.panels.review = (() => {
     const pre = c.reason || (sg?.d === "exclude" && sg.r) || s1r || "";
     if (pre && !reasons.includes(pre)) reasons.push(pre);
     const current = c[s];
-    const reasonSel = el("select", { id: "reason-select", title: "Exclusion reason (keys 1–9)" }, reasons.map((r, i) => el("option", { value: r, text: `${i + 1}. ${ZR.Util.truncate(r, 60)}`, title: r, selected: r === pre })));
+    const reasonSel = el("select", { id: "reason-select", title: "Exclusion reason (keys 1–9)" }, reasons.map((r, i) => el("option", { value: r, text: `${i + 1}. ${ZR.Util.truncate(r, 70)}`, title: r, selected: r === pre })));
     const link = c.doi ? "https://doi.org/" + c.doi : c.record?.url || "";
+    const showTerms = ZR.Prefs.get("showQueryTerms", true);
+    const terms = showTerms ? termsOfProject() : [];
+    const kw = (text, field) => PaperView.termRanges(text, terms, field).map((r) => ({ start: r.start, end: r.end, cls: "kw", title: `search term: ${r.term}` }));
+
+    const title = el("h2");
+    PaperView.render(title, c.title || "(untitled)", kw(c.title, "title"));
+    const authors = el("span");
+    PaperView.render(authors, c.authors || "", kw(c.authors, "author"));
+
     box.append(
       el("div", { class: "paper-card" }, [
-        el("h2", { text: c.title || "(untitled)" }),
-        el("div", { class: "meta", text: [c.authors, c.year, c.venue].filter(Boolean).join(" · ") }),
+        title,
+        el("div", { class: "meta" }, [authors, [c.year, c.venue].filter(Boolean).map((x) => " · " + x).join("")]),
         el("div", { class: "actions" }, [
           link ? el("button", { class: "link", text: c.doi ? "doi:" + c.doi : "web page ↗", onclick: () => Zotero.launchURL(link) }) : null,
           c.itemID
             ? el("button", { class: "link", text: "Show in Zotero", onclick: () => App.ZR.UI.revealItem(c.itemID, { preferCollectionID: App.target.collectionID }) })
             : el("span", { class: "tag", text: "in the pool — added to Zotero when included", title: "Pool papers stay outside your library until they pass screening" }),
           s === "ft" && c.itemID ? pdfButton(c) : null,
+          el("span", { class: "spacer" }),
+          el("button", {
+            class: "toggle",
+            "aria-pressed": String(showTerms),
+            title: "Mark where the search terms of this project occur in title, authors and abstract",
+            text: "Search terms",
+            onclick: () => (ZR.Prefs.set("showQueryTerms", !showTerms), renderScreen()),
+          }),
+        ]),
+        el("div", { class: "decide" }, [
+          el("button", { class: "inc" + (current === "include" ? " on" : ""), onclick: () => decide(c, "include") }, ["Include", el("kbd", { text: "I" })]),
+          s === "ta" ? el("button", { class: "may" + (current === "maybe" ? " on" : ""), onclick: () => decide(c, "maybe") }, ["Maybe", el("kbd", { text: "M" })]) : null,
+          el("button", { class: "exc" + (current === "exclude" ? " on" : ""), onclick: () => decide(c, "exclude", reasonSel.value) }, ["Exclude", el("kbd", { text: "E" })]),
+          reasonSel,
+          el("span", { class: "spacer" }),
+          current ? el("button", { class: "link", text: `undo${c.by === "s1" ? " (System 1)" : c.by === "llm" ? " (AI)" : ""}`, onclick: () => decide(c, null) }) : null,
+          el("span", { class: "hint", text: "↑/↓ move" }),
         ]),
         dupBox(c, s),
         s1Box(c, s),
@@ -932,18 +975,117 @@ App.panels.review = (() => {
               el("button", { text: "Accept", onclick: () => decide(c, sg.d, sg.r, "llm") }),
             ])
           : null,
-        el("div", { class: "abstract", text: c.abstract || "No abstract available. Open the paper, or use “Fix metadata” in the Selected items tab once it is in Zotero." }),
-        el("div", { class: "decide" }, [
-          el("button", { class: "inc" + (current === "include" ? " on" : ""), onclick: () => decide(c, "include") }, ["Include", el("kbd", { text: "I" })]),
-          s === "ta" ? el("button", { class: "may" + (current === "maybe" ? " on" : ""), onclick: () => decide(c, "maybe") }, ["Maybe", el("kbd", { text: "M" })]) : null,
-          el("button", { class: "exc" + (current === "exclude" ? " on" : ""), onclick: () => decide(c, "exclude", reasonSel.value) }, ["Exclude", el("kbd", { text: "E" })]),
-          reasonSel,
-          el("span", { class: "spacer" }),
-          current ? el("button", { class: "link", text: `undo${c.by === "s1" ? " (System 1)" : c.by === "llm" ? " (AI)" : ""}`, onclick: () => decide(c, null) }) : null,
-          el("span", { class: "hint", text: "↑/↓ move" }),
-        ]),
+        foundBy(c, terms),
+        abstractView(c, kw),
+        highlightList(c),
       ])
     );
+  }
+
+  // ---------------------------------------------------------- reading the abstract ----
+  let termsCache = { id: null, runs: -1, query: null, terms: [] };
+  function termsOfProject() {
+    const p = project();
+    if (termsCache.id !== p.id || termsCache.runs !== (p.runs || []).length || termsCache.query !== p.protocol?.query) {
+      termsCache = { id: p.id, runs: (p.runs || []).length, query: p.protocol?.query, terms: PaperView.queryTerms(p) };
+    }
+    return termsCache.terms;
+  }
+
+  /** Which search terms occur where — "why is this paper here?" */
+  function foundBy(c, terms) {
+    if (!terms.length) return null;
+    const where = terms.map((t) => ({
+      t,
+      fields: [
+        ["title", c.title],
+        ["abstract", c.abstract],
+        ["author", c.authors],
+      ]
+        .filter(([f, text]) => PaperView.termRanges(text, [t], f).length)
+        .map(([f]) => f),
+    }));
+    const hit = where.filter((w) => w.fields.length);
+    const miss = where.filter((w) => !w.fields.length);
+    return el("div", { class: "found-by" }, [
+      el("span", { class: "hint", text: hit.length ? "Search terms here:" : "No search term in title, authors or abstract" }),
+      ...hit.map((w) => el("span", { class: "kw-chip", title: `found in ${w.fields.join(", ")}` }, [el("b", { text: w.t.text }), " " + w.fields.join(", ")])),
+      miss.length
+        ? el("span", { class: "hint", title: "These terms of your searches do not occur here — the database may have matched keywords or the full text, or the paper came from another alternative of an OR", text: ` · not here: ${miss.map((w) => w.t.text).join(", ")}` })
+        : null,
+    ]);
+  }
+
+  function abstractView(c, kw) {
+    const text = c.abstract || "";
+    if (!text) return el("div", { class: "abstract empty", text: "No abstract available. Open the paper, or use “Fix metadata” in the Selected items tab once it is in Zotero." });
+    const lang = ZR.Records.normLang(c.language || "") || (/\b(und|der|die|das|mit)\b/.test(text) ? "de" : "en");
+    const abs = el("div", { class: "abstract", lang });
+    const marks = (c.highlights || []).map((h) => ({ start: h.start, end: h.end, cls: `hl hl-${h.kind}`, title: h.note ? `${h.kind}: ${h.note}` : h.kind, attrs: { "data-hl": h.id } }));
+    PaperView.render(abs, text, [...kw(text, "abstract"), ...marks], { paragraphs: ZR.Prefs.get("abstractSentences", false) });
+    abs.addEventListener("contextmenu", (e) => {
+      const onMark = e.target.closest?.("[data-hl]");
+      const sel = PaperView.selection(abs, text);
+      if (!sel && !onMark) return; // the normal menu (copy, …)
+      e.preventDefault();
+      const items = [];
+      if (sel) {
+        for (const k of ["include", "maybe", "exclude"]) items.push({ kind: k, label: `Highlight: speaks for ${k === "maybe" ? "maybe" : k === "include" ? "inclusion" : "exclusion"}`, run: () => addHighlight(c, sel, k) });
+        items.push("-", { kind: "note", label: "Highlight with a note…", run: () => PaperView.editNote(e.clientX, e.clientY, "", (note) => addHighlight(c, sel, "note", note)) });
+      } else {
+        const h = c.highlights.find((x) => x.id === onMark.dataset.hl);
+        if (!h) return;
+        items.push({ label: h.note ? "Edit note…" : "Add a note…", run: () => PaperView.editNote(e.clientX, e.clientY, h.note, (note) => updateHighlight(c, h, { note })) });
+        for (const k of ["include", "maybe", "exclude", "note"]) if (k !== h.kind) items.push({ kind: k, label: `Change to ${k}`, run: () => updateHighlight(c, h, { kind: k }) });
+        items.push("-", { label: "Remove highlight", run: () => removeHighlight(c, h) });
+      }
+      PaperView.openMenu(e.clientX, e.clientY, items);
+    });
+    return el("div", { class: "abstract-wrap" }, [abs, el("div", { class: "hint abstract-hint", text: "Select text and right-click to highlight it (include / maybe / exclude) or add a note." })]);
+  }
+
+  function highlightList(c) {
+    const list = (c.highlights || []).slice().sort((a, b) => a.start - b.start);
+    if (!list.length) return null;
+    return el("div", { class: "hl-list" }, [
+      el("div", { class: "hl-head", text: `Your highlights (${list.length}) — ${c.itemID ? "kept as a note on the Zotero item" : "added to Zotero as a note when you include the paper"}` }),
+      ...list.map((h) =>
+        el("div", { class: "hl-row" }, [
+          el("span", { class: `hl hl-${h.kind} hl-quote`, text: `“${ZR.Util.truncate(h.text, 200)}”` }),
+          h.note ? el("span", { class: "hl-notetext", text: h.note }) : null,
+          el("span", { class: "spacer" }),
+          el("button", { class: "link", text: h.note ? "edit note" : "add note", onclick: (e) => PaperView.editNote(e.clientX - 240, e.clientY + 10, h.note, (note) => updateHighlight(c, h, { note })) }),
+          el("button", { class: "link", text: "remove", onclick: () => removeHighlight(c, h) }),
+        ])
+      ),
+    ]);
+  }
+
+  async function saveHighlights(c) {
+    const pool = await ZR.Projects.loadPool(libraryID(), project().id);
+    pool.notes = pool.notes || {};
+    if (c.highlights.length) pool.notes[c.key] = c.highlights;
+    else delete pool.notes[c.key];
+    await ZR.Projects.savePool(libraryID(), project().id);
+    if (c.itemID && App.target.editable) await PaperView.syncNote(c.itemID, c.title, c.highlights).catch((e) => ZR.Util.log("Highlight note failed", e.message));
+    renderScreen();
+  }
+
+  function addHighlight(c, sel, kind, note = "") {
+    c.highlights = (c.highlights || []).filter((h) => h.end <= sel.start || h.start >= sel.end); // a new mark replaces overlapping ones
+    c.highlights.push({ id: "h" + Date.now().toString(36) + Math.random().toString(36).slice(2, 5), start: sel.start, end: sel.end, text: sel.text, kind, note, at: today() });
+    document.getSelection()?.removeAllRanges();
+    return saveHighlights(c);
+  }
+
+  function updateHighlight(c, h, change) {
+    Object.assign(h, change);
+    return saveHighlights(c);
+  }
+
+  function removeHighlight(c, h) {
+    c.highlights = c.highlights.filter((x) => x !== h);
+    return saveHighlights(c);
   }
 
   function s1Box(c, s) {
@@ -959,19 +1101,23 @@ App.panels.review = (() => {
       el("div", { class: "pbar" }, el("div", { class: band(r.p), style: `width:${Math.round(r.p * 100)}%` })),
       r.criteria?.length || r.relevance != null
         ? el("div", { class: "s1-crit" }, [
+            el("div", { class: "crit crit-head" }, [el("span", { text: "" }), el("span", { text: "Question to the model" }), el("span", { text: "Yes" })]),
             r.relevance != null && r.criteria?.length ? critRow("topic", "Relevant to the review question", r.relevance) : null,
-            ...(r.criteria || []).map((k) => critRow(k.kind, k.text, k.p)),
+            ...(r.criteria || []).map((k) => critRow(k.kind, k.text, k.p, k.note)),
+            r.learned != null ? critRow("learned", `What the local model learned from your ${r.labels || ""} decisions`, r.learned) : null,
           ])
         : null,
       r.why ? el("div", { class: "hint", text: r.why }) : null,
     ]);
   }
 
-  function critRow(kind, text, p) {
-    const label = { topic: "topic", include: "meets", exclude: "excl." }[kind];
-    // for exclusion criteria a high probability is bad
-    const cls = p == null ? "" : kind === "exclude" ? (p >= 0.6 ? "lo" : p < 0.3 ? "hi" : "md") : p >= 0.6 ? "hi" : p < 0.3 ? "lo" : "md";
-    return el("div", { class: "crit" }, [el("span", { class: "crit-k", text: label }), el("span", { class: "crit-t", text }), el("span", { class: "crit-p " + cls, text: pct(p) })]);
+  /** One criterion; the row is tinted by what it says about the paper (include / maybe / exclude). */
+  function critRow(kind, text, p, note) {
+    const label = { topic: "topic", include: "meets", exclude: "excl.", learned: "you" }[kind];
+    const good = kind === "exclude" ? p != null && p < 0.3 : p != null && p >= 0.6;
+    const bad = kind === "exclude" ? p != null && p >= 0.6 : p != null && p < 0.3;
+    const verdict = p == null ? "" : good ? "v-inc" : bad ? "v-exc" : "v-may";
+    return el("div", { class: `crit ${verdict}`, title: note || "" }, [el("span", { class: "crit-k", text: label }), el("span", { class: "crit-t" }, [text, note ? el("span", { class: "hint", text: ` (${note})` }) : null]), el("span", { class: "crit-p", text: pct(p) })]);
   }
 
   function pdfButton(c) {
@@ -1007,6 +1153,7 @@ App.panels.review = (() => {
       const tag = ZR.Prefs.get("tagImported", true) ? ZR.Prefs.get("importTag", "zr:imported") : "";
       item = await ZR.Projects.importCandidate(libraryID(), p, c, tag ? [tag] : []);
       c.hasPDF = ZR.Prisma.itemHasPDF(item);
+      if (c.highlights?.length) await PaperView.syncNote(item.id, c.title, c.highlights).catch((e) => ZR.Util.log("Highlight note failed", e.message));
     }
     const r = d === "exclude" ? reason || $("reason-select")?.value || "" : "";
     await ZR.Store.decide({ libraryID: libraryID(), key: c.key, item, title: c.title, stage: s, d, r, by, collectionKey: p.collectionKey });
@@ -1345,5 +1492,8 @@ App.panels.review = (() => {
     if (f) st("Saved " + f);
   }
 
-  return { init, onShow, refresh, reset, go, get step() { return step; }, get candidates() { return cands; } };
+  /** Open this step the next time the tab is shown. */
+  const setStep = (s) => (step = s);
+
+  return { init, onShow, refresh, reset, go, setStep, get step() { return step; }, get candidates() { return cands; } };
 })();

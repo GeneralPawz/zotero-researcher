@@ -60,7 +60,18 @@ ZR.CLI = (() => {
   }
 
   /** Run a program with stdin text; resolves {stdout, stderr, exitCode}. Kills it after `timeout` ms. */
-  async function exec(path, args, input, { timeout = 180000, workdir = null } = {}) {
+  function exec(path, args, input, opts = {}) {
+    const name = String(path).split(/[\\/]/).pop();
+    return ZR.Activity.track(
+      "cli",
+      `${name} ${args.filter((a) => !a.startsWith("-") && a.length < 40).slice(0, 3).join(" ")}`.trim(),
+      `${path} ${args.map((a) => (/\s/.test(a) || !a ? JSON.stringify(a) : a)).join(" ")}\n\nInput: ${U.truncate(String(input || ""), 2000)}`,
+      () => execRaw(path, args, input, opts),
+      (r) => `exit ${r.exitCode}${r.stderr ? "\n" + U.truncate(r.stderr, 1500) : ""}`
+    );
+  }
+
+  async function execRaw(path, args, input, { timeout = 180000, workdir = null } = {}) {
     let command = path;
     let argv = args;
     // npm installs .cmd shims, which must go through cmd.exe

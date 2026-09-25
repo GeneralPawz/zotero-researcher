@@ -130,7 +130,7 @@ ZR.Projects = (() => {
   // ------------------------------------------------------ candidate pool ----
   const pools = new Map(); // `${libraryID}/${id}` -> pool
   const poolPath = (libraryID, id) => PathUtils.join(Zotero.DataDirectory.dir, "zotero-researcher", "projects", `L${libraryID}-${id}.json`);
-  const emptyPool = () => ({ records: {}, s1: {}, llm: {}, qa: {}, extract: {}, dups: {} });
+  const emptyPool = () => ({ records: {}, s1: {}, llm: {}, qa: {}, extract: {}, dups: {}, notes: {} });
 
   async function loadPool(libraryID, id) {
     const k = `${libraryID}/${id}`;
@@ -205,6 +205,7 @@ ZR.Projects = (() => {
         authors: item.getCreators().map((c) => c.lastName).filter(Boolean).slice(0, 4).join(", "),
         doi: item.getField("DOI"),
         itemType: Zotero.ItemTypes.getName(item.itemTypeID),
+        language: item.getField("language"),
         hasPDF: ZR.Prisma.itemHasPDF(item),
         ta: prior?.ta?.d || null,
         ft: prior?.ft?.d || null,
@@ -226,6 +227,7 @@ ZR.Projects = (() => {
         authors: (r.creators || []).map((c) => c.lastName || c.name).filter(Boolean).slice(0, 4).join(", "),
         doi: r.doi,
         itemType: r.itemType,
+        language: r.language,
         hasPDF: false,
         ta: prior?.ta?.d || null,
         ft: prior?.ft?.d || null,
@@ -239,6 +241,7 @@ ZR.Projects = (() => {
       c.qa = pool.qa[c.key] || null;
       c.extract = pool.extract[c.key] || null;
       c.dup = pool.dups[c.key] || null; // {of: key of the paper it duplicates, sim}
+      c.highlights = (pool.notes || {})[c.key] || []; // your marks in the abstract
     }
     return [...out.values()];
   }
