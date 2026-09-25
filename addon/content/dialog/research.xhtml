@@ -10,6 +10,7 @@
   <script src="chrome://zotero-researcher/content/dialog/research.js?v=__ZR_VERSION__"></script>
   <script src="chrome://zotero-researcher/content/dialog/items.js?v=__ZR_VERSION__"></script>
   <script src="chrome://zotero-researcher/content/dialog/reader.js?v=__ZR_VERSION__"></script>
+  <script src="chrome://zotero-researcher/content/dialog/report.js?v=__ZR_VERSION__"></script>
   <script src="chrome://zotero-researcher/content/dialog/review.js?v=__ZR_VERSION__"></script>
   <script src="chrome://zotero-researcher/content/dialog/citations.js?v=__ZR_VERSION__"></script>
   <script src="chrome://zotero-researcher/content/dialog/autopilot.js?v=__ZR_VERSION__"></script>
@@ -215,9 +216,9 @@
           <div class="queue-head">
             <select id="queue-filter">
               <option value="todo">To screen</option>
-              <option value="include">Included</option>
-              <option value="maybe">Maybe</option>
-              <option value="exclude">Excluded</option>
+              <option value="include" class="opt-include">Included</option>
+              <option value="maybe" class="opt-maybe">Maybe</option>
+              <option value="exclude" class="opt-exclude">Excluded</option>
               <option value="all">All</option>
             </select>
             <select id="queue-sort" title="Order">
@@ -258,13 +259,23 @@
 
       <!-- Report -->
       <div class="step" id="rv-report" hidden="hidden">
-        <div class="results-head">
-          <span class="hint">Computed from the logged searches and the decisions on every paper in this review.</span>
+        <div class="toolbar rp-bar">
+          <div class="seg small" id="rp-diagram" role="radiogroup" aria-label="Diagram"></div>
           <span class="spacer"></span>
-          <button id="prisma-note">Save as note</button>
-          <button id="prisma-svg">Export diagram (SVG)</button>
+          <label class="inline hint" title="The style of all diagrams: presets, your own, or made by the AI">Style <select id="rp-theme"></select></label>
+          <button id="rp-edit" class="toggle" aria-pressed="false" title="Fonts, colours, corners, lines and bands">Edit style</button>
+          <button id="rp-ai" class="toggle" aria-pressed="false" title="The AI makes a style from a journal's guidelines or a picture of an example figure">✦ Style from a journal…</button>
+          <label class="inline hint" title="Size of PNG and JPG images: 3× is about 300 dpi at the diagram's size">Image size <select id="rp-scale"><option value="1">1× (screen)</option><option value="2">2×</option><option value="3">3× (print)</option><option value="4">4×</option></select></label>
+          <button id="rp-copy" title="Copy the diagram: as an image, SVG code or LaTeX">Copy ▾</button>
+          <button id="rp-download" class="primary" title="Save the diagram as PNG, JPG, SVG or LaTeX">Download ▾</button>
+          <button id="prisma-note" title="The protocol and the flow summary as a note in the collection">Save as note</button>
         </div>
-        <div class="scroll pad"><div id="prisma-view" class="prisma-view"></div></div>
+        <div id="rp-editor" class="rp-editor" hidden="hidden"></div>
+        <div id="rp-ai-box" class="rp-ai" hidden="hidden"></div>
+        <div class="scroll pad">
+          <p class="hint rp-note">Computed from the logged searches and the decisions on every paper in this review.</p>
+          <div id="prisma-view" class="prisma-view"></div>
+        </div>
       </div>
     </div>
     <div class="statusbar"><progress id="review-progress" hidden="hidden"></progress><span id="review-status"></span><span class="spacer"></span><button class="log-btn" title="What is happening behind the scenes">Log<span class="log-count" hidden="hidden"></span></button></div>

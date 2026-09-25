@@ -18,6 +18,28 @@ function el(tag, props = {}, children = []) {
   return e;
 }
 
+/**
+ * The colour of Zotero's divider lines: from an element that draws one, else from
+ * --material-panedivider, which may be a whole border ("1px solid …"), not a colour.
+ */
+function zoteroLine(mw, mdoc, cs) {
+  for (const [sel, side] of [[".tag-selector-filter-container", "Top"], ["#zotero-collections-toolbar", "Bottom"], ["#zotero-items-toolbar", "Bottom"], ["#tab-bar-container", "Bottom"]]) {
+    const node = mdoc.querySelector(sel);
+    if (!node) continue;
+    const st = mw.getComputedStyle(node);
+    if (parseFloat(st["border" + side + "Width"]) > 0 && st["border" + side + "Style"] !== "none") return st["border" + side + "Color"];
+  }
+  const v = cs.getPropertyValue("--material-panedivider").trim();
+  if (!v) return "";
+  const probe = document.createElement("div");
+  probe.style.borderTop = /^(#|rgb|hsl|color\(|[a-z]+$)/i.test(v) ? "1px solid " + v : v;
+  if (!probe.style.borderTop) return "";
+  document.body.append(probe);
+  const c = window.getComputedStyle(probe).borderTopColor;
+  probe.remove();
+  return c;
+}
+
 const App = (window.App = {
   ZR: null,
   args: null,
@@ -282,13 +304,15 @@ const App = (window.App = {
       };
       const side = cs.getPropertyValue("--material-sidepane").trim() || paint(mdoc.getElementById("zotero-collections-pane"));
       if (side) root.setProperty("--chrome-bg", side);
-      const border = cs.getPropertyValue("--material-panedivider").trim();
-      if (border) root.setProperty("--chrome-line", border);
+      const line = zoteroLine(mw, mdoc, cs);
+      if (line) root.setProperty("--chrome-line", line);
     } catch (e) {
       /* main window closed: keep the defaults */
     }
     const f = $("rv-funnel");
     if (f?.offsetHeight) root.setProperty("--subheader-h", f.offsetHeight + "px");
+    const log = document.querySelector("#panel-review > .statusbar .log-btn");
+    if (log?.offsetWidth) root.setProperty("--log-w", log.offsetWidth + "px");
   },
 
   /** A text area as tall as its text (no scrollbar, no cut-off lines). */
@@ -589,8 +613,10 @@ const App = (window.App = {
     fp.defaultString = defaultName;
     const rv = await fp.show();
     if (rv !== fp.returnOK && rv !== fp.returnReplace) return null;
-    await Zotero.File.putContentsAsync(fp.file, content);
-    return fp.file;
+    const path = typeof fp.file === "string" ? fp.file : fp.file.path;
+    if (content instanceof Uint8Array) await IOUtils.write(path, content); // images
+    else await Zotero.File.putContentsAsync(path, content);
+    return path;
   },
 });
 

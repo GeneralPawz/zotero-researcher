@@ -81,6 +81,7 @@ var ZRDropdown = (() => {
     const sync = () => {
       const opt = select.options[select.selectedIndex];
       label.textContent = opt ? opt.textContent : "";
+      label.className = "zr-dd-label" + (opt?.className ? " " + opt.className : "");
       button.disabled = select.disabled;
       if (select.title) button.title = select.title;
       if (select.id) button.dataset.for = select.id;
@@ -133,7 +134,7 @@ var ZRDropdown = (() => {
     [...select.options].forEach((opt, i) => {
       if (opt.hidden) return;
       const item = doc.createElementNS(HTML, "div");
-      item.className = "zr-dd-item" + (i === select.selectedIndex ? " selected active" : "") + (opt.disabled ? " disabled" : "");
+      item.className = "zr-dd-item" + (i === select.selectedIndex ? " selected active" : "") + (opt.disabled ? " disabled" : "") + (opt.className ? " " + opt.className : "");
       item.setAttribute("role", "option");
       item.textContent = opt.textContent;
       item.dataset.value = opt.value;

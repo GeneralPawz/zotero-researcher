@@ -272,6 +272,23 @@ ZR.Util = (() => {
       .replace(/^, /gm, "");
   }
 
+  /** base64 → bytes (no atob in every scope the plugin runs in). */
+  function base64ToBytes(b64) {
+    const A = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+    const clean = String(b64).replace(/[^A-Za-z0-9+/]/g, "");
+    const out = new Uint8Array(Math.floor((clean.length * 3) / 4));
+    let bits = 0, acc = 0, k = 0;
+    for (const ch of clean) {
+      acc = (acc << 6) | A.indexOf(ch);
+      bits += 6;
+      if (bits >= 8) {
+        bits -= 8;
+        out[k++] = (acc >> bits) & 255;
+      }
+    }
+    return out.subarray(0, k);
+  }
+
   function truncate(s, n) {
     s = String(s ?? "");
     return s.length > n ? s.slice(0, n - 1) + "…" : s;
@@ -297,5 +314,6 @@ ZR.Util = (() => {
     mapLimit,
     truncate,
     undash,
+    base64ToBytes,
   };
 })();

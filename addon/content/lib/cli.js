@@ -223,15 +223,26 @@ ZR.CLI = (() => {
 
   /** Chat through a CLI; returns the reply text. */
   /** web: allow web search for this call (finding PDFs) - Claude: WebSearch/WebFetch tools; Codex: --search */
-  async function chat(profile, messages, { system, timeout = 180000, web = false } = {}) {
+  /** images: [{mediaType, data: base64}] - Codex gets them with -i, Claude Code reads them from its folder */
+  async function chat(profile, messages, { system, timeout = 180000, web = false, images = [] } = {}) {
     const kind = profile.provider;
     const path = profile.baseURL || (await detect(kind));
     if (!path) throw new Error(`${TOOLS[kind].label} CLI not found. Install it or set its path in the AI provider settings`);
     const dir = await tempDir();
     try {
+      const files = [];
+      for (const [i, im] of (images || []).entries()) {
+        const file = PathUtils.join(dir, `image-${i + 1}.${(im.mediaType.split("/")[1] || "png").replace("jpeg", "jpg")}`);
+        await IOUtils.write(file, U.base64ToBytes(im.data));
+        files.push(file);
+      }
       if (kind === "claude-cli") {
-        const args = ["-p", "--output-format", "json", "--tools", web ? "WebSearch,WebFetch" : "", "--no-session-persistence", "--strict-mcp-config"];
-        if (web) args.push("--allowedTools", "WebSearch,WebFetch");
+        const tools = [...(web ? ["WebSearch", "WebFetch"] : []), ...(files.length ? ["Read"] : [])].join(",");
+        const args = ["-p", "--output-format", "json", "--tools", tools, "--no-session-persistence", "--strict-mcp-config"];
+        if (tools) args.push("--allowedTools", tools);
+        if (files.length) messages = [...messages.slice(0, -1), { role: messages.at(-1).role, content: `${messages.at(-1).content}
+
+The example image${files.length > 1 ? "s are" : " is"} at: ${files.join(", ")} (read ${files.length > 1 ? "them" : "it"} with the Read tool).` }];
         if (profile.model) args.push("--model", profile.model);
         if (system) args.push("--system-prompt", system);
         const r = await exec(path, args, transcript(messages, system, false), { timeout, workdir: dir });
@@ -248,6 +259,7 @@ ZR.CLI = (() => {
         const outFile = PathUtils.join(dir, "reply.txt");
         const args = ["exec", "--skip-git-repo-check", "--ephemeral", "--sandbox", "read-only", "--color", "never", "-C", dir, "-o", outFile];
         if (web) args.push("--search");
+        for (const file of files) args.push("-i", file);
         if (profile.model) args.push("-m", profile.model);
         args.push("-");
         const r = await exec(path, args, transcript(messages, system, true), { timeout, workdir: dir });
