@@ -9,6 +9,17 @@ ZR.Activity = (() => {
   const listeners = new Set();
   let seq = 0;
 
+  /** Thrown into running work when you stop it. */
+  class Stopped extends Error {
+    constructor(msg = "Stopped by you") {
+      super(msg);
+      this.name = "Stopped";
+      this.stopped = true;
+    }
+  }
+  // While stopping, new requests and CLI runs are refused, so loops wind down fast
+  let stopping = false;
+
   const emit = () => {
     for (const fn of listeners) {
       try {
@@ -46,11 +57,12 @@ ZR.Activity = (() => {
     end(id, { ok: true });
   }
 
-  /** Run fn inside an entry; errors are recorded and re-thrown. */
+  /** Run fn inside an entry; errors are recorded and re-thrown. fn(setCancel) may register how to cancel it. */
   async function track(kind, label, detail, fn, describe = (r) => "") {
     const id = start(kind, label, detail);
+    const entry = entries.find((x) => x.id === id);
     try {
-      const r = await fn();
+      const r = await fn((cancel) => entry && (entry.cancel = cancel));
       end(id, { ok: true, result: describe(r) });
       return r;
     } catch (e) {
@@ -64,16 +76,54 @@ ZR.Activity = (() => {
   /** Wrap the HTTP transport so every request shows up in the log. */
   function wrapHTTP(http) {
     return async (method, url, options = {}) => {
+      if (stopping) throw new Stopped();
       const short = String(url).replace(/([?&](key|api_key|apikey|token|mailto)=)[^&]+/gi, "$1…").replace(/^https?:\/\//, "");
       const body = options.body && typeof options.body === "object" ? JSON.stringify(options.body) : options.body || "";
       return track(
         LOCAL.test(url) ? "local" : "web",
         `${method} ${short.length > 110 ? short.slice(0, 110) + "…" : short}`,
         body ? "Request: " + body.slice(0, 1500) : "",
-        () => http(method, url, options),
+        (setCancel) =>
+          http(
+            method,
+            url,
+            Object.assign({}, options, {
+              cancellerReceiver: (cancel) => {
+                setCancel(cancel);
+                options.cancellerReceiver?.(cancel);
+              },
+            })
+          ).catch((e) => {
+            throw stopping ? new Stopped() : e;
+          }),
         (r) => `HTTP ${r.status} · ${r.text.length.toLocaleString()} bytes` + (r.text ? "\n" + r.text.slice(0, 1200) : "")
       );
     };
+  }
+
+  /** Cancel one running entry (a request or a CLI run). */
+  function cancel(id) {
+    const e = entries.find((x) => x.id === id);
+    if (!e || e.ended || !e.cancel) return false;
+    try {
+      e.cancel();
+    } catch (err) {
+      /* already finished */
+    }
+    return true;
+  }
+
+  /** Stop everything: cancel what runs and refuse new requests until resume(). */
+  function stopAll() {
+    stopping = true;
+    let n = 0;
+    for (const e of entries) if (!e.ended && cancel(e.id)) n++;
+    emit();
+    return n;
+  }
+
+  function resume() {
+    stopping = false;
   }
 
   const running = () => entries.filter((e) => !e.ended);
@@ -93,5 +143,5 @@ ZR.Activity = (() => {
       .join("\n");
   }
 
-  return { start, end, note, track, wrapHTTP, running, list, subscribe, clear, text };
+  return { start, end, note, track, wrapHTTP, running, list, subscribe, clear, text, cancel, stopAll, resume, Stopped, get stopping() { return stopping; } };
 })();

@@ -611,3 +611,15 @@ body.ap-open #panel-review, body.ap-open #panel-search { margin-right: 400px; }
 .ap-row input[type="number"] { width: 90px; }
 .np-ap-fields { display: flex; flex-direction: column; gap: 6px; padding-left: 26px; }
 .np-ap-fields textarea, .np-ap-fields select { width: 100%; }
+
+/* ---------- stopping ---------- */
+.log-stop { margin-left: 8px; font-size: 10px; padding: 0 7px; border-color: var(--bad); color: var(--bad); border-radius: 8px; }
+.log-stop:hover { background: var(--bad) !important; color: #fff; }
+
+.ap-search-modal { width: min(760px, calc(100vw - 40px)); max-height: calc(100vh - 40px); display: flex; flex-direction: column; }
+.ap-search-body { overflow: auto; display: flex; flex-direction: column; gap: 10px; padding-right: 4px; }
+.ap-sec { display: flex; flex-direction: column; gap: 5px; }
+.ap-check { display: flex; align-items: center; gap: 6px; font-size: 12.5px; }
+.ap-inline { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; }
+.ap-sources.ap-missing { outline: 2px solid var(--bad); border-radius: 6px; }
+.ap-head button { white-space: nowrap; }

@@ -133,6 +133,12 @@ ZR.SelfTest = (() => {
 
   function mockLLM(realHTTP, calls, tsCalls = []) {
     return async (method, url, o = {}) => {
+      if (mockLLM.delayMs && url.startsWith(MOCK)) {
+        await new Promise((resolve, reject) => {
+          const t = setTimeout(resolve, mockLLM.delayMs);
+          o.cancellerReceiver?.(() => (clearTimeout(t), reject(Object.assign(new Error("cancelled"), { status: 0 }))));
+        });
+      }
       if (url === "https://api.typesafe.ai/v1/systemone") return mockTypeSafe(o, tsCalls);
       if (url.startsWith(MOCK_EMBED)) return mockEmbed(url, o);
       if (!url.startsWith(MOCK)) return realHTTP(method, url, o);
@@ -694,7 +700,7 @@ ZR.SelfTest = (() => {
     const realHTTP = ZR.http;
     const llmCalls = [];
     const tsCalls = [];
-    ZR.http = mockLLM(realHTTP, llmCalls, tsCalls);
+    ZR.http = ZR.Activity.wrapHTTP(mockLLM(ZR.Util.zoteroHTTP, llmCalls, tsCalls));
     if (!ZR.Prefs.get("selftestOllama", false)) ZR.Prefs.set("embedURL", MOCK_EMBED);
     ZR.Prefs.setLLMProfiles([{ id: "mock", name: "Mock AI", provider: "custom", baseURL: MOCK, model: "mock-1", temperature: "" }]);
     ZR.Prefs.set("activeLLMProfile", "mock");
@@ -1173,6 +1179,39 @@ ZR.SelfTest = (() => {
         return res;
       });
 
+      await step("autopilot: Stop now cancels a running AI call at once; Resume restarts the step", async () => {
+        const col = new Zotero.Collection({ name: "zr-stop", libraryID });
+        await col.saveTx();
+        const proj = await ZR.Projects.create(libraryID, { name: "Stop test", kind: "review", collectionKey: col.key, methodology: "prisma2020" });
+        await zp.collectionsView.selectCollection(col.id);
+        await U.sleep(300);
+        const sw = await openResearch(win, { tab: "find", itemIDs: [] });
+        const d = sw.document;
+        mockLLM.delayMs = 60000; // the AI takes "forever"
+        sw.App.showTab("review");
+        await waitFor(() => sw.App.project?.id === proj.id, 5000);
+        sw.Autopilot.start({ profileID: "mock", question: "How is IFC used for BIM data exchange?", stage: "protocol" });
+        const running = await waitFor(() => ZR.Activity.running().find((e) => /mock-llm/.test(e.label)), 15000);
+        const stopButton = await waitFor(() => !d.getElementById("ap-stop").hidden && d.getElementById("ap-stop"), 5000);
+        await shot(sw, "13d-autopilot-stopping.png");
+        const t0 = Date.now();
+        stopButton.click();
+        await waitFor(() => [...d.querySelectorAll("#ap-log .ap-msg")].some((m) => /Stopped during/.test(m.textContent)), 10000);
+        const stoppedMs = Date.now() - t0;
+        const stillRunning = ZR.Activity.running().filter((e) => /mock-llm/.test(e.label)).length;
+        const afterStop = { stage: sw.App.project.autopilot.stage, on: sw.App.project.autopilot.on, resumeVisible: !d.getElementById("ap-resume").hidden, protocolFilled: !!sw.App.project.protocol?.inclusion?.length };
+        // resume: the same step runs again, now with a responsive AI
+        mockLLM.delayMs = 0;
+        d.getElementById("ap-resume").click();
+        const askLine = await waitFor(() => d.querySelector('#ap-prompt [data-choice="go"]') && d.querySelector("#ap-prompt .ap-ask-line").textContent, 30000);
+        d.querySelector('#ap-prompt [data-choice="pause"]').click();
+        await waitFor(() => !sw.Autopilot.isRunning(), 10000);
+        sw.close();
+        const res = { cancelledCall: running.label.slice(0, 60), stoppedMs, stillRunning, afterStop, resumedTo: askLine.slice(0, 60) };
+        if (stoppedMs > 5000 || stillRunning || afterStop.stage !== "protocol" || !afterStop.on || !afterStop.resumeVisible || afterStop.protocolFilled || !/protocol/i.test(askLine)) throw new Error(JSON.stringify(res));
+        return res;
+      });
+
       await step("autopilot: an AI runs a new review end to end, asking at every decision", async () => {
         const aw = await openResearch(win, { tab: "find", itemIDs: [] });
         const d = aw.document;
@@ -1197,7 +1236,7 @@ ZR.SelfTest = (() => {
           if (p?.autopilot?.finished) break;
           const plan = d.getElementById("ap-search-layer");
           if (plan) {
-            prompts.push("search plan: " + [...plan.querySelectorAll(".ap-sources input:checked")].map((i) => i.value).join(","));
+            prompts.push("search plan: " + [...plan.querySelectorAll(".ap-sources input:checked")].map((i) => i.value).join(",") + ` · pdfs ${plan.querySelector("#ap-s-pdfs").checked} · languages ${plan.querySelectorAll("#ap-s-langs .pick").length} · types ${plan.querySelectorAll("#ap-s-types .pick").length} · options ${plan.querySelectorAll(".ap-check input").length}`);
             if (!shotTaken) {
               await shot(aw, "13a-autopilot-search-plan.png");
               shotTaken = true;
