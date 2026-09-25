@@ -44,6 +44,8 @@ Installed copies update themselves from this repository:
 
    If the version hasn't changed, it publishes nothing.
 
+GitHub caches `updates.json` for up to 5 minutes, so a brand-new release can take that long to show up in *Check for updates*.
+
 To test the whole update path locally, run `npm run e2e -- --update`. It installs an old build (0.0.1) in a throwaway Zotero, clicks *Check for updates*, and checks that the published release gets installed.
 
 ## Where it shows up
