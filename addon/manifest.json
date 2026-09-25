@@ -1,0 +1,20 @@
+{
+  "manifest_version": 2,
+  "name": "Zotero Researcher",
+  "version": "0.2.1",
+  "description": "Find papers for a collection in scholarly databases (boolean or AI-assisted), screen them PRISMA-style, link citations as related items, fetch PDFs and fix sparse metadata.",
+  "author": "Friedrich Schroedter",
+  "icons": {
+    "48": "content/icons/researcher.svg",
+    "96": "content/icons/researcher.svg"
+  },
+  "applications": {
+    "zotero": {
+      "id": "zotero-researcher@zotero-plugin",
+      "update_url": "https://raw.githubusercontent.com/GeneralPawz/zotero-researcher/release/updates.json",
+      "strict_min_version": "7.0",
+      "strict_max_version": "10.*"
+    }
+  },
+  "homepage_url": "https://github.com/GeneralPawz/zotero-researcher"
+}

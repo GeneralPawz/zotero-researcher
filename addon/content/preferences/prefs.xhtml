@@ -1,0 +1,77 @@
+<vbox id="zr-prefs" class="main-section" xmlns="http://www.mozilla.org/keymaster/gatekeeper/there.is.only.xul" xmlns:html="http://www.w3.org/1999/xhtml">
+  <groupbox>
+    <label><html:h2>Getting started</html:h2></label>
+    <html:div id="zr-checklist" class="zr-checklist"></html:div>
+    <html:div class="zr-grid">
+      <html:label for="zr-email">Your e-mail</html:label>
+      <html:div>
+        <html:input id="zr-email" type="email" size="32" preference="extensions.zotero-researcher.email" placeholder="you@university.edu"/>
+        <html:div class="zr-help">Sent only to Crossref, OpenAlex, PubMed and Unpaywall, as they ask. Needed to find open-access PDFs via Unpaywall.</html:div>
+      </html:div>
+    </html:div>
+    <html:div class="zr-actions"><html:button id="zr-replay-tour">Replay the introduction tour</html:button></html:div>
+  </groupbox>
+
+  <groupbox>
+    <label><html:h2>Research areas</html:h2></label>
+    <html:p class="zr-help">Only databases from the areas you tick are offered when searching. Multidisciplinary databases are always available.</html:p>
+    <html:div id="zr-areas" class="zr-areas"></html:div>
+  </groupbox>
+
+  <groupbox>
+    <label><html:h2>AI providers</html:h2></label>
+    <html:p class="zr-help">Optional. Add one or more AI models and choose the active one — used to turn descriptions into queries, rate and screen papers, compare papers and read PDFs for metadata. Keys are stored in Zotero’s encrypted password store. Local models (Ollama, LM Studio) need no key.</html:p>
+    <html:div id="zr-llm-list"></html:div>
+    <html:div id="zr-llm-editor"></html:div>
+  </groupbox>
+
+  <groupbox>
+    <label><html:h2>Databases</html:h2></label>
+    <html:p class="zr-help">Tick the databases to search by default and add API keys where needed. <html:b>free</html:b> works right away, <html:b>free key</html:b> needs a free registration, <html:b>paid</html:b> needs a subscription or institutional access.</html:p>
+    <html:div id="zr-src-toolbar" class="zr-src-toolbar"></html:div>
+    <html:div id="zr-src-table"></html:div>
+  </groupbox>
+
+  <groupbox>
+    <label><html:h2>Your data</html:h2></label>
+    <html:p class="zr-help">Your judgements stay in your Zotero library — not in the plugin — so they sync (group members share them) and survive uninstalling: tags on papers (<html:code>zr:include</html:code>, <html:code>zr:exclude</html:code>, <html:code>zr:why:…</html:code>, <html:code>zr:unscreened</html:code>) plus one note per library called “Zotero Researcher — data ledger” for papers you judged but did not add, review setups, search logs and citation directions.</html:p>
+    <html:div class="zr-actions"><html:button id="zr-show-ledger">Show the data ledger note</html:button><html:span id="zr-ledger-status" class="zr-help"></html:span></html:div>
+  </groupbox>
+
+  <groupbox>
+    <label><html:h2>Updates</html:h2></label>
+    <html:p class="zr-help">New versions are published on GitHub (release branch). Zotero also checks automatically about once a day; your settings, keys and library data are kept when updating.</html:p>
+    <html:div class="zr-actions">
+      <html:span id="zr-version"></html:span>
+      <html:button id="zr-check-updates">Check for updates</html:button>
+      <html:span id="zr-update-status" class="zr-status"></html:span>
+    </html:div>
+  </groupbox>
+
+  <groupbox>
+    <label><html:h2>Advanced</html:h2></label>
+    <html:details class="zr-details">
+      <html:summary>Defaults for new searches</html:summary>
+      <html:div class="zr-grid">
+        <html:label for="zr-max">Results per database</html:label>
+        <html:input id="zr-max" type="number" min="1" max="500" preference="extensions.zotero-researcher.maxPerSource"/>
+        <html:label for="zr-mode">Start in</html:label>
+        <menulist id="zr-mode" preference="extensions.zotero-researcher.defaultMode" native="true">
+          <menupopup>
+            <menuitem value="structured" label="Keywords mode"/>
+            <menuitem value="llm" label="Describe-it (AI) mode"/>
+          </menupopup>
+        </menulist>
+        <html:label for="zr-minscore">Pre-select AI scores from</html:label>
+        <html:input id="zr-minscore" type="number" min="0" max="10" preference="extensions.zotero-researcher.llmScreeningMinScore"/>
+        <html:label for="zr-tag">Tag for added papers</html:label>
+        <html:input id="zr-tag" type="text" size="20" preference="extensions.zotero-researcher.importTag"/>
+      </html:div>
+      <checkbox label="Download PDFs when adding papers" preference="extensions.zotero-researcher.attachPDFs"/>
+      <checkbox label="Only keep added papers when a PDF was found" preference="extensions.zotero-researcher.fulltextOnly"/>
+      <checkbox label="Tag added papers" preference="extensions.zotero-researcher.tagImported"/>
+      <checkbox label="Save a search log note with every addition" preference="extensions.zotero-researcher.searchProtocolNote"/>
+      <checkbox label="When fixing metadata, also pre-select replacing filled-in values" preference="extensions.zotero-researcher.enrichOverwrite"/>
+    </html:details>
+  </groupbox>
+</vbox>

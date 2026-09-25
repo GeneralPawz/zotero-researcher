@@ -1,0 +1,570 @@
+/* global Zotero, document, window, ChromeUtils */
+"use strict";
+
+// Researcher window: shell + Search tab. Other tabs live in items.js, review.js,
+// citations.js; the guided tour in tour.js. All engine code is in Zotero.Researcher.
+
+const $ = (id) => document.getElementById(id);
+
+function el(tag, props = {}, children = []) {
+  const e = document.createElement(tag);
+  for (const [k, v] of Object.entries(props)) {
+    if (k === "class") e.className = v;
+    else if (k === "text") e.textContent = v;
+    else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
+    else if (v !== false && v != null) e.setAttribute(k, v === true ? "" : v);
+  }
+  for (const c of [].concat(children)) if (c != null && c !== false) e.append(c);
+  return e;
+}
+
+const App = (window.App = {
+  ZR: null,
+  args: null,
+  target: null,
+  review: null, // PRISMA review config when the target collection is a review
+  busy: false,
+  panels: {}, // name -> {init(), onShow()}
+  currentTab: "search",
+
+  status(which, msg) {
+    const s = $(`${which}-status`);
+    if (s) s.textContent = msg;
+  },
+
+  setBusy(which, on) {
+    App.busy = on;
+    for (const b of document.querySelectorAll("button[data-busy]")) b.disabled = on;
+    for (const id of ["run", "import", "fix-meta", "fix-meta-ai", "find-pdfs", "find-related", "compare-run", "apply-all", "cite-scan", "cite-missing", "ai-suggest", "ai-accept", "rv-create"]) {
+      const b = $(id);
+      if (b) b.disabled = on || (b.dataset.disabledReason ? true : false);
+    }
+    for (const p of document.querySelectorAll("progress")) p.hidden = !(on && p.id.startsWith(which));
+  },
+
+  showTab(name) {
+    App.currentTab = name;
+    for (const b of document.querySelectorAll(".tab")) b.classList.toggle("active", b.dataset.tab === name);
+    for (const p of ["search", "review", "items", "citations"]) $("panel-" + p).hidden = p !== name;
+    App.panels[name]?.onShow?.();
+  },
+
+  profiles() {
+    return App.ZR.Prefs.getLLMProfiles();
+  },
+
+  fillProfileSelect(select) {
+    const profiles = App.profiles();
+    const active = App.ZR.Prefs.getActiveLLMProfile();
+    select.replaceChildren();
+    if (!profiles.length) select.append(el("option", { value: "", text: "No AI set up yet" }));
+    for (const p of profiles) select.append(el("option", { value: p.id, text: `${p.name} · ${p.model}`, selected: active && p.id === active.id }));
+    select.disabled = !profiles.length;
+    select.onchange = () => {
+      App.ZR.Prefs.set("activeLLMProfile", select.value);
+      for (const s of document.querySelectorAll("select[data-llm]")) if (s !== select) s.value = select.value;
+    };
+    select.dataset.llm = "1";
+  },
+
+  /** Active profile or a clear error that points to Settings. */
+  profile() {
+    const p = App.ZR.Prefs.getActiveLLMProfile();
+    if (!p) throw new Error("No AI is set up yet — add one under ⚙ Settings → AI providers.");
+    return p;
+  },
+
+  selectedItems() {
+    return App.args.itemIDs.map((id) => Zotero.Items.get(id)).filter(Boolean);
+  },
+
+  collection() {
+    return App.target.collectionID ? Zotero.Collections.get(App.target.collectionID) : null;
+  },
+
+  async refreshReview() {
+    App.review = App.target.collectionKey ? await App.ZR.Store.getReview(App.target.libraryID, App.target.collectionKey) : null;
+    $("review-pill").hidden = !App.review;
+    $("review-pill").textContent = "active";
+    App.panels.search.updateImportBar?.();
+  },
+
+  async saveFile(content, defaultName, filterTitle, pattern) {
+    const { FilePicker } = ChromeUtils.importESModule("chrome://zotero/content/modules/filePicker.mjs");
+    const fp = new FilePicker();
+    fp.init(window, "Save", fp.modeSave);
+    fp.appendFilter(filterTitle, pattern);
+    fp.defaultString = defaultName;
+    const rv = await fp.show();
+    if (rv !== fp.returnOK && rv !== fp.returnReplace) return null;
+    await Zotero.File.putContentsAsync(fp.file, content);
+    return fp.file;
+  },
+});
+
+window.addEventListener("load", () => {
+  init().catch((e) => {
+    Zotero.logError(e);
+    App.status("search", "Could not start: " + e.message);
+  });
+});
+
+async function init() {
+  App.ZR = Zotero.Researcher;
+  if (!App.ZR) throw new Error("Zotero Researcher is not loaded");
+  const raw = window.arguments?.[0];
+  App.args = raw?.wrappedJSObject || raw || { target: App.ZR.UI.getTarget(Zotero.getMainWindow()), itemIDs: [], tab: "search" };
+  App.target = App.args.target;
+
+  const t = App.target;
+  $("target").replaceChildren("Adding to ", el("b", { text: t.label }));
+  if (!t.editable) {
+    $("target").classList.add("readonly");
+    $("target").title = "This library or collection is read-only — adding papers is disabled";
+  }
+  $("sel-count").textContent = String(App.args.itemIDs.length);
+  for (const b of document.querySelectorAll(".tab")) b.addEventListener("click", () => App.showTab(b.dataset.tab));
+  $("open-prefs").addEventListener("click", () => App.ZR.UI.openPreferences());
+  $("help").addEventListener("click", () => Tour.start());
+
+  await App.refreshReview();
+  for (const p of Object.values(App.panels)) await p.init?.();
+
+  // Pick up settings changes (new AI profile, research areas, keys) when the window regains focus.
+  window.addEventListener("focus", () => {
+    for (const s of document.querySelectorAll("select[data-llm]")) App.fillProfileSelect(s);
+    App.panels.search.renderSources?.();
+  });
+
+  const tab = { find: "search", selected: "items", compare: "items" }[App.args.tab] || App.args.tab || "search";
+  App.showTab(tab);
+  if (App.args.tab === "compare") App.panels.items.openCompare();
+  const auto = App.args.autoRun;
+  if (auto === "enrich-det") App.panels.items.runEnrich("det");
+  else if (auto === "enrich-llm") App.panels.items.runEnrich("llm");
+  else if (auto === "find-pdf") App.panels.items.runFindPDFs();
+  else if (auto === "related") App.panels.search.runRelated(App.selectedItems());
+
+  if (App.args.tour || !App.ZR.Prefs.get("tourSeen", false)) setTimeout(() => Tour.start(), 250);
+}
+
+// ================================================================ SEARCH ====
+App.panels.search = (() => {
+  let ZR;
+  let lastRun = null;
+  const st = (m) => App.status("search", m);
+
+  function init() {
+    ZR = App.ZR;
+    const s = ZR.Prefs.getJSON("dialogState", {});
+    const lastMode = s.mode || ZR.Prefs.get("defaultMode", "structured");
+    setMode(lastMode === "structured" ? "structured" : "llm");
+    for (const b of $("mode-seg").children) b.addEventListener("click", () => setMode(b.dataset.mode));
+    $("query").value = s.query || "";
+    $("request").value = s.request || "";
+    $("year-from").value = s.yearFrom || "";
+    $("year-to").value = s.yearTo || "";
+    $("limit").value = s.limit || ZR.Prefs.get("maxPerSource", 25);
+    $("fulltext-only").checked = s.fulltextOnly ?? ZR.Prefs.get("fulltextOnly", false);
+    $("oa-only").checked = !!s.oaOnly;
+    $("strict").checked = !!s.strict;
+    $("skip-existing").checked = s.skipExisting ?? true;
+    $("hide-excluded").checked = !!s.hideExcluded;
+    $("attach-pdfs").checked = ZR.Prefs.get("attachPDFs", true);
+    $("protocol").checked = ZR.Prefs.get("searchProtocolNote", true);
+    $("tag").value = ZR.Prefs.get("tagImported", true) ? ZR.Prefs.get("importTag", "zr:imported") : "";
+    $("screen").checked = s.screen ?? true;
+    $("min-score").value = ZR.Prefs.get("llmScreeningMinScore", 6);
+    $("auto-import").checked = s.mode === "yolo";
+    $("empty-target").textContent = App.target.label;
+    App.fillProfileSelect($("llm-profile"));
+    renderSources(s.sources);
+
+    $("query").addEventListener("input", validateQuery);
+    $("query").addEventListener("keydown", (e) => e.key === "Enter" && !App.busy && run());
+    $("request").addEventListener("keydown", (e) => e.key === "Enter" && (e.ctrlKey || e.metaKey) && !App.busy && run());
+    $("syntax-toggle").addEventListener("click", () => ($("syntax").hidden = !$("syntax").hidden));
+    for (const ex of document.querySelectorAll(".example")) ex.addEventListener("click", () => (($("query").value = ex.textContent), validateQuery()));
+    $("run").addEventListener("click", run);
+    $("import").addEventListener("click", () => importSelected(false));
+    $("sources-chip").addEventListener("click", () => toggleDrawer("sources"));
+    $("options-chip").addEventListener("click", () => toggleDrawer("options"));
+    $("areas-link").addEventListener("click", () => ZR.UI.openPreferences());
+    $("src-all").addEventListener("click", () => setSources(() => true));
+    $("src-none").addEventListener("click", () => setSources(() => false));
+    $("src-free").addEventListener("click", () => setSources((x) => x.access === "free"));
+    $("res-all").addEventListener("click", () => selectAll(true));
+    $("res-none").addEventListener("click", () => selectAll(false));
+    $("res-filter").addEventListener("input", renderResults);
+    for (const id of ["year-from", "year-to", "limit", "fulltext-only", "oa-only", "strict", "skip-existing", "hide-excluded", "attach-pdfs", "screen", "auto-import"]) {
+      $(id).addEventListener("change", updateChips);
+    }
+    $("fulltext-only").addEventListener("change", () => $("fulltext-only").checked && ($("attach-pdfs").checked = true));
+    $("auto-import").addEventListener("change", () => ($("run").textContent = $("auto-import").checked && getMode() === "llm" ? "Search & add" : "Search"));
+    validateQuery();
+    updateChips();
+    updateImportBar();
+  }
+
+  function setMode(mode) {
+    document.body.dataset.mode = mode;
+    for (const b of $("mode-seg").children) {
+      b.classList.toggle("on", b.dataset.mode === mode);
+      b.setAttribute("aria-checked", String(b.dataset.mode === mode));
+    }
+    $("run").textContent = mode === "llm" && $("auto-import").checked ? "Search & add" : "Search";
+    validateQuery();
+    updateChips();
+  }
+  const getMode = () => document.body.dataset.mode;
+
+  function toggleDrawer(name) {
+    const panel = $(`${name}-panel`);
+    const other = $(name === "sources" ? "options-panel" : "sources-panel");
+    panel.hidden = !panel.hidden;
+    other.hidden = true;
+    $("sources-chip").setAttribute("aria-expanded", String(!$("sources-panel").hidden));
+    $("options-chip").setAttribute("aria-expanded", String(!$("options-panel").hidden));
+  }
+
+  function updateChips() {
+    const chosen = selectedSources().map((id) => ZR.Sources.get(id).name);
+    $("sources-chip").textContent = chosen.length ? `📚 ${chosen.length} source${chosen.length > 1 ? "s" : ""}: ${chosen.slice(0, 3).join(", ")}${chosen.length > 3 ? " …" : ""} ▾` : "📚 No source selected ▾";
+    const parts = [];
+    const yf = $("year-from").value;
+    const yt = $("year-to").value;
+    parts.push(yf || yt ? `${yf || "…"}–${yt || "…"}` : "any year");
+    parts.push(`${$("limit").value || 25} per source`);
+    if ($("fulltext-only").checked) parts.push("full text only");
+    else if ($("oa-only").checked) parts.push("open access");
+    if ($("hide-excluded").checked) parts.push("hide excluded");
+    if ($("attach-pdfs").checked) parts.push("PDFs");
+    if (getMode() === "llm" && $("screen").checked) parts.push("AI rating");
+    if (getMode() === "llm" && $("auto-import").checked) parts.push("auto-add");
+    $("options-chip").textContent = `⚙ ${parts.join(" · ")} ▾`;
+  }
+
+  function renderSources(preferred) {
+    const box = $("sources");
+    const prev = new Set(preferred || [...box.querySelectorAll("input:checked")].map((i) => i.value));
+    const hadPrev = preferred ? true : box.children.length > 0;
+    box.replaceChildren();
+    for (const s of ZR.Sources.visibleSearchable()) {
+      const why = ZR.Sources.unavailableReason(s.id);
+      const checked = !why && (hadPrev ? prev.has(s.id) : ZR.Sources.isEnabled(s.id));
+      box.append(
+        el("label", { class: "src" + (why ? " unavailable" : ""), title: why ? `${s.name}: ${why}` : s.coverage }, [
+          el("input", { type: "checkbox", value: s.id, checked, disabled: !!why, onchange: updateChips }),
+          el("span", { text: s.name }),
+          el("span", { class: "badge " + s.access, text: s.access === "free" ? "free" : s.access === "free-key" ? "key" : "paid" }),
+        ])
+      );
+    }
+    updateChips();
+  }
+
+  function setSources(pred) {
+    for (const input of $("sources").querySelectorAll("input")) if (!input.disabled) input.checked = !!pred(ZR.Sources.get(input.value));
+    updateChips();
+  }
+  const selectedSources = () => [...$("sources").querySelectorAll("input:checked")].map((i) => i.value);
+
+  function validateQuery() {
+    const fb = $("query-feedback");
+    fb.className = "hint";
+    fb.title = "";
+    if (getMode() === "llm") {
+      fb.textContent = App.profiles().length ? "The AI turns your description into a search query — you'll see it before anything is added." : "Set up an AI in ⚙ Settings to use this mode.";
+      return true;
+    }
+    const q = $("query").value.trim();
+    if (!q) {
+      fb.textContent = "";
+      return true;
+    }
+    try {
+      const ast = ZR.Query.parse(q);
+      fb.textContent = "✓ " + ZR.Query.toCanonical(ast);
+      fb.title = "Sent to databases as:\n" + ["openalex", "scopus", "arxiv", "wos", "s2bulk", "pubmed"].map((d) => `${d}: ${ZR.Query.compile(ast, d)}`).join("\n");
+      fb.classList.add("ok");
+      return true;
+    } catch (e) {
+      fb.textContent = "Query problem: " + e.message;
+      fb.classList.add("error");
+      return false;
+    }
+  }
+
+  function readOptions() {
+    const int = (id) => {
+      const v = parseInt($(id).value, 10);
+      return Number.isFinite(v) ? v : null;
+    };
+    const llm = getMode() === "llm";
+    return {
+      mode: llm ? ($("auto-import").checked ? "yolo" : "llm") : "structured",
+      query: llm ? "" : $("query").value.trim(),
+      request: $("request").value.trim(),
+      sources: selectedSources(),
+      limit: Math.max(1, Math.min(500, int("limit") || 25)),
+      yearFrom: int("year-from"),
+      yearTo: int("year-to"),
+      oaOnly: $("oa-only").checked,
+      fulltextOnly: $("fulltext-only").checked,
+      strict: $("strict").checked,
+      skipExisting: $("skip-existing").checked,
+      hideExcluded: $("hide-excluded").checked,
+      screen: llm && $("screen").checked,
+      minScore: int("min-score") ?? 6,
+    };
+  }
+
+  function saveState(o) {
+    ZR.Prefs.setJSON("dialogState", {
+      mode: o.mode,
+      query: $("query").value.trim(),
+      request: o.request,
+      sources: o.sources,
+      yearFrom: o.yearFrom,
+      yearTo: o.yearTo,
+      limit: o.limit,
+      oaOnly: o.oaOnly,
+      fulltextOnly: o.fulltextOnly,
+      strict: o.strict,
+      skipExisting: o.skipExisting,
+      hideExcluded: o.hideExcluded,
+      screen: $("screen").checked,
+    });
+  }
+
+  async function run() {
+    if (App.busy) return;
+    const o = readOptions();
+    if (o.mode === "structured" && !o.query) return st("Type a query first — for example: (\"IFC5\" OR IFCX) AND BIM");
+    if (o.mode !== "structured" && !o.request) return st("Describe what you are looking for first.");
+    if (o.query && !validateQuery()) return;
+    if (!o.sources.length) return st("Choose at least one source (📚 chip).");
+    saveState(o);
+    if (o.mode !== "structured") {
+      try {
+        o.llmProfile = App.profile();
+      } catch (e) {
+        return st(e.message);
+      }
+    }
+    o.libraryID = App.target.libraryID;
+    App.setBusy("search", true);
+    $("search-empty").hidden = true;
+    $("results").replaceChildren();
+    $("results-head").hidden = true;
+    $("plan-box").hidden = true;
+    try {
+      lastRun = await ZR.Search.run(o, st);
+      if (lastRun.plan) showPlan(lastRun.plan);
+      renderResults();
+      const errs = Object.entries(lastRun.perSource).filter(([, s]) => s.error);
+      st(`${lastRun.records.length} papers found · ` + Object.entries(lastRun.perSource).map(([id, s]) => `${ZR.Sources.get(id).name} ${s.error ? "⚠" : s.count}`).join(" · "));
+      $("search-status").title = errs.map(([id, s]) => `${ZR.Sources.get(id).name}: ${s.error}`).join("\n");
+      if (o.mode === "yolo") {
+        App.setBusy("search", false);
+        await importSelected(true);
+      }
+    } catch (e) {
+      Zotero.logError(e);
+      st("Search failed: " + e.message);
+    } finally {
+      App.setBusy("search", false);
+      updateImportBar();
+    }
+  }
+
+  function showPlan(plan) {
+    const box = $("plan-box");
+    box.replaceChildren(
+      el("div", {}, [el("b", { text: "The AI searched for: " }), el("code", { text: plan.query })]),
+      plan.rationale ? el("div", { class: "hint", text: plan.rationale }) : null,
+      el("div", {}, el("button", { class: "link", text: "Edit this query as keywords", onclick: () => (($("query").value = plan.query), setMode("structured"), $("query").focus()) }))
+    );
+    box.hidden = false;
+  }
+
+  /** Show externally produced records (related papers, citation gaps) as results. */
+  function showRecords(records, meta) {
+    lastRun = Object.assign(
+      { started: new Date().toISOString().replace("T", " ").slice(0, 19), filtersText: "", identified: records.length, deduped: records.length, perSource: { openalex: { count: records.length, query: meta.query } } },
+      meta,
+      { records }
+    );
+    $("search-empty").hidden = true;
+    $("plan-box").replaceChildren(el("div", {}, [el("b", { text: meta.title || "Suggested papers" }), el("div", { class: "hint", text: meta.description || "" })]));
+    $("plan-box").hidden = false;
+    renderResults();
+  }
+
+  async function runRelated(items) {
+    items = (items || []).filter((i) => i?.isRegularItem());
+    App.showTab("search");
+    if (!items.length) return st("Select papers with a DOI first.");
+    App.setBusy("search", true);
+    try {
+      st(`Collecting what ${items.length} paper(s) cite and related works (OpenAlex)…`);
+      const records = await ZR.Search.related(items, { limit: 60 });
+      for (const r of records) {
+        const hit = await ZR.Importer.findExisting(App.target.libraryID, r);
+        r.existingItemID = hit ? hit.id : null;
+      }
+      await ZR.Store.annotateRecords(App.target.libraryID, records);
+      for (const r of records) r.selected = !r.existingItemID && r.prior?.ta?.d !== "exclude";
+      showRecords(records, {
+        mode: "related",
+        query: items.map((i) => i.getField("DOI") || i.getField("title")).join("; "),
+        title: `Related to ${items.length} selected paper(s)`,
+        description: "References and related works from OpenAlex, ranked by how many of your papers point to them.",
+      });
+      st(`${records.length} related papers`);
+    } catch (e) {
+      st("Could not collect related papers: " + e.message);
+    } finally {
+      App.setBusy("search", false);
+    }
+  }
+
+  const scoreClass = (s) => (s >= 7 ? "hi" : s >= 4 ? "md" : "lo");
+
+  function priorTag(r) {
+    const p = r.prior;
+    const s = p?.ft || p?.ta;
+    if (!s) return p?.unscreened ? el("span", { class: "tag maybe", text: "in review, not screened" }) : null;
+    const cls = { include: "included", exclude: "excluded", maybe: "maybe" }[s.d];
+    return el("span", { class: "tag " + cls, text: ZR.Store.describe(p), title: "Remembered decision" });
+  }
+
+  async function mark(r, value) {
+    const reasons = App.review?.reasons || ZR.Prisma.DEFAULT_REASONS;
+    const map = { relevant: ["include", ""], off: ["exclude", reasons[0]], weak: ["exclude", reasons.find((x) => /weak/i.test(x)) || "Weak / low quality"] };
+    const [d, reason] = map[value] || [null, ""];
+    await ZR.Store.decide({
+      libraryID: App.target.libraryID,
+      key: r.key || ZR.Store.keyForRecord(r),
+      item: r.existingItemID ? Zotero.Items.get(r.existingItemID) : null,
+      title: r.title,
+      stage: "ta",
+      d,
+      r: reason,
+      collectionKey: App.target.collectionKey,
+    });
+    r.prior = d ? { ta: { d, r: reason, by: "me", at: new Date().toISOString().slice(0, 10) } } : null;
+    if (d === "exclude") r.selected = false;
+    if (d === "include" && !r.existingItemID) r.selected = true;
+    renderResults();
+  }
+
+  function renderResults() {
+    const box = $("results");
+    box.replaceChildren();
+    if (!lastRun) return;
+    const recs = lastRun.records;
+    const filter = $("res-filter").value.trim().toLowerCase();
+    $("results-head").hidden = false;
+    if (!recs.length) {
+      box.append(el("div", { class: "empty-state", text: "Nothing found. Try fewer or broader terms, more sources, or fewer filters." }));
+    }
+    for (const r of recs) {
+      if (filter && !`${r.title} ${r.venue} ${r.abstract} ${ZR.Records.creatorsToString(r.creators, 20)}`.toLowerCase().includes(filter)) continue;
+      const link = r.url || (r.doi ? `https://doi.org/${r.doi}` : "");
+      const excluded = (r.prior?.ft || r.prior?.ta)?.d === "exclude";
+      const row = el("div", { class: "result" + (r.existingItemID || excluded ? " muted" : "") }, [
+        el("input", { type: "checkbox", checked: r.selected, onchange: (e) => ((r.selected = e.target.checked), updateImportBar()) }),
+        el("div", { class: "r-main" }, [
+          el("div", { class: "r-title" }, link ? el("a", { href: "#", text: r.title, onclick: (e) => (e.preventDefault(), Zotero.launchURL(link)) }) : r.title),
+          el("div", { class: "r-meta", text: [ZR.Records.creatorsToString(r.creators), r.year, r.venue].filter(Boolean).join(" · ") }),
+          r.abstract ? el("div", { class: "r-abstract", text: r.abstract, title: "Click to expand", onclick: () => row.classList.toggle("expanded") }) : null,
+          el("div", { class: "r-tags" }, [
+            r.existingItemID ? el("span", { class: "tag lib", text: "in library" }) : null,
+            priorTag(r),
+            r.seenBefore && !r.prior && !r.existingItemID ? el("span", { class: "tag", text: `seen ${r.seenBefore}`, title: "Appeared in an earlier search" }) : null,
+            r.pdfURLs.length ? el("span", { class: "tag pdf", text: "PDF" }) : r.isOA ? el("span", { class: "tag pdf", text: "open access" }) : null,
+            r.citedByCollection ? el("span", { class: "tag", text: `cited by ${r.citedByCollection} of yours` }) : null,
+            ...r.sources.map((s) => el("span", { class: "tag", text: ZR.Sources.get(s)?.name || s })),
+          ]),
+        ]),
+        el("div", { class: "r-side" }, [
+          r.llmScore != null ? el("span", { class: "score " + scoreClass(r.llmScore), text: String(r.llmScore), title: "AI relevance 0–10" }) : null,
+          r.llmReason ? el("span", { class: "reason", text: r.llmReason }) : null,
+          r.citationCount ? el("span", { class: "hint", text: `${r.citationCount} citations` }) : null,
+          el("select", { class: "mark", title: "Remember your judgement for future searches", onchange: (e) => mark(r, e.target.value) }, [
+            el("option", { value: "", text: "Judge ▾" }),
+            el("option", { value: "relevant", text: "👍 Relevant" }),
+            el("option", { value: "off", text: "👎 Not relevant" }),
+            el("option", { value: "weak", text: "👎 Weak / low quality" }),
+            el("option", { value: "clear", text: "Forget judgement" }),
+          ]),
+        ]),
+      ]);
+      box.append(row);
+    }
+    updateImportBar();
+  }
+
+  function selectAll(on) {
+    if (!lastRun) return;
+    for (const r of lastRun.records) r.selected = on && !r.existingItemID;
+    renderResults();
+  }
+
+  function updateImportBar() {
+    const n = lastRun ? lastRun.records.filter((r) => r.selected).length : 0;
+    $("import-bar").hidden = !lastRun;
+    $("results-count").textContent = lastRun ? `${lastRun.records.length} papers · ${n} selected` : "";
+    const where = `“${App.target.label.split(" › ").pop()}”`;
+    $("import").textContent = App.review ? `Add ${n} to review for screening` : `Add ${n} to ${where}`;
+    $("import-summary").textContent = App.review ? "This collection is a PRISMA review: added papers are queued for screening and the search is logged." : $("attach-pdfs").checked ? "PDFs are downloaded where legally available." : "";
+    $("import").dataset.disabledReason = !n || !App.target.editable ? "1" : "";
+    $("import").disabled = App.busy || !n || !App.target.editable;
+  }
+
+  async function importSelected(auto) {
+    if (!lastRun) return;
+    if (!App.target.editable) return st("This library or collection is read-only.");
+    const recs = lastRun.records.filter((r) => r.selected);
+    if (!recs.length) return st(auto ? "Automatic mode: nothing scored high enough — nothing was added." : "Nothing selected.");
+    App.setBusy("search", true);
+    try {
+      const tag = $("tag").value.trim();
+      const stats = await ZR.Search.importRecords(
+        lastRun,
+        recs,
+        {
+          libraryID: App.target.libraryID,
+          collectionID: App.target.collectionID,
+          collectionKey: App.target.collectionKey,
+          review: !!App.review,
+          attachPDFs: $("attach-pdfs").checked,
+          fulltextOnly: $("fulltext-only").checked,
+          tags: tag ? [tag] : [],
+          protocolNote: $("protocol").checked,
+        },
+        st
+      );
+      for (const r of recs) r.selected = false;
+      renderResults();
+      st(
+        `${auto ? "Automatic mode: " : ""}Added ${stats.imported} new paper(s)` +
+          (stats.existing ? `, ${stats.existing} were already in the library (now in this collection)` : "") +
+          (stats.withPDF ? `, ${stats.withPDF} with PDF` : "") +
+          (stats.droppedNoPDF ? `, ${stats.droppedNoPDF} skipped (no PDF available)` : "") +
+          (stats.failed ? `, ${stats.failed} failed (see Help → Debug Output)` : "") +
+          (App.review ? " — ready to screen in the Review tab." : "")
+      );
+      App.panels.review.refresh?.();
+    } catch (e) {
+      Zotero.logError(e);
+      st("Adding failed: " + e.message);
+    } finally {
+      App.setBusy("search", false);
+      updateImportBar();
+    }
+  }
+
+  return { init, renderSources, runRelated, showRecords, updateImportBar, setMode, onShow: updateImportBar };
+})();

@@ -1,0 +1,74 @@
+#zotero-researcher-tb {
+  list-style-image: url("chrome://zotero-researcher/content/icons/researcher.svg");
+  fill: currentColor;
+  -moz-context-properties: fill, fill-opacity;
+}
+#zotero-researcher-tb > .toolbarbutton-icon {
+  transform: none;
+}
+#zotero-researcher-batch-btn {
+  margin-top: 6px;
+}
+
+/* Item pane section */
+.zr-section {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 2px 0 4px;
+}
+.zr-completeness {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 0.95em;
+}
+.zr-bar {
+  flex: 0 0 90px;
+  height: 6px;
+  border-radius: 3px;
+  background: var(--fill-quinary, rgba(128, 128, 128, 0.2));
+  overflow: hidden;
+}
+.zr-bar-fill { height: 100%; }
+.zr-bar-fill.good { background: var(--accent-green, #39bf68); }
+.zr-bar-fill.mid { background: var(--accent-gold, #cc9200); }
+.zr-bar-fill.low { background: var(--accent-red, #db2c3a); }
+.zr-missing, .zr-source {
+  color: var(--fill-secondary, gray);
+  font-size: 0.92em;
+}
+.zr-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.zr-status { font-size: 0.95em; }
+.zr-status.error { color: var(--accent-red, #db2c3a); }
+.zr-diff {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.92em;
+  table-layout: fixed;
+}
+.zr-diff td {
+  padding: 2px 4px;
+  vertical-align: top;
+  border-top: 1px solid var(--fill-quinary, rgba(128, 128, 128, 0.2));
+  overflow-wrap: anywhere;
+}
+.zr-diff td:first-child { width: 20px; }
+.zr-diff td:nth-child(2) { width: 22%; font-weight: 600; }
+.zr-diff td.old { color: var(--fill-secondary, gray); text-decoration: line-through; }
+.zr-diff tr.fill td.old { text-decoration: none; }
+.zr-diff tr.overwrite td.new { color: var(--accent-gold, #cc9200); }
+.zr-proposal {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+.zr-decision { font-size: 0.92em; font-weight: 600; }
+.zr-decision.include { color: var(--accent-green, #1f9d55); }
+.zr-decision.exclude { color: var(--accent-red, #db2c3a); }
+.zr-decision.maybe { color: var(--accent-gold, #cc9200); }

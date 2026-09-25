@@ -1,0 +1,19 @@
+/* Default preferences for Zotero Researcher. API keys are NOT stored here; see content/lib/secrets.js */
+pref("extensions.zotero-researcher.email", "");
+pref("extensions.zotero-researcher.llmProfiles", "[]");
+pref("extensions.zotero-researcher.activeLLMProfile", "");
+pref("extensions.zotero-researcher.sources", "{}");
+pref("extensions.zotero-researcher.defaultMode", "structured");
+pref("extensions.zotero-researcher.maxPerSource", 25);
+pref("extensions.zotero-researcher.attachPDFs", true);
+pref("extensions.zotero-researcher.fulltextOnly", false);
+pref("extensions.zotero-researcher.tagImported", true);
+pref("extensions.zotero-researcher.importTag", "zr:imported");
+pref("extensions.zotero-researcher.searchProtocolNote", true);
+pref("extensions.zotero-researcher.llmScreeningMinScore", 6);
+pref("extensions.zotero-researcher.enrichOverwrite", false);
+pref("extensions.zotero-researcher.selftest", "");
+pref("extensions.zotero-researcher.disciplines", "{}");
+pref("extensions.zotero-researcher.tourSeen", false);
+pref("extensions.zotero-researcher.welcomeShown", false);
+pref("extensions.zotero-researcher.selftestMode", "");

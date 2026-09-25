@@ -1,0 +1,71 @@
+# Push (or merge) to the `release` branch to ship a new version:
+#   1. bump "version" in addon/manifest.json (and package.json)
+#   2. git push origin main:release   (or merge main into release)
+# This builds the XPI, publishes GitHub Release v<version> with it attached, and
+# rewrites updates.json on the release branch. Installed copies of the plugin read
+# that file (manifest update_url) when Zotero checks for plugin updates.
+name: Release
+
+on:
+  push:
+    branches: [release]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Read version
+        id: v
+        run: echo "version=$(node -p "require('./addon/manifest.json').version")" >> "$GITHUB_OUTPUT"
+
+      - name: Skip if this version is already released
+        id: exists
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "v${{ steps.v.outputs.version }}" >/dev/null 2>&1; then
+            echo "Release v${{ steps.v.outputs.version }} exists — bump the version in addon/manifest.json to publish a new one."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Build XPI
+        if: steps.exists.outputs.skip != 'true'
+        run: npm run build
+
+      - name: Publish GitHub release
+        if: steps.exists.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          V=${{ steps.v.outputs.version }}
+          gh release create "v$V" "build/zotero-researcher-$V.xpi" \
+            --target "$GITHUB_SHA" --title "Zotero Researcher $V" --generate-notes
+
+      - name: Update updates.json on the release branch
+        if: steps.exists.outputs.skip != 'true'
+        run: |
+          V=${{ steps.v.outputs.version }}
+          node scripts/updates-json.mjs "build/zotero-researcher-$V.xpi" \
+            "https://github.com/${GITHUB_REPOSITORY}/releases/download/v$V/zotero-researcher-$V.xpi" updates.json
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add updates.json
+          # Pushes made with GITHUB_TOKEN do not trigger workflows, so this cannot loop.
+          git commit -m "Publish updates.json for v$V" && git push origin HEAD:release

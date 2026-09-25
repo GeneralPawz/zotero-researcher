@@ -1,0 +1,266 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" windowtype="zotero-researcher:dialog" lang="en">
+<head>
+  <meta charset="utf-8"/>
+  <title>Zotero Researcher</title>
+  <link rel="stylesheet" href="chrome://zotero-researcher/content/dialog/research.css"/>
+  <script src="chrome://zotero/content/include.js"></script>
+  <script src="chrome://zotero-researcher/content/dialog/research.js"></script>
+  <script src="chrome://zotero-researcher/content/dialog/items.js"></script>
+  <script src="chrome://zotero-researcher/content/dialog/review.js"></script>
+  <script src="chrome://zotero-researcher/content/dialog/citations.js"></script>
+  <script src="chrome://zotero-researcher/content/dialog/tour.js"></script>
+</head>
+<body data-mode="structured">
+  <header class="top">
+    <div class="brand"><img src="chrome://zotero-researcher/content/icons/researcher.svg" alt=""/>Researcher</div>
+    <nav class="tabs" role="tablist">
+      <button class="tab" data-tab="search" role="tab">Search</button>
+      <button class="tab" data-tab="review" role="tab">Review <span id="review-pill" class="pill" hidden="hidden"></span></button>
+      <button class="tab" data-tab="items" role="tab">Selected items <span id="sel-count" class="pill">0</span></button>
+      <button class="tab" data-tab="citations" role="tab">Citations</button>
+    </nav>
+    <div class="target" id="target" title="Where papers are added"></div>
+    <button class="icon-btn" id="help" title="Show the guided tour">?</button>
+    <button class="icon-btn" id="open-prefs" title="Settings: API keys, AI providers, research areas">⚙</button>
+  </header>
+
+  <!-- ============================== SEARCH ============================== -->
+  <section class="panel" id="panel-search">
+    <div class="hero">
+      <div class="seg" id="mode-seg" role="radiogroup" aria-label="Search mode">
+        <button data-mode="structured" role="radio">Keywords</button>
+        <button data-mode="llm" role="radio">Describe it (AI)</button>
+      </div>
+      <div class="query-row">
+        <input id="query" class="structured-only" type="text" spellcheck="false" placeholder='e.g. ("IFC5" OR IFCX) AND BIM'/>
+        <textarea id="request" class="llm-only" rows="2" placeholder="Describe what you are looking for, e.g. “papers on IFC 5 / IFCX and how they change BIM data exchange, since 2019”"></textarea>
+        <button id="run" class="primary big">Search</button>
+      </div>
+      <div class="hint-row">
+        <span id="query-feedback" class="hint"></span>
+        <span class="spacer"></span>
+        <button class="link structured-only" id="syntax-toggle">How to write a query</button>
+      </div>
+      <div id="syntax" class="syntax" hidden="hidden">
+        <div><code>AND</code> <code>OR</code> <code>NOT</code> and <code>( )</code> combine terms — side-by-side terms are ANDed.</div>
+        <div><code>"exact phrase"</code>, <code>build*</code> matches build/building/builder, <code>title:</code> <code>abstract:</code> <code>author:</code> search one field.</div>
+        <div class="hint">Your query is translated for every database automatically. Try:
+          <button class="example link">("IFC5" OR IFCX) AND BIM</button> ·
+          <button class="example link">"digital twin" AND bridge* NOT title:review</button></div>
+      </div>
+      <div class="summary">
+        <button class="chip" id="sources-chip" aria-expanded="false"></button>
+        <button class="chip" id="options-chip" aria-expanded="false"></button>
+        <label class="chip llm-only" id="llm-chip">AI: <select id="llm-profile"></select></label>
+      </div>
+
+      <div id="sources-panel" class="drawer" hidden="hidden">
+        <div class="drawer-head">
+          <span>Which databases to search</span>
+          <span class="spacer"></span>
+          <button class="link" id="src-all">all</button> · <button class="link" id="src-none">none</button> · <button class="link" id="src-free">free only</button>
+        </div>
+        <div id="sources" class="sources"></div>
+        <div class="hint">Grey sources need an API key. Hide whole research areas (e.g. medicine) in <button class="link" id="areas-link">Settings</button>.</div>
+      </div>
+
+      <div id="options-panel" class="drawer" hidden="hidden">
+        <div class="opt-grid">
+          <div class="opt-group">
+            <div class="opt-title">Results</div>
+            <label class="inline">Years <input type="number" id="year-from" placeholder="from" min="1500" max="2100"/> – <input type="number" id="year-to" placeholder="to" min="1500" max="2100"/></label>
+            <label class="inline">Max per source <input type="number" id="limit" min="1" max="500"/></label>
+            <label class="check" title="Keep only results with an open PDF link; imported items without a downloadable PDF are removed again"><input type="checkbox" id="fulltext-only"/> Only papers with full text (PDF)</label>
+            <label class="check"><input type="checkbox" id="oa-only"/> Open access only</label>
+            <label class="check" title="Title, abstract or keywords must satisfy the query exactly"><input type="checkbox" id="strict"/> Strict match on title/abstract</label>
+          </div>
+          <div class="opt-group">
+            <div class="opt-title">Your library</div>
+            <label class="check"><input type="checkbox" id="skip-existing" checked="checked"/> Hide papers already in the library</label>
+            <label class="check" title="Papers you (or the AI) excluded before, in any review or search"><input type="checkbox" id="hide-excluded"/> Hide papers excluded before</label>
+            <label class="check"><input type="checkbox" id="attach-pdfs"/> Download PDFs when adding</label>
+            <label class="check"><input type="checkbox" id="protocol"/> Save a search log note</label>
+            <label class="inline">Tag new items <input type="text" id="tag" size="14"/></label>
+          </div>
+          <div class="opt-group llm-only">
+            <div class="opt-title">AI</div>
+            <label class="check"><input type="checkbox" id="screen"/> Rate relevance of results</label>
+            <label class="inline">Pre-select from score <input type="number" id="min-score" min="0" max="10" step="1"/></label>
+            <label class="check" title="Search, rate and add the best results without asking — “YOLO mode”"><input type="checkbox" id="auto-import"/> Add results automatically (no review)</label>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <div class="statusbar"><progress id="search-progress" hidden="hidden"></progress><span id="search-status"></span></div>
+    <div id="plan-box" class="plan" hidden="hidden"></div>
+
+    <div class="results-head" id="results-head" hidden="hidden">
+      <span id="results-count"></span>
+      <button class="link" id="res-all">select all</button> · <button class="link" id="res-none">none</button>
+      <input type="search" id="res-filter" placeholder="Filter results…"/>
+    </div>
+    <div class="scroll" id="results-scroll">
+      <div id="search-empty" class="empty-state">
+        <div class="empty-title">Find papers for <b id="empty-target"></b></div>
+        <div>Type keywords above — combine them with <code>AND</code> / <code>OR</code> / <code>NOT</code> — or switch to <b>Describe it (AI)</b> and write what you need in your own words.</div>
+        <div class="hint">Papers you judged before are remembered and marked, so you never screen the same paper twice.</div>
+      </div>
+      <div id="results" class="results"></div>
+    </div>
+    <div class="footer-bar" id="import-bar" hidden="hidden">
+      <span id="import-summary"></span>
+      <span class="spacer"></span>
+      <button id="import" class="primary">Add to collection</button>
+    </div>
+  </section>
+
+  <!-- ============================== REVIEW ============================== -->
+  <section class="panel" id="panel-review" hidden="hidden">
+    <div id="review-setup" class="scroll pad" hidden="hidden">
+      <div class="card narrow">
+        <h2>Start a systematic review for <span class="review-target"></span></h2>
+        <p class="hint">A review follows PRISMA 2020: search → screen titles &amp; abstracts → check full texts → report. Every search you add is logged, every decision is stored as a tag on the paper, and the flow diagram is built for you. You can screen by hand, or let an AI suggest decisions that you confirm.</p>
+        <label class="field">Review question <textarea id="rv-question" rows="2" placeholder="e.g. How is IFC 5 / IFCX used for BIM data exchange?"></textarea></label>
+        <label class="field">Include papers that… <textarea id="rv-include" rows="2" placeholder="e.g. propose, implement or evaluate IFC 5 / IFCX; peer-reviewed; 2019 or later"></textarea></label>
+        <label class="field">Exclude papers that… <textarea id="rv-exclude" rows="2" placeholder="e.g. only mention IFC in passing; opinion pieces"></textarea></label>
+        <label class="field">Exclusion reasons (one per line) <textarea id="rv-reasons" rows="5"></textarea></label>
+        <div class="actions"><button id="rv-create" class="primary">Start review</button><button id="rv-cancel-edit" hidden="hidden">Cancel</button></div>
+      </div>
+    </div>
+
+    <div id="review-main" class="panel" hidden="hidden">
+      <div class="stepper" id="review-steps">
+        <button data-step="identify"><span class="num">1</span>Find papers<small id="st-identify"></small></button>
+        <button data-step="ta"><span class="num">2</span>Screen titles &amp; abstracts<small id="st-ta"></small></button>
+        <button data-step="ft"><span class="num">3</span>Check full texts<small id="st-ft"></small></button>
+        <button data-step="prisma"><span class="num">4</span>PRISMA report<small id="st-prisma"></small></button>
+      </div>
+
+      <div class="step" id="step-identify">
+        <div class="scroll pad">
+          <div class="card">
+            <div class="row-between"><h3>Review question</h3><button class="link" id="rv-edit">Edit setup</button></div>
+            <p id="rv-question-view"></p>
+          </div>
+          <div class="card">
+            <div class="row-between"><h3>Searches logged for this review</h3><button id="rv-add-search" class="primary">Search &amp; add papers</button></div>
+            <div id="rv-runs"></div>
+            <p class="hint">Papers you add from the Search tab while this collection is a review are tagged <code>zr:unscreened</code> and appear in step 2. Papers already in the collection are screened too.</p>
+          </div>
+        </div>
+      </div>
+
+      <div class="step screen-step" id="step-screen" hidden="hidden">
+        <div class="queue">
+          <div class="queue-head">
+            <select id="queue-filter">
+              <option value="todo">To screen</option>
+              <option value="include">Included</option>
+              <option value="maybe">Maybe</option>
+              <option value="exclude">Excluded</option>
+              <option value="all">All</option>
+            </select>
+            <span id="queue-count" class="hint"></span>
+          </div>
+          <div id="queue" class="queue-list"></div>
+          <div class="queue-ai">
+            <button id="ai-suggest" title="The AI reads each paper and suggests a decision; you still confirm">✦ AI suggestions for the list</button>
+            <button id="ai-accept" class="link" title="Apply AI suggestions with ≥ 80 % confidence">accept confident ones</button>
+          </div>
+        </div>
+        <div class="card-area scroll">
+          <div id="screen-card"></div>
+        </div>
+      </div>
+
+      <div class="step" id="step-prisma" hidden="hidden">
+        <div class="results-head">
+          <span class="hint">Counts come from the logged searches and the tags on the papers in this collection.</span>
+          <span class="spacer"></span>
+          <button id="prisma-note">Save as note</button>
+          <button id="prisma-svg">Export diagram (SVG)</button>
+        </div>
+        <div class="scroll pad"><div id="prisma-view" class="prisma-view"></div></div>
+      </div>
+    </div>
+    <div class="statusbar"><progress id="review-progress" hidden="hidden"></progress><span id="review-status"></span></div>
+  </section>
+
+  <!-- ============================== ITEMS =============================== -->
+  <section class="panel" id="panel-items" hidden="hidden">
+    <div class="toolbar">
+      <div class="menu-btn">
+        <button id="fix-meta" class="primary" title="Fill in missing metadata from DOI/ISBN/arXiv or an exact title match">Fix metadata</button>
+        <button id="fix-meta-ai" title="The AI reads fields and the PDF, and the result is double-checked against Crossref/OpenAlex">with AI</button>
+      </div>
+      <button id="find-pdfs">Find PDFs</button>
+      <button id="compare-open">Compare with AI</button>
+      <button id="find-related" title="Papers these items cite, and related works (OpenAlex)">Find related papers</button>
+      <span class="spacer"></span>
+      <select id="llm-profile-2" title="AI profile"></select>
+    </div>
+    <div class="statusbar"><progress id="items-progress" hidden="hidden"></progress><span id="items-status"></span></div>
+    <div id="compare-box" class="drawer compare" hidden="hidden">
+      <label class="field">What should the AI compare? <textarea id="compare-instruction" rows="2">Compare these papers: research question, method, data/case study, key findings, limitations, and how they relate to each other.</textarea></label>
+      <div class="actions">
+        <label class="check"><input type="checkbox" id="compare-fulltext" checked="checked"/> Include PDF text</label>
+        <span class="spacer"></span>
+        <button id="compare-run" class="primary">Compare</button>
+        <button id="compare-save" disabled="disabled">Save as note</button>
+        <button id="compare-close" class="link">close</button>
+      </div>
+      <div id="compare-output" class="compare-output"></div>
+    </div>
+    <div class="scroll"><div id="selected-list" class="selected-list"></div></div>
+    <div class="footer-bar" id="apply-bar" hidden="hidden">
+      <label class="check"><input type="checkbox" id="overwrite"/> Also replace values that are already filled in</label>
+      <span class="spacer"></span>
+      <button id="apply-all" class="primary">Apply checked changes</button>
+    </div>
+  </section>
+
+  <!-- ============================ CITATIONS ============================= -->
+  <section class="panel" id="panel-citations" hidden="hidden">
+    <div class="toolbar">
+      <select id="cite-scope">
+        <option value="collection">Papers in this collection</option>
+        <option value="library">Whole library</option>
+      </select>
+      <label class="check" title="Adds Zotero's native “Related” link between papers that cite each other"><input type="checkbox" id="cite-related" checked="checked"/> Link as “Related” in Zotero</label>
+      <button id="cite-scan" class="primary">Find citation links</button>
+      <span class="spacer"></span>
+      <button id="cite-missing" title="Papers cited by several of yours that are not in your library">Suggest missing papers</button>
+      <button id="cite-graphml">Export GraphML</button>
+      <button id="cite-csv">Export CSV</button>
+    </div>
+    <div class="statusbar"><progress id="cite-progress" hidden="hidden"></progress><span id="cite-status"></span></div>
+    <div class="graph-wrap">
+      <canvas id="graph"></canvas>
+      <div id="graph-empty" class="empty-state">
+        <div class="empty-title">See which papers cite each other</div>
+        <div>Citation data is taken from existing open graphs — OpenAlex, Semantic Scholar, OpenCitations and Crossref — so only gaps need filling. Links are stored with your library and can be added as Zotero “Related” items.</div>
+      </div>
+      <div id="graph-tip" class="graph-tip" hidden="hidden"></div>
+      <div class="legend" id="graph-legend"></div>
+    </div>
+  </section>
+
+  <div id="tour-layer" hidden="hidden">
+    <div id="tour-spot"></div>
+    <div id="tour-bubble" role="dialog" aria-live="polite">
+      <div id="tour-step" class="hint"></div>
+      <h3 id="tour-title"></h3>
+      <div id="tour-text"></div>
+      <div class="actions">
+        <button class="link" id="tour-skip">Skip tour</button>
+        <span class="spacer"></span>
+        <button id="tour-back">Back</button>
+        <button id="tour-next" class="primary">Next</button>
+      </div>
+    </div>
+  </div>
+</body>
+</html>
