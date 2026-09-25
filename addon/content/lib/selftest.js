@@ -29,15 +29,31 @@ ZR.SelfTest = (() => {
       const d = await waitFor(() => pw.document?.getElementById("zr-check-updates") && pw.document, 30000);
       await U.sleep(500);
       d.getElementById("zr-check-updates").click();
-      const status = await waitFor(() => {
-        const t = d.getElementById("zr-update-status").textContent;
-        return /Updated to|latest version|failed|code/.test(t) && t;
+      // The plugin reloads itself during the update, which also rebuilds its Settings pane.
+      let problem = "";
+      await waitFor(() => {
+        const t = d.getElementById("zr-update-status")?.textContent || "";
+        if (/latest version|failed|code/.test(t)) problem = t;
+        return problem || (Zotero.Researcher && Zotero.Researcher.version !== from);
       }, 180000);
-      await screenshot(pw, PathUtils.join(outDir, "update-settings.png"));
-      await waitFor(() => Zotero.Researcher && Zotero.Researcher.version !== from, 30000);
+      if (problem) throw new Error("update check said: " + problem);
       const toolbar = await waitFor(() => win.document.getElementById("zotero-researcher-tb"), 20000);
-      report.steps.push({ name: "Check for updates installs the published release", ok: /Updated to/.test(status), ms: Date.now() - t0, result: { from, to: Zotero.Researcher.version, status, toolbarRestored: !!toolbar } });
+      // Zotero drops the plugin's pane while it reloads; reopen Settings like a user would.
       pw.close();
+      await U.sleep(1000);
+      const pw2 = Zotero.Utilities.Internal.openPreferences("zotero-researcher-prefs");
+      const shown = await waitFor(() => /Installed: version/.test(pw2.document?.getElementById("zr-version")?.textContent) && pw2.document.getElementById("zr-version").textContent, 30000);
+      await U.sleep(500);
+      await screenshot(pw2, PathUtils.join(outDir, "update-settings.png"));
+      const to = Zotero.Researcher.version;
+      report.steps.push({
+        name: "Check for updates installs the published release",
+        ok: !!toolbar && to !== from && shown.includes(to),
+        ms: Date.now() - t0,
+        // lastVersion is only set by releases that include the update announcement (> 0.2.1)
+        result: { from, to, settingsShows: shown, toolbarRestored: !!toolbar, announcedVersion: Zotero.Researcher.Prefs.get("lastVersion", "") },
+      });
+      pw2.close();
     } catch (e) {
       report.steps.push({ name: "Check for updates installs the published release", ok: false, ms: Date.now() - t0, error: String(e && e.stack ? e.message + "\n" + e.stack : e) });
     }

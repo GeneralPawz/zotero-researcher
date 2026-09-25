@@ -17,3 +17,4 @@ pref("extensions.zotero-researcher.disciplines", "{}");
 pref("extensions.zotero-researcher.tourSeen", false);
 pref("extensions.zotero-researcher.welcomeShown", false);
 pref("extensions.zotero-researcher.selftestMode", "");
+pref("extensions.zotero-researcher.lastVersion", "");
