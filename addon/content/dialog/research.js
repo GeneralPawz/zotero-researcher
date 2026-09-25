@@ -114,6 +114,7 @@ const App = (window.App = {
       opts.push(el("option", { value: p.id, text: `${p.kind === "review" ? "◆" : "○"} ${p.name}`, title: m ? `Structured review · ${m.name}` : "Quick search project" }));
     }
     opts.push(el("option", { value: "__new", text: "+ New project…" }));
+    if (App.project) opts.push(el("option", { value: "__delete", text: `Delete “${App.project.name}”…` }));
     sel.replaceChildren(...opts);
     sel.value = App.project?.id || "";
     const review = App.project?.kind === "review";
@@ -127,6 +128,7 @@ const App = (window.App = {
       $("project-select").value = App.project?.id || "";
       return App.newProject();
     }
+    if (id === "__delete") return App.deleteProject();
     const p = App.projects.find((x) => x.id === id) || null;
     if (window.Autopilot?.isRunning()) Autopilot.pause();
     window.Autopilot?.hide();
@@ -203,6 +205,83 @@ const App = (window.App = {
     await App.panels[App.currentTab]?.onShow?.();
   },
 
+  /** Small SVG icons (Material paths). */
+  icon(name) {
+    const PATHS = {
+      play: "M8 5v14l11-7z",
+      pause: "M6 19h4V5H6v14zm8-14v14h4V5h-4z",
+      stop: "M6 6h12v12H6z",
+      collapse: "M8.59 16.59 13.17 12 8.59 7.41 10 6l6 6-6 6-1.41-1.41z",
+      expand: "M15.41 16.59 10.83 12l4.58-4.59L14 6l-6 6 6 6 1.41-1.41z",
+    };
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("aria-hidden", "true");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", PATHS[name] || "");
+    svg.append(path);
+    return svg;
+  },
+
+  /**
+   * Line up with Zotero's main window: our header ends where its tab bar ends, and our
+   * footer line sits where the line above its tag filter is (both measured from the
+   * window edges, so it holds for any title bar or DPI). The autopilot header matches
+   * the review's subheader.
+   */
+  syncLayout() {
+    const root = document.documentElement.style;
+    try {
+      const mw = Zotero.getMainWindow();
+      const mdoc = mw?.document;
+      const top = (w) => w.mozInnerScreenY - w.screenY; // title bar above the content
+      const tabs = mdoc?.getElementById("tab-bar-container") || mdoc?.getElementById("zotero-title-bar");
+      const tr = tabs?.getBoundingClientRect();
+      if (tr?.height) {
+        const h = Math.round(top(mw) + tr.bottom - top(window));
+        if (h >= 36 && h <= 120) root.setProperty("--header-h", h + "px");
+      }
+      const filter = mdoc?.querySelector(".tag-selector-filter-container");
+      const fr = filter?.getBoundingClientRect();
+      if (fr?.height) {
+        const fromBottom = mw.screenY + mw.outerHeight - (mw.mozInnerScreenY + fr.top);
+        const ourChrome = window.screenY + window.outerHeight - (window.mozInnerScreenY + window.innerHeight);
+        const h = Math.round(fromBottom - ourChrome);
+        if (h >= 24 && h <= 90) root.setProperty("--statusbar-h", h + "px");
+      }
+    } catch (e) {
+      /* main window closed: keep the defaults */
+    }
+    const f = $("rv-funnel");
+    if (f?.offsetHeight) root.setProperty("--subheader-h", f.offsetHeight + "px");
+  },
+
+  async deleteProject() {
+    const p = App.project;
+    $("project-select").value = p?.id || "";
+    if (!p) return;
+    const c = await App.ask(
+      `Delete the project “${p.name}”?`,
+      "The collection and its papers stay in Zotero, and so do your decisions on the papers. Removed: the project's settings, protocol, search log and audit trail, candidate pool, System 1 ratings, highlights and the autopilot conversation. This cannot be undone.",
+      [
+        { id: "cancel", label: "Cancel" },
+        { id: "delete", label: "Delete project", danger: true },
+      ]
+    );
+    if (c !== "delete") return;
+    if (window.Autopilot?.isRunning()) Autopilot.stop();
+    window.Autopilot?.hide();
+    await App.ZR.Projects.remove(App.target.libraryID, p.id);
+    App.project = null;
+    await App.loadProjects();
+    App.project = null;
+    App.renderProjects();
+    App.panels.review.reset();
+    App.panels.search.loadProject();
+    App.status(App.currentTab === "review" ? "review" : "search", `Project “${p.name}” deleted.`);
+    await App.panels[App.currentTab]?.onShow?.();
+  },
+
   /** Ask a question in the window (no modal dialog). choices: [{id, label, primary?}] → resolves the chosen id. */
   ask(title, text, choices) {
     return new Promise((resolve) => {
@@ -214,7 +293,7 @@ const App = (window.App = {
           el("p", { class: "ask-text", text }),
           el("div", { class: "actions" }, [
             el("span", { class: "spacer" }),
-            ...choices.map((c) => el("button", { class: c.primary ? "primary" : "", "data-choice": c.id, text: c.label, onclick: () => (layer.remove(), resolve(c.id)) })),
+            ...choices.map((c) => el("button", { class: c.danger ? "danger-solid" : c.primary ? "primary" : "", "data-choice": c.id, text: c.label, onclick: () => (layer.remove(), resolve(c.id)) })),
           ]),
         ])
       );
@@ -356,9 +435,12 @@ async function init() {
 
   await App.loadProjects();
   for (const p of Object.values(App.panels)) await p.init?.();
+  App.syncLayout();
+  window.addEventListener("resize", () => App.syncLayout());
 
   // Pick up settings changes (new AI profile, research areas, keys) when the window regains focus.
   window.addEventListener("focus", () => {
+    App.syncLayout();
     for (const s of document.querySelectorAll("select[data-llm]")) App.fillProfileSelect(s);
     App.panels.search.renderSources?.();
   });

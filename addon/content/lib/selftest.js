@@ -140,6 +140,11 @@ ZR.SelfTest = (() => {
         });
       }
       if (url === "https://api.typesafe.ai/v1/systemone") return mockTypeSafe(o, tsCalls);
+      if (url.startsWith("https://api.firecrawl.dev/")) {
+        mockLLM.crawlerCalls = (mockLLM.crawlerCalls || 0) + 1;
+        const json = { success: true, data: [] };
+        return { status: 200, text: JSON.stringify(json), json: () => json };
+      }
       if (url.startsWith(MOCK_EMBED)) return mockEmbed(url, o);
       if (!url.startsWith(MOCK)) return realHTTP(method, url, o);
       const prompt = o.body.messages[o.body.messages.length - 1].content;
@@ -702,6 +707,7 @@ ZR.SelfTest = (() => {
     const tsCalls = [];
     ZR.http = ZR.Activity.wrapHTTP(mockLLM(ZR.Util.zoteroHTTP, llmCalls, tsCalls));
     if (!ZR.Prefs.get("selftestOllama", false)) ZR.Prefs.set("embedURL", MOCK_EMBED);
+    await ZR.Secrets.set(ZR.PDFHunt.keyName("firecrawl"), "fc-mock");
     ZR.Prefs.setLLMProfiles([{ id: "mock", name: "Mock AI", provider: "custom", baseURL: MOCK, model: "mock-1", temperature: "" }]);
     ZR.Prefs.set("activeLLMProfile", "mock");
     try {
@@ -1199,16 +1205,94 @@ ZR.SelfTest = (() => {
         await waitFor(() => [...d.querySelectorAll("#ap-log .ap-msg")].some((m) => /Stopped during/.test(m.textContent)), 10000);
         const stoppedMs = Date.now() - t0;
         const stillRunning = ZR.Activity.running().filter((e) => /mock-llm/.test(e.label)).length;
-        const afterStop = { stage: sw.App.project.autopilot.stage, on: sw.App.project.autopilot.on, resumeVisible: !d.getElementById("ap-resume").hidden, protocolFilled: !!sw.App.project.protocol?.inclusion?.length };
+        const afterStop = { stage: sw.App.project.autopilot.stage, on: sw.App.project.autopilot.on, resumeVisible: d.getElementById("ap-toggle").title === "Resume", protocolFilled: !!sw.App.project.protocol?.inclusion?.length };
         // resume: the same step runs again, now with a responsive AI
         mockLLM.delayMs = 0;
-        d.getElementById("ap-resume").click();
+        d.getElementById("ap-toggle").click();
         const askLine = await waitFor(() => d.querySelector('#ap-prompt [data-choice="go"]') && d.querySelector("#ap-prompt .ap-ask-line").textContent, 30000);
         d.querySelector('#ap-prompt [data-choice="pause"]').click();
         await waitFor(() => !sw.Autopilot.isRunning(), 10000);
         sw.close();
         const res = { cancelledCall: running.label.slice(0, 60), stoppedMs, stillRunning, afterStop, resumedTo: askLine.slice(0, 60) };
         if (stoppedMs > 5000 || stillRunning || afterStop.stage !== "protocol" || !afterStop.on || !afterStop.resumeVisible || afterStop.protocolFilled || !/protocol/i.test(askLine)) throw new Error(JSON.stringify(res));
+        return res;
+      });
+
+      await step("layout: header and footer lines match Zotero's main window; autopilot controls; rows; delete a project", async () => {
+        const proj = (await ZR.Projects.list(libraryID)).find((p) => p.name === "Stop test");
+        const col = Zotero.Collections.getByLibraryAndKey(libraryID, proj.collectionKey);
+        await zp.collectionsView.selectCollection(col.id);
+        await U.sleep(300);
+        const lw2 = await openResearch(win, { tab: "find", itemIDs: [] });
+        const d = lw2.document;
+        lw2.App.showTab("review");
+        await waitFor(() => d.getElementById("rv-funnel")?.offsetHeight, 5000);
+        lw2.App.syncLayout();
+        await U.sleep(200);
+        // measured from the window's outer edges, like two windows side by side
+        const fromTop = (w, rect) => w.mozInnerScreenY - w.screenY + rect.bottom;
+        const fromBottom = (w, y) => w.screenY + w.outerHeight - (w.mozInnerScreenY + y);
+        const mdoc = win.document;
+        const tabs = mdoc.getElementById("tab-bar-container") || mdoc.getElementById("zotero-title-bar");
+        const headerDiff = Math.abs(fromTop(win, tabs.getBoundingClientRect()) - fromTop(lw2, d.querySelector("header.top").getBoundingClientRect()));
+        const filter = mdoc.querySelector(".tag-selector-filter-container");
+        const status = d.querySelector("#panel-review .statusbar");
+        const footerDiff = filter?.getBoundingClientRect().height ? Math.abs(fromBottom(win, filter.getBoundingClientRect().top) - fromBottom(lw2, status.getBoundingClientRect().top)) : null;
+        // autopilot panel: its header ends with the subheader; collapse / expand
+        await lw2.Autopilot.show();
+        await U.sleep(200);
+        const apDiff = Math.abs(d.querySelector("#ap-panel .ap-head").getBoundingClientRect().bottom - d.getElementById("rv-funnel").getBoundingClientRect().bottom);
+        const gapToFooter = Math.round(d.querySelector("#panel-review .statusbar").getBoundingClientRect().top - d.getElementById("ap-panel").getBoundingClientRect().bottom);
+        await shot(lw2, "14a-layout-autopilot.png");
+        d.getElementById("ap-collapse").click();
+        await U.sleep(150);
+        const collapsedWidth = Math.round(d.getElementById("ap-panel").getBoundingClientRect().width);
+        await shot(lw2, "14b-autopilot-collapsed.png");
+        d.getElementById("ap-collapse").click();
+        await U.sleep(150);
+        const expandedWidth = Math.round(d.getElementById("ap-panel").getBoundingClientRect().width);
+        const toggleTitle = d.getElementById("ap-toggle").title;
+        lw2.Autopilot.hide();
+        // alternating rows in the screening list
+        const rv2 = await ZR.Projects.list(libraryID).then((l) => l.find((p) => p.name === "IFC review"));
+        const bgs = [];
+        if (rv2) {
+          await lw2.App.switchProject(rv2.id);
+          lw2.App.showTab("review");
+          await waitFor(() => d.querySelector('#rv-steps button[data-step="screen"]'), 5000);
+          d.querySelector('#rv-steps button[data-step="screen"]').click();
+          d.getElementById("queue-filter").value = "all";
+          d.getElementById("queue-filter").dispatchEvent(new lw2.Event("change"));
+          await waitFor(() => d.querySelectorAll("#queue .q-item").length > 3, 5000);
+          const items = d.querySelectorAll("#queue .q-item");
+          bgs.push(lw2.getComputedStyle(items[1]).backgroundColor, lw2.getComputedStyle(items[2]).backgroundColor);
+          await shot(lw2, "14c-rows.png");
+          await lw2.App.switchProject(proj.id);
+        }
+        // delete the project
+        await pick(d.getElementById("project-select"), "Delete");
+        const ask = await waitFor(() => d.getElementById("ask-layer"), 5000);
+        const askText = ask.textContent.slice(0, 90);
+        ask.querySelector('[data-choice="delete"]').click();
+        await waitFor(async () => !(await ZR.Projects.get(libraryID, proj.id)), 5000);
+        const poolFile = PathUtils.join(Zotero.DataDirectory.dir, "zotero-researcher", "projects", `L${libraryID}-${proj.id}.json`);
+        const res = {
+          headerDiff,
+          footerDiff,
+          apDiff,
+          gapToFooter,
+          collapsedWidth,
+          expandedWidth,
+          toggleTitle,
+          rowColours: bgs,
+          askText,
+          deleted: !(await ZR.Projects.get(libraryID, proj.id)),
+          poolFileGone: !(await IOUtils.exists(poolFile)),
+          collectionKept: !!Zotero.Collections.getByLibraryAndKey(libraryID, proj.collectionKey),
+          selectOptions: [...d.querySelectorAll("#project-select option")].map((o) => o.textContent).filter((t) => /Stop test/.test(t)).length,
+        };
+        lw2.close();
+        if (headerDiff > 2 || (footerDiff != null && footerDiff > 2) || apDiff > 1 || gapToFooter < 4 || collapsedWidth > 60 || expandedWidth < 300 || (bgs.length && bgs[0] === bgs[1]) || !res.deleted || !res.poolFileGone || !res.collectionKept || res.selectOptions) throw new Error(JSON.stringify(res));
         return res;
       });
 
@@ -1247,6 +1331,15 @@ ZR.SelfTest = (() => {
             continue;
           }
           const btns = [...d.querySelectorAll("#ap-prompt [data-choice]")];
+          if (btns.some((b) => b.dataset.choice === "try")) {
+            const line = d.querySelector("#ap-prompt .ap-ask-line").textContent;
+            const choice = prompts.some((x) => x.startsWith("missing PDFs")) ? "skip" : "try";
+            prompts.push(`missing PDFs: ${line.slice(0, 60)} · strategies ${d.querySelectorAll("#ap-prompt input[type=checkbox]").length} → ${choice}`);
+            if (choice === "try") await shot(aw, "13e-autopilot-missing-pdfs.png");
+            btns.find((b) => b.dataset.choice === choice).click();
+            await U.sleep(400);
+            continue;
+          }
           const pickBtn = prefer.map((id) => btns.find((b) => b.dataset.choice === id)).find(Boolean);
           if (pickBtn) {
             prompts.push(`${d.querySelector("#ap-prompt .ap-ask-line")?.textContent.slice(0, 70)} → ${pickBtn.dataset.choice}`);
@@ -1269,6 +1362,7 @@ ZR.SelfTest = (() => {
           passed: cands.filter((c) => c.ta === "include").length,
           thresholdsChanged: p.funnel?.includeAbove === 0.8,
           prompts,
+          crawlerCalls: mockLLM.crawlerCalls || 0,
           log: log.slice(-6).map((t) => t.slice(0, 120)),
           errors: log.filter((t) => /went wrong/.test(t)),
         };

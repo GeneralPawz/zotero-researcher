@@ -86,6 +86,17 @@ ZR.LLM = (() => {
       extraHeaders: { "HTTP-Referer": "https://www.zotero.org", "X-Title": "Zotero Researcher" },
     },
     {
+      id: "perplexity",
+      name: "Perplexity (Sonar — answers with live web search)",
+      protocol: "openai",
+      baseURL: "https://api.perplexity.ai",
+      keyURL: "https://www.perplexity.ai/account/api/keys",
+      needsKey: true,
+      models: ["sonar", "sonar-pro", "sonar-reasoning-pro", "sonar-deep-research"],
+      webSearch: true,
+      staticModels: true, // no model-listing endpoint
+    },
+    {
       id: "deepseek",
       name: "DeepSeek",
       protocol: "openai",
@@ -168,7 +179,7 @@ ZR.LLM = (() => {
   async function chatRaw(profile, messages, opts = {}) {
     const { provider, baseURL, apiKey } = resolve(profile);
     // Local CLI (Claude Code / Codex): the user's subscription, no API key
-    if (provider.protocol === "cli") return ZR.CLI.chat(profile, messages, { system: opts.system, timeout: opts.timeout || 240000 });
+    if (provider.protocol === "cli") return ZR.CLI.chat(profile, messages, { system: opts.system, timeout: opts.timeout || 240000, web: !!opts.web });
     const maxTokens = opts.maxTokens || 4096;
     const temperature = opts.temperature ?? (profile.temperature !== "" && profile.temperature != null ? Number(profile.temperature) : undefined);
     const timeout = opts.timeout || 180000;
@@ -241,6 +252,7 @@ ZR.LLM = (() => {
   async function listModels(profile, { resolve = false } = {}) {
     const provider = getProvider(profile.provider);
     if (provider.protocol === "cli") return ZR.CLI.models(profile, { resolve });
+    if (provider.staticModels) return provider.models.map((id) => ({ id, name: id, detail: "" }));
     const baseURL = (profile.baseURL || provider.baseURL || "").replace(/\/+$/, "");
     const apiKey = profile.apiKey ?? ZR.Secrets.get(ZR.Secrets.llmKey(profile.id));
     const headers = Object.assign({}, provider.extraHeaders || {});

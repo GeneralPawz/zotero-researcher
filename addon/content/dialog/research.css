@@ -623,3 +623,31 @@ body.ap-open #panel-review, body.ap-open #panel-search { margin-right: 400px; }
 .ap-inline { display: inline-flex; align-items: center; gap: 4px; font-size: 12.5px; }
 .ap-sources.ap-missing { outline: 2px solid var(--bad); border-radius: 6px; }
 .ap-head button { white-space: nowrap; }
+
+.hunt-modal { width: min(640px, calc(100vw - 40px)); max-height: calc(100vh - 60px); display: flex; flex-direction: column; gap: 8px; }
+.hunt-count { font-weight: 600; }
+.hunt-strategies { display: flex; flex-direction: column; gap: 4px; max-height: 240px; overflow: auto; padding: 6px 8px; border: 1px solid var(--line); border-radius: 8px; }
+.hunt-log { font-size: 12px; color: var(--fg-2); display: flex; flex-direction: column; gap: 2px; max-height: 160px; overflow: auto; }
+
+/* ---------- round 10: layout like Zotero, autopilot controls, rows ---------- */
+.top { height: var(--header-h, 52px); min-height: 0; box-sizing: border-box; padding: 0 14px; }
+.project-box { gap: 0; line-height: 1.25; }
+.statusbar { height: var(--statusbar-h, 30px); min-height: 0; box-sizing: border-box; border-top: 1px solid var(--line); padding: 0 18px; }
+.funnel { min-height: 40px; box-sizing: border-box; }
+.ap-panel { top: var(--header-h, 52px); bottom: calc(var(--statusbar-h, 30px) + 8px); border-bottom: 1px solid var(--line); border-bottom-left-radius: 10px; }
+.ap-head { height: var(--subheader-h, 40px); box-sizing: border-box; padding: 0 8px 0 10px; gap: 4px; }
+.ap-title { display: flex; flex-direction: column; min-width: 0; line-height: 1.2; }
+.ap-title .hint { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; font-size: 11px; }
+.ap-icon { width: 30px; height: 28px; padding: 0; display: inline-flex; align-items: center; justify-content: center; border-radius: 7px; flex: none; }
+.ap-icon svg { width: 18px; height: 18px; fill: currentColor; }
+.ap-icon.primary { color: var(--accent-fg); }
+.ap-icon.danger { color: var(--bad); border-color: var(--bad); }
+.ap-icon.danger:hover:not(:disabled) { background: var(--bad-soft); }
+.ap-panel.collapsed { width: 48px; }
+.ap-panel.collapsed .ap-log, .ap-panel.collapsed .ap-prompt, .ap-panel.collapsed .ap-title, .ap-panel.collapsed .spacer { display: none; }
+.ap-panel.collapsed .ap-head { flex-direction: column; height: auto; padding: 8px 0; gap: 6px; align-items: center; border-bottom: 0; }
+body.ap-open.ap-collapsed #panel-review, body.ap-open.ap-collapsed #panel-search { margin-right: 48px; }
+button.danger-solid { background: var(--bad); border-color: var(--bad); color: #fff; font-weight: 600; }
+.queue-list .q-item:nth-child(even) { background: var(--bg-2); }
+.queue-list .q-item:hover { background: var(--bg-3); }
+.queue-list .q-item.current { background: var(--accent-soft); }
