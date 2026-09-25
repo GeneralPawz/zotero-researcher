@@ -132,7 +132,7 @@ Papers that are already in Zotero are never imported twice. When a search result
    - **Years and languages** from the protocol are checked from the metadata in code, not asked to the model.
 
    Papers are added to the Zotero collection **when you include them**.
-4. **Check full texts.** Only papers that passed screening appear. The card works like the screening card: decision and reason at the top, the same abstract view. When a paper is included at screening, its PDF is downloaded in the background (unless *Download PDFs* is off). Papers that still have no PDF are greyed out in the list, until one is found. *Find missing PDFs…* runs one or more strategies one after another, as often as you like:
+4. **Check full texts.** Only papers that passed screening appear. The card works like the screening card: decision and reason at the top, the same abstract view. When a paper is included at screening, its PDF is downloaded in the background (unless *Download PDFs* is off). Papers that still have no PDF are greyed out in the list, until one is found. The PDFs of papers included at screening download in the background as a job of their own (in the footer: how many are done and found, the paper it works on, pause and stop); a download that hangs is given up after two minutes. *Find missing PDFs…* runs one or more strategies one after another, as often as you like:
      - **open-access sources:** links from the search (arXiv, DOAJ, CORE, …), DOI resolvers, Unpaywall;
      - **AI agents:** any AI provider. The Codex and Claude Code CLIs get web search for this task, Perplexity searches by design, and OpenRouter uses the model's `:online` variant. Other providers can only answer from memory.
      - **web crawlers and search APIs:** Firecrawl, SerpApi (Google Scholar, with direct PDF links), Tavily, Exa, Brave Search, each with a key under Settings → *Web search & crawlers*.
@@ -170,7 +170,7 @@ Papers that are already in Zotero are never imported twice. When a search result
    - The harness sees condensed numbers, not every paper, to save tokens. If something looks off, such as nearly everything rejected, it drills into sample papers.
    - It explains what it sees and proposes changes to query, criteria or thresholds. You apply them, keep things as they are, or adjust them yourself. After a refined search it re-rates; after three attempts without improvement it says so, and you close the review or continue anyway.
    - Then thresholds, the AI for the uncertain middle, and the decisions.
-4. **Full text:** you choose the model that reads the full texts. It finds PDFs and annotates them.
+4. **Full text:** you choose the model that reads the full texts (the same as the autopilot, or another provider, model and reasoning effort). It finds PDFs and annotates them.
    - If papers are still without PDF, it warns you that they can't be assessed (and whether *Download PDFs* was off in the search plan). It then offers the PDF strategies (AI agents, crawlers), one or several, repeatable, until you continue.
    - The harness proposes decisions from the annotations.
    - On request, System 1 checks whether the annotation verdicts make sense, and the harness arbitrates the discrepancies.

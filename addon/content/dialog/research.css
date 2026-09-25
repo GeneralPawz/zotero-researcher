@@ -927,3 +927,5 @@ button.danger-solid:hover:not(:disabled) { background: var(--bad); border-color:
 .ap-an-modal h3 { margin: 10px 0 4px; }
 .ap-an-table td { font-variant-numeric: tabular-nums; }
 .ap-an-table td:first-child { font-weight: 600; }
+
+.ap-field.ap-sub { padding-left: 12px; border-left: 2px solid var(--line); }
