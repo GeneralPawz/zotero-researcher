@@ -18,6 +18,8 @@ App.panels.items = (() => {
     $("find-pdfs").addEventListener("click", runFindPDFs);
     $("find-related").addEventListener("click", () => App.panels.search.runRelated(App.selectedItems()));
     $("compare-open").addEventListener("click", openCompare);
+    $("find-similar").addEventListener("click", runSimilar);
+    $("similar-close").addEventListener("click", () => ($("similar-box").hidden = true));
     $("compare-close").addEventListener("click", () => ($("compare-box").hidden = true));
     $("compare-run").addEventListener("click", runCompare);
     $("compare-save").addEventListener("click", saveCompare);
@@ -216,6 +218,14 @@ App.panels.items = (() => {
             } catch (e) {
               /* not indexed */
             }
+            // Long texts: the passages that matter for the comparison (local model)
+            if (fulltext.length > 5000 && ZR.Embed.isAvailable()) {
+              try {
+                fulltext = await ZR.Embed.passages(`att:${att.libraryID}/${att.key}`, fulltext, [$("compare-instruction").value.trim(), "research question and method", "findings and limitations"], { budget: 5000 });
+              } catch (e) {
+                ZR.Util.log("Passage retrieval failed", e.message);
+              }
+            }
             if (fulltext) break;
           }
         }
@@ -242,6 +252,55 @@ App.panels.items = (() => {
     }
   }
 
+  /** Papers in the library most similar to the selected ones (local embeddings). */
+  async function runSimilar() {
+    const selected = App.selectedItems().filter((i) => i.isRegularItem());
+    if (!selected.length) return st("Select one or more papers in Zotero first.");
+    App.setBusy("items", true);
+    try {
+      if (!(await ZR.Embed.available())) {
+        const s = ZR.Embed.status;
+        return st(`The local model is not available: ${s?.error || "turned off in Settings"} — see Settings → Local models.`);
+      }
+      const all = (await Zotero.Items.getAll(App.target.libraryID, true, false)).filter((i) => i.isRegularItem() && (i.getField("title") || i.getField("abstractNote")));
+      const papers = all.map(ZR.Embed.itemPaper);
+      const vecs = await ZR.Embed.paperVectors(papers, { onProgress: (d, n) => st(`The local model is reading your library: ${d}/${n} (first time only)…`) });
+      const selKeys = new Set(selected.map((i) => ZR.Embed.itemPaper(i).key));
+      const byKey = new Map(papers.map((p) => [p.key, p]));
+      const best = new Map();
+      for (const key of selKeys) {
+        const v = vecs.get(key);
+        if (!v) continue;
+        for (const hit of ZR.Embed.nearest(v, vecs, 12, selKeys)) if (!best.has(hit.key) || best.get(hit.key) < hit.sim) best.set(hit.key, hit.sim);
+      }
+      const hits = [...best.entries()].sort((a, b) => b[1] - a[1]).slice(0, 15);
+      $("similar-title").textContent = `Most similar to ${selected.length === 1 ? "“" + ZR.Util.truncate(selected[0].getField("title"), 70) + "”" : selected.length + " selected papers"} in ${Zotero.Libraries.get(App.target.libraryID).name}`;
+      $("similar-list").replaceChildren(
+        ...(hits.length
+          ? hits.map(([key, sim]) => {
+              const p = byKey.get(key);
+              const item = Zotero.Items.get(p.itemID);
+              const cols = App.ZR.UI.collectionsOf(item).map((c) => c.label.split(" › ").pop());
+              return el("div", { class: "similar-row" }, [
+                el("span", { class: "sim " + (sim >= 0.8 ? "hi" : sim >= 0.65 ? "md" : "lo"), text: Math.round(sim * 100) + "%", title: "Content similarity (cosine)" }),
+                el("div", {}, [
+                  el("a", { href: "#", text: p.title || "(untitled)", onclick: (e) => (e.preventDefault(), App.ZR.UI.revealItem(p.itemID, { preferCollectionID: App.target.collectionID })) }),
+                  el("div", { class: "hint", text: [item.getCreators()[0]?.lastName, ZR.Util.yearOf(item.getField("date")), cols.length ? "in " + cols.join(", ") : "unfiled"].filter(Boolean).join(" · ") }),
+                ]),
+              ]);
+            })
+          : [el("div", { class: "hint", text: "No other papers with a title or abstract in this library." })])
+      );
+      $("similar-box").hidden = false;
+      st(`${hits.length} similar paper(s) — computed on this computer by ${ZR.Embed.config().model}. Click one to show it in Zotero.`);
+    } catch (e) {
+      Zotero.logError(e);
+      st("Similar papers failed: " + e.message);
+    } finally {
+      App.setBusy("items", false);
+    }
+  }
+
   async function saveCompare() {
     if (!compareHTML) return;
     const items = App.selectedItems().filter((i) => i.isRegularItem());
@@ -261,5 +320,5 @@ App.panels.items = (() => {
     st("Saved as a note in " + App.target.label);
   }
 
-  return { init, onShow, runEnrich, runFindPDFs, openCompare };
+  return { init, onShow, runEnrich, runFindPDFs, openCompare, runSimilar };
 })();

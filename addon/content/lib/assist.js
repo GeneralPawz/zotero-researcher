@@ -172,6 +172,20 @@ Reply with JSON only:
     return answers;
   }
 
+  /**
+   * Short names for clusters of papers (e.g. to turn embedding clusters into a
+   * classification facet). Returns one name per cluster, aligned with `clusters`.
+   * @param {string[][]} clusters  titles per cluster
+   */
+  async function nameClusters(profile, clusters, context = "") {
+    const system = "You name topic clusters of research papers for a systematic mapping study. Each name is 1–4 words, specific, and distinct from the other names.";
+    const list = clusters.map((titles, i) => `[${i}]\n${titles.slice(0, 10).map((t) => "- " + U.truncate(t, 140)).join("\n")}`).join("\n\n");
+    const user = `${context ? "Review: " + context + "\n\n" : ""}Clusters:\n${list}\n\nReply with JSON only: {"names": ["<name for cluster 0>", ...]} with exactly ${clusters.length} names.`;
+    const out = await ZR.LLM.chatJSON(profile, [{ role: "user", content: user }], { system, maxTokens: 1000 });
+    const names = Array.isArray(out?.names) ? out.names.map((n) => String(n).trim()) : [];
+    return clusters.map((_, i) => names[i] || "");
+  }
+
   /** Compare papers along user-chosen dimensions; returns sanitized HTML for a Zotero note. */
   async function compare(profile, papers, instruction) {
     const system =
@@ -229,5 +243,5 @@ Reply with JSON only:
       });
   }
 
-  return { planQuery, screen, screenCriteria, fillProtocol, extractFields, assessQuality, compare, extractMetadata, pickCandidate, sanitizeHTML, QUERY_SYNTAX };
+  return { planQuery, screen, screenCriteria, fillProtocol, extractFields, assessQuality, nameClusters, compare, extractMetadata, pickCandidate, sanitizeHTML, QUERY_SYNTAX };
 })();

@@ -130,7 +130,7 @@ ZR.Projects = (() => {
   // ------------------------------------------------------ candidate pool ----
   const pools = new Map(); // `${libraryID}/${id}` -> pool
   const poolPath = (libraryID, id) => PathUtils.join(Zotero.DataDirectory.dir, "zotero-researcher", "projects", `L${libraryID}-${id}.json`);
-  const emptyPool = () => ({ records: {}, s1: {}, llm: {}, qa: {}, extract: {} });
+  const emptyPool = () => ({ records: {}, s1: {}, llm: {}, qa: {}, extract: {}, dups: {} });
 
   async function loadPool(libraryID, id) {
     const k = `${libraryID}/${id}`;
@@ -238,6 +238,7 @@ ZR.Projects = (() => {
       c.llm = pool.llm[c.key] || null;
       c.qa = pool.qa[c.key] || null;
       c.extract = pool.extract[c.key] || null;
+      c.dup = pool.dups[c.key] || null; // {of: key of the paper it duplicates, sim}
     }
     return [...out.values()];
   }

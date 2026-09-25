@@ -5,6 +5,7 @@ A Zotero 7–10 plugin for building and curating a literature collection. It can
 - find papers for a collection in scholarly databases,
 - remember each topic's search settings and history as a **project**,
 - run a structured review (PRISMA 2020, scoping review, Kitchenham SLR, mapping study, …) with a screening funnel in which a fast **System 1** model and an AI help you decide,
+- use a small **local model on your own computer** that learns from your screening decisions, finds duplicates and similar papers, and picks the relevant passages of long full texts,
 - link papers that cite each other,
 - fetch full-text PDFs,
 - repair sparse metadata.
@@ -188,7 +189,34 @@ You can add any number of AI profiles and switch between them:
 - **Your AI provider:** slower, and its stated confidence is mapped to a probability.
 - **Keyword rules:** no AI at all; papers are rated by whether they match the protocol's query.
 
+- **Local model:** runs on your computer and learns from your decisions (see below).
+
 *Automatic* uses the best one available.
+
+## Local models (this computer)
+
+A small embedding model running on your own computer adds several features for free, offline, and without sending anything out. It works well on ordinary laptops, including ARM ones such as the Snapdragon X series.
+
+**Setup:** install [Ollama](https://ollama.com/download) and keep it running. **Settings → Local models** checks the connection and can download the model; the recommended one is `nomic-embed-text`, about 270 MB. Foundry Local, LM Studio and llama.cpp also work, through their OpenAI-compatible endpoint.
+
+What it does:
+- **A screening model that learns from you** (active learning, as in ASReview):
+  - At first it ranks the pool by similarity to your protocol.
+  - Once you have included 3 and excluded 3 papers yourself, it trains on your decisions. From then on it re-ranks the remaining papers after each decision you make.
+  - It uses only your own decisions, never those made by System 1, the AI, or the duplicate check.
+  - It can be the System 1 engine on its own, or it can be blended with TypeSafe/AI ratings as ½ (rating + learned).
+- **Duplicates:** it finds the same paper under a different title or version, such as a preprint and its journal version.
+  - *Exclude duplicates* keeps the better-documented version of each pair (in your library, not a preprint, with a DOI, fuller abstract).
+  - Each excluded copy gets the reason "Duplicate".
+- **Similar papers:**
+  - *Selected items → Similar in my library* lists the closest papers in your library.
+  - The citation graph can add dashed "similar content" links where citation data is missing.
+- **Topic clusters:** in a mapping study, *Topics from clusters* groups the included papers by content and adds the groups as a classification facet. The categories are named by the AI if one is set up, otherwise by keywords.
+- **Passage retrieval:** for long full texts, the AI gets only the passages relevant to the criteria, checklist or extraction fields, instead of just the beginning. This applies to full-text screening, quality appraisal, data extraction, and comparisons.
+
+Each paper is embedded once and cached in `<Zotero data dir>/zotero-researcher/vectors/`. On a Snapdragon X Plus CPU this takes about 6 abstracts per second.
+
+If Ollama answers with *403*, set the environment variable `OLLAMA_ORIGINS=*` and restart Ollama.
 
 ## Development
 
@@ -198,6 +226,7 @@ npm run build     # build/zotero-researcher-<version>.xpi
 npm run e2e       # end-to-end test inside a real Zotero (see below)
 npm run e2e -- --update   # update path: old build → Check for updates → latest release
 ZR_E2E_CLI=1 npm run e2e  # also makes real calls through your installed Claude Code / Codex CLIs
+ZR_E2E_OLLAMA=1 npm run e2e  # uses your local Ollama for the local-model steps (default: a mock server)
 ```
 
 Layout:
@@ -215,7 +244,7 @@ Layout:
 `npm run e2e` works like this:
 1. It builds the XPI and installs it into a **throwaway profile and data directory**.
 2. It starts a separate Zotero (`-no-remote`).
-3. The in-app self-test (`content/lib/selftest.js`) drives the real UI: 33 steps covering the toolbar, multi-select, item pane, context menu, welcome pointer, tour, research areas, live searches, PDFs, metadata fixing, judging and decision memory, Settings, the AI flows (against a mock AI endpoint, with live databases), projects (automatic quick projects, new review projects, conversion, persistence), the structured review (methodology-dependent forms, AI-filled protocol, candidate pool, System 1 rating against a mock TypeSafe endpoint with threshold decisions, AI on the uncertain papers, keyboard screening, full text, AI-filled quality and extraction tables, flow diagram and protocol note), citation linking on real papers (ResNet → GoogLeNet, Attention → ResNet), and disable/re-enable with the decisions surviving.
+3. The in-app self-test (`content/lib/selftest.js`) drives the real UI: 38 steps covering the toolbar, multi-select, item pane, context menu, welcome pointer, tour, research areas, live searches, PDFs, metadata fixing, judging and decision memory, Settings, the AI flows (against a mock AI endpoint, with live databases), projects (automatic quick projects, new review projects, conversion, persistence), the structured review (methodology-dependent forms, AI-filled protocol, candidate pool, System 1 rating against a mock TypeSafe endpoint with threshold decisions, AI on the uncertain papers, keyboard screening, full text, AI-filled quality and extraction tables, flow diagram and protocol note), the local model (Settings check, ranking by the protocol, duplicate exclusion, learning from keyboard decisions and re-ranking, topic clusters as a facet, passage retrieval, similar papers in the library and the citation graph), citation linking on real papers (ResNet → GoogLeNet, Attention → ResNet), and disable/re-enable with the decisions surviving.
 4. It writes `report.json` and screenshots, then quits.
 
 Your normal profile and library are never touched. Use `--keep-open` to keep the test instance open, and `--clean` to delete the temp folder after a passing run.

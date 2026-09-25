@@ -109,9 +109,32 @@ ZR.SelfTest = (() => {
     return { status: 200, text: JSON.stringify(json), json: () => json };
   }
 
+  // Mock local embedding server (Ollama API): hashed bag of words, so papers that share
+  // words are similar — deterministic stand-in for a real embedding model.
+  const MOCK_EMBED = "http://mock-embed.invalid";
+  function bagOfWords(text) {
+    const v = new Array(256).fill(0);
+    for (const w of text.replace(/^search_(document|query): /, "").toLowerCase().split(/[^a-z0-9]+/)) {
+      if (w.length < 3) continue;
+      let h = 7;
+      for (const ch of w) h = (h * 31 + ch.charCodeAt(0)) % 9973;
+      v[h % 256] += 1;
+    }
+    v[255] += 0.01;
+    return v;
+  }
+  function mockEmbed(url, o) {
+    let json;
+    if (url.endsWith("/api/version")) json = { version: "mock" };
+    else if (url.endsWith("/api/tags")) json = { models: [{ name: "nomic-embed-text:latest" }] };
+    else json = { model: o.body.model, embeddings: o.body.input.map(bagOfWords) };
+    return { status: 200, text: JSON.stringify(json), json: () => json };
+  }
+
   function mockLLM(realHTTP, calls, tsCalls = []) {
     return async (method, url, o = {}) => {
       if (url === "https://api.typesafe.ai/v1/systemone") return mockTypeSafe(o, tsCalls);
+      if (url.startsWith(MOCK_EMBED)) return mockEmbed(url, o);
       if (!url.startsWith(MOCK)) return realHTTP(method, url, o);
       const prompt = o.body.messages[o.body.messages.length - 1].content;
       calls.push(prompt.slice(0, 50));
@@ -137,6 +160,7 @@ ZR.SelfTest = (() => {
           recommendationWhy: "an engineering topic",
           rationale: "Drafted from your description.",
         });
+      else if (prompt.includes('{"names"')) content = JSON.stringify({ names: (prompt.match(/^\[\d+\]$/gm) || []).map((_, i) => ["Exchange quality", "Model views", "Infrastructure", "Facility management"][i] || "Topic " + i) });
       else if (prompt.includes("\nChecklist:\n")) content = JSON.stringify((prompt.match(/^\d+\. /gm) || []).map((_, i) => ({ i, answer: i ? "partly" : "yes", why: "stated in the abstract" })));
       else if (prompt.includes("\nFields:\n")) {
         const fields = prompt.split("\nFields:\n")[1].split("\n\n")[0].split("\n").map((l) => l.replace(/^- /, "").trim()).filter(Boolean);
@@ -577,6 +601,7 @@ ZR.SelfTest = (() => {
     const llmCalls = [];
     const tsCalls = [];
     ZR.http = mockLLM(realHTTP, llmCalls, tsCalls);
+    if (!ZR.Prefs.get("selftestOllama", false)) ZR.Prefs.set("embedURL", MOCK_EMBED);
     ZR.Prefs.setLLMProfiles([{ id: "mock", name: "Mock AI", provider: "custom", baseURL: MOCK, model: "mock-1", temperature: "" }]);
     ZR.Prefs.set("activeLLMProfile", "mock");
     try {
@@ -860,9 +885,177 @@ ZR.SelfTest = (() => {
       ZR.Prefs.set("s1Engine", "");
       await ZR.Secrets.set(ZR.System1.keyName, "");
       report.typesafeCalls = tsCalls.length;
+
+      // --- Local model (embeddings on this computer): real Ollama with ZR_E2E_OLLAMA=1, else a mock server
+      const realOllama = ZR.Prefs.get("selftestOllama", false);
+      report.localModel = realOllama ? "real Ollama" : "mock";
+      await step(`local model: Settings finds the server and model (${report.localModel})`, async () => {
+        ZR.Embed._reset();
+        const pw = Zotero.Utilities.Internal.openPreferences("zotero-researcher-prefs");
+        const d = await waitFor(() => pw.document?.getElementById("zr-local-status") && pw.document, 30000);
+        const status = await waitFor(() => {
+          const t = d.getElementById("zr-local-status").textContent;
+          return /Ready|✗/.test(t) && t;
+        }, 60000);
+        const engines = [...d.querySelectorAll("#zr-s1-engine option")].map((o) => o.value);
+        d.getElementById("zr-local").scrollIntoView();
+        await U.sleep(300);
+        await screenshot(pw, PathUtils.join(outDir, "13-local-settings.png"));
+        pw.close();
+        if (!/Ready/.test(status) || !engines.includes("local")) throw new Error(JSON.stringify({ status, engines }));
+        return { status, engines };
+      });
+
+      const IFC_PAPERS = [
+        ["Evaluating IFC-based data exchange between BIM authoring tools", "We test how well Industry Foundation Classes (IFC) files carry geometry and property sets between Revit, ArchiCAD and Tekla, and report losses in the exchange."],
+        ["An IFC model view definition for structural analysis data exchange", "This paper proposes an IFC model view definition that enables data exchange between BIM modelling software and structural analysis tools."],
+        ["Validating IFC exports against model view definitions", "We present a checker that validates IFC files exported from BIM tools against model view definitions to improve interoperability."],
+        ["IFC 4.3 for infrastructure: exchanging road and bridge models", "The paper studies Industry Foundation Classes 4.3 for exchanging infrastructure BIM models between design and construction software."],
+        ["Semantic enrichment of IFC models for facility management handover", "Building information models are exchanged as IFC for facility management; we enrich IFC data to reduce information loss at handover."],
+        ["Round-trip interoperability of IFC between architectural design tools", "Round-trip tests of IFC import and export between architectural BIM tools reveal where Industry Foundation Classes exchange fails."],
+      ];
+      const OTHER_PAPERS = [
+        ["Deep learning for skin cancer classification from dermoscopy images", "Convolutional neural networks classify melanoma in dermoscopy images with dermatologist-level accuracy."],
+        ["Corrosion fatigue of weathering steel in highway bridge girders", "We measure corrosion fatigue crack growth in weathering steel girders exposed to de-icing salts."],
+        ["Soil moisture retrieval from Sentinel-1 radar backscatter", "A change detection method estimates soil moisture from Sentinel-1 synthetic aperture radar observations."],
+        ["The economics of minimum wage increases in rural labour markets", "Using county data we estimate employment effects of minimum wage increases in rural labour markets."],
+        ["Protein folding with attention-based neural networks", "Attention-based networks predict protein structures from amino acid sequences."],
+        ["Urban heat islands and tree canopy cover in European cities", "Satellite land surface temperature shows how tree canopy cover reduces urban heat islands."],
+      ];
+      let lw;
+      let localProject;
+      let localCol;
+      const lwStatus = () => lw.document.getElementById("review-status").textContent;
+      await step("local model: System 1 ranks by the protocol, finds a duplicate, learns from your decisions", async () => {
+        localCol = new Zotero.Collection({ name: "zr-local", libraryID });
+        await localCol.saveTx();
+        const protocol = ZR.Methodologies.normalizeProtocol("prisma2020", {
+          title: "IFC data exchange",
+          questions: ["How is IFC (Industry Foundation Classes) used for data exchange between BIM tools?"],
+          inclusion: ["Studies IFC-based data exchange between BIM software"],
+          reasons: ["Off topic", "Duplicate"],
+        });
+        localProject = await ZR.Projects.create(libraryID, { name: "Local model test", kind: "review", collectionKey: localCol.key, methodology: "prisma2020", protocol });
+        const rec = (t, a, itemType = "journalArticle") => ZR.Records.make("openalex", { title: t, abstract: a, year: 2022, creators: [{ firstName: "Ada", lastName: "Author" }], itemType });
+        const recs = [...IFC_PAPERS.map(([t, a]) => rec(t, a)), ...OTHER_PAPERS.map(([t, a]) => rec(t, a)), rec(IFC_PAPERS[0][0] + " (preprint)", IFC_PAPERS[0][1], "preprint")];
+        for (const r of recs) r.key = ZR.Store.keyForRecord(r);
+        await ZR.Projects.addToPool(libraryID, localProject.id, recs);
+        ZR.Prefs.set("s1Engine", "local");
+        await zp.collectionsView.selectCollection(localCol.id);
+        await U.sleep(400);
+        lw = await openResearch(win, { tab: "find", itemIDs: [] });
+        const d = lw.document;
+        lw.App.showTab("review");
+        await waitFor(() => !d.getElementById("rv-main").hidden && d.querySelector('#rv-steps button[data-step="screen"]'), 15000);
+        d.querySelector('#rv-steps button[data-step="screen"]').click();
+        await waitFor(() => d.querySelector("#screen-card .paper-card"), 10000);
+        const t0 = Date.now();
+        d.getElementById("s1-rate").click();
+        await waitFor(() => /Rated \d+|Rating failed/.test(lwStatus()), 180000);
+        const rateMs = Date.now() - t0;
+        const rated = lwStatus();
+        await U.sleep(300);
+        const pool = await ZR.Projects.loadPool(libraryID, localProject.id);
+        const pOf = (title) => pool.s1[ZR.Store.keyForRecord({ title })]?.p ?? null;
+        const mean = (list) => list.reduce((a, [t]) => a + (pOf(t) ?? 0), 0) / list.length;
+        const cold = { ifc: mean(IFC_PAPERS), other: mean(OTHER_PAPERS), model: Object.values(pool.s1)[0]?.model };
+        const dupMarks = d.querySelectorAll("#queue .q-dup").length;
+        await shot(lw, "14-local-rated.png");
+        // exclude the duplicate (two clicks)
+        d.getElementById("dup-find").click();
+        d.getElementById("dup-find").click();
+        await waitFor(() => /Excluded \d+ duplicate/.test(lwStatus()), 20000);
+        const dupStatus = lwStatus();
+        // decide by keyboard: top 4 (most likely) include, bottom 3 exclude
+        const key = (k) => d.dispatchEvent(new lw.KeyboardEvent("keydown", { key: k, bubbles: true }));
+        for (let i = 0; i < 4; i++) {
+          key("i");
+          await U.sleep(500);
+        }
+        d.getElementById("queue-sort").value = "p-asc";
+        d.getElementById("queue-sort").dispatchEvent(new lw.Event("change"));
+        await U.sleep(300);
+        for (let i = 0; i < 3; i++) {
+          key("e");
+          await U.sleep(500);
+        }
+        await waitFor(() => /Re-ranked \d+ paper\(s\) with what the local model learned from \d+/.test(lwStatus()), 30000);
+        const relearned = lwStatus();
+        await shot(lw, "15-local-learned.png");
+        const pool2 = await ZR.Projects.loadPool(libraryID, localProject.id);
+        const cands = await ZR.Projects.candidates(libraryID, localProject);
+        const open = cands.filter((c) => !c.ta && pool2.s1[c.key]);
+        const isIFC = (c) => IFC_PAPERS.some(([t]) => c.title.startsWith(t.slice(0, 30)));
+        const openIFC = open.filter(isIFC).map((c) => pool2.s1[c.key].p);
+        const openOther = open.filter((c) => !isIFC(c)).map((c) => pool2.s1[c.key].p);
+        const includedIFC = cands.filter((c) => c.ta === "include" && isIFC(c)).length;
+        const ledger = await ZR.Store.load(libraryID);
+        const byDup = Object.values(ledger.decisions).filter((e) => e.c === localCol.key && e.ta?.by === "dup").length;
+        const res = { rateMs, rated, cold, dupMarks, dupStatus, byDup, includedIFC, relearned, trained: open.some((c) => pool2.s1[c.key].trained), openIFC, openOther };
+        if (!(cold.ifc > cold.other) || byDup !== 1 || includedIFC < 4 || !res.trained) throw new Error(JSON.stringify(res));
+        if (openIFC.length && openOther.length && Math.min(...openIFC) <= Math.max(...openOther)) throw new Error("learned ranking wrong: " + JSON.stringify(res));
+        return res;
+      });
+
+      await step("local model: topic clusters become a facet (mapping study)", async () => {
+        const d = lw.document;
+        localProject.methodology = "mapping";
+        localProject.protocol = ZR.Methodologies.normalizeProtocol("mapping", localProject.protocol);
+        await ZR.Projects.save(libraryID, localProject);
+        lw.App.panels.review.reset();
+        await lw.App.panels.review.refresh();
+        d.querySelector('#rv-steps button[data-step="classify"]').click();
+        await waitFor(() => !d.getElementById("rv-table-cluster").hidden, 10000);
+        lw.App.status("review", "");
+        d.getElementById("rv-table-cluster").click();
+        await waitFor(() => /Grouped \d+ papers|Clustering failed/.test(lwStatus()), 60000);
+        await U.sleep(300);
+        await shot(lw, "16-clusters.png");
+        const p = await ZR.Projects.get(libraryID, localProject.id);
+        const facet = p.protocol.facets.find((f) => f.startsWith("Topic (clusters):"));
+        const cells = [...d.querySelectorAll("#rv-table-body select")].map((s) => s.value).filter(Boolean);
+        const res = { status: lwStatus(), facet, classified: cells.length };
+        if (!facet || cells.length < 4) throw new Error(JSON.stringify(res));
+        return res;
+      });
+      lw?.close();
+
+      await step("local model: long full texts are cut to the relevant passages", async () => {
+        const filler = (w) => Array.from({ length: 60 }, (_, i) => `In the ${w} part, the authors describe the history of their institute and its buildings, item ${i}.`).join(" ");
+        const text = ["Abstract: this paper evaluates BIM data exchange.", filler("first"), "Results: exporting IFC from Revit to ArchiCAD lost 12 percent of the property sets and all custom parameters.", filler("second"), filler("third")].join("\n\n");
+        const t0 = Date.now();
+        const out = await ZR.Embed.passages("att:e2e/long", text, ["How much information is lost in IFC exchange between tools?"], { budget: 4000 });
+        const res = { chars: text.length, kept: out.length, ms: Date.now() - t0, found: /lost 12 percent/.test(out), opening: out.startsWith("Abstract") };
+        if (!res.found || out.length > 4100) throw new Error(JSON.stringify(res));
+        return res;
+      });
+
+      await step("local model: similar papers in the library and in the citation graph", async () => {
+        const ids = collection.getChildItems().filter((i) => i.isRegularItem()).slice(0, 2).map((i) => i.id);
+        await zp.collectionsView.selectCollection(collection.id);
+        await U.sleep(400);
+        const w = await openResearch(win, { tab: "selected", itemIDs: ids }, (dd) => dd.getElementById("find-similar"));
+        const d = w.document;
+        d.getElementById("find-similar").click();
+        await waitFor(() => d.querySelector("#similar-list .similar-row, #similar-list .hint") || /failed|not available/.test(d.getElementById("items-status").textContent), 180000);
+        await shot(w, "17-similar.png");
+        const rows = [...d.querySelectorAll("#similar-list .similar-row")].map((r) => r.textContent.slice(0, 70));
+        w.App.showTab("citations");
+        await waitFor(() => !d.getElementById("cite-similar-wrap").hidden, 15000);
+        d.getElementById("cite-similar").checked = true;
+        d.getElementById("cite-similar").dispatchEvent(new w.Event("change"));
+        await waitFor(() => !/reading/.test(d.getElementById("cite-status").textContent) && w.App.panels.citations.similarEdges != null, 60000);
+        await U.sleep(500);
+        const res = { similar: rows.length, first: rows[0], status: d.getElementById("items-status").textContent, graphSimilarEdges: w.App.panels.citations.similarEdges };
+        w.close();
+        if (!rows.length) throw new Error(JSON.stringify(res));
+        return res;
+      });
+      ZR.Prefs.set("s1Engine", "");
     } finally {
       ZR.http = realHTTP;
       report.llmCalls = llmCalls.length;
+      ZR.Prefs.set("embedURL", "");
       ZR.Prefs.set("s1Engine", "");
       await ZR.Secrets.set(ZR.System1.keyName, "");
     }

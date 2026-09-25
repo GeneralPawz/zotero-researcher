@@ -7,6 +7,7 @@
 App.panels.citations = (() => {
   let ZR;
   let graph = { nodes: [], edges: [] };
+  let simEdges = []; // {from, to, sim} content similarity (local model), shown dashed
   let lastScan = null;
   let sim = null; // {nodes with x,y,vx,vy, edges}
   let hover = null;
@@ -22,6 +23,7 @@ App.panels.citations = (() => {
     $("cite-graphml").addEventListener("click", () => exportGraph("graphml"));
     $("cite-csv").addEventListener("click", () => exportGraph("csv"));
     $("cite-scope").addEventListener("change", load);
+    $("cite-similar").addEventListener("change", load);
     const canvas = $("graph");
     canvas.addEventListener("mousemove", onMove);
     canvas.addEventListener("mouseleave", () => ((hover = null), ($("graph-tip").hidden = true), draw()));
@@ -46,10 +48,33 @@ App.panels.citations = (() => {
   async function load() {
     const items = await scopeItems();
     graph = await ZR.Citations.graph(App.target.libraryID, items);
-    $("graph-empty").hidden = graph.edges.length > 0;
-    $("graph-legend").hidden = !graph.edges.length;
+    $("cite-similar-wrap").hidden = !(await ZR.Embed.available().catch(() => false));
+    simEdges = $("cite-similar").checked && !$("cite-similar-wrap").hidden ? await similarEdges(items) : [];
+    const any = graph.edges.length + simEdges.length > 0;
+    $("graph-empty").hidden = any;
+    $("graph-legend").hidden = !any;
     st(graph.edges.length ? `${graph.edges.length} citation links between ${new Set(graph.edges.flatMap((e) => [e.from, e.to])).size} of ${items.length} papers (click a dot to show it in Zotero)` : `${items.length} papers in scope — click “Find citation links”.`);
     layout();
+  }
+
+  /** Each paper's two closest neighbours by content (≥ 0.8), where no citation link exists. */
+  async function similarEdges(items) {
+    const papers = items.map(ZR.Embed.itemPaper).filter((p) => p.title || p.abstract);
+    const vecs = await ZR.Embed.paperVectors(papers, { onProgress: (d, n) => st(`The local model is reading ${d}/${n} paper(s) (first time only)…`) });
+    const idOf = new Map(papers.map((p) => [p.key, p.itemID]));
+    const cited = new Set(graph.edges.flatMap((e) => [`${e.from}>${e.to}`, `${e.to}>${e.from}`]));
+    const out = new Map();
+    for (const p of papers) {
+      const v = vecs.get(p.key);
+      if (!v) continue;
+      for (const hit of ZR.Embed.nearest(v, vecs, 2, new Set([p.key]))) {
+        if (hit.sim < 0.8) continue;
+        const [a, b] = [p.itemID, idOf.get(hit.key)].sort((x, y) => x - y);
+        if (cited.has(`${a}>${b}`)) continue;
+        out.set(`${a}-${b}`, { from: a, to: b, sim: hit.sim });
+      }
+    }
+    return [...out.values()];
   }
 
   async function scan() {
@@ -118,7 +143,7 @@ App.panels.citations = (() => {
 
   // ------------------------------------------------------------ drawing ----
   function layout() {
-    const linked = new Set(graph.edges.flatMap((e) => [e.from, e.to]));
+    const linked = new Set([...graph.edges, ...simEdges].flatMap((e) => [e.from, e.to]));
     const nodes = graph.nodes.filter((n) => linked.has(n.id)).map((n, i, arr) => {
       const a = (2 * Math.PI * i) / arr.length;
       return Object.assign({}, n, { x: Math.cos(a) * 200, y: Math.sin(a) * 200, vx: 0, vy: 0, deg: 0 });
@@ -126,6 +151,11 @@ App.panels.citations = (() => {
     const byId = new Map(nodes.map((n) => [n.id, n]));
     const edges = graph.edges.map((e) => ({ s: byId.get(e.from), t: byId.get(e.to) })).filter((e) => e.s && e.t);
     for (const e of edges) e.t.deg++;
+    for (const e of simEdges) {
+      const s = byId.get(e.from);
+      const t = byId.get(e.to);
+      if (s && t) edges.push({ s, t, similar: e.sim });
+    }
     sim = { nodes, edges };
     // Simple force-directed layout: repulsion, springs, centering
     // O(n²) per iteration: fewer iterations for big libraries keep the window responsive
@@ -203,11 +233,14 @@ App.panels.citations = (() => {
       const [x2, y2] = P(e.t);
       const hl = hover && (e.s === hover || e.t === hover);
       ctx.strokeStyle = hl ? color("--accent") : color("--fg-3");
-      ctx.globalAlpha = hover && !hl ? 0.35 : 1;
+      ctx.globalAlpha = hover && !hl ? 0.35 : e.similar ? 0.7 : 1;
+      ctx.setLineDash(e.similar ? [4, 4] : []);
       ctx.beginPath();
       ctx.moveTo(x1, y1);
       ctx.lineTo(x2, y2);
       ctx.stroke();
+      ctx.setLineDash([]);
+      if (e.similar) continue; // similarity has no direction
       // arrow head at the cited paper
       const ang = Math.atan2(y2 - y1, x2 - x1);
       const r = radius(e.t) + 2;
@@ -273,11 +306,18 @@ App.panels.citations = (() => {
       return;
     }
     tip.hidden = false;
-    const cites = sim.edges.filter((x) => x.s === hover).length;
-    tip.textContent = `${hover.title} — ${hover.creators || ""} ${hover.year || ""} · cited by ${hover.deg} · cites ${cites} here`;
+    const cites = sim.edges.filter((x) => x.s === hover && !x.similar).length;
+    const similar = sim.edges.filter((x) => x.similar && (x.s === hover || x.t === hover)).length;
+    tip.textContent = `${hover.title} — ${hover.creators || ""} ${hover.year || ""} · cited by ${hover.deg} · cites ${cites} here${similar ? ` · ${similar} similar` : ""}`;
     tip.style.left = Math.min(mx + 14, canvas.clientWidth - 370) + "px";
     tip.style.top = my + 14 + "px";
   }
 
-  return { init, onShow };
+  return {
+    init,
+    onShow,
+    get similarEdges() {
+      return simEdges.length;
+    },
+  };
 })();
