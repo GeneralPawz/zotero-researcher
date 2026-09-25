@@ -1,4 +1,4 @@
-/* global Zotero, document, window, ChromeUtils */
+/* global Zotero, document, window, ChromeUtils, ZRDropdown */
 "use strict";
 
 // Researcher window: shell + Search tab. Other tabs live in items.js, review.js,
@@ -112,6 +112,7 @@ window.addEventListener("load", () => {
 async function init() {
   App.ZR = Zotero.Researcher;
   if (!App.ZR) throw new Error("Zotero Researcher is not loaded");
+  ZRDropdown.observe(document); // native <select> popups don't work in chrome HTML windows
   const raw = window.arguments?.[0];
   App.args = raw?.wrappedJSObject || raw || { target: App.ZR.UI.getTarget(Zotero.getMainWindow()), itemIDs: [], tab: "search" };
   App.target = App.args.target;
@@ -179,12 +180,14 @@ App.panels.search = (() => {
     $("empty-target").textContent = App.target.label;
     App.fillProfileSelect($("llm-profile"));
     renderSources(s.sources);
+    for (const b of $("kw-view").children) b.addEventListener("click", () => setView(b.dataset.view));
+    setView(s.kwView || "builder");
 
     $("query").addEventListener("input", validateQuery);
     $("query").addEventListener("keydown", (e) => e.key === "Enter" && !App.busy && run());
     $("request").addEventListener("keydown", (e) => e.key === "Enter" && (e.ctrlKey || e.metaKey) && !App.busy && run());
     $("syntax-toggle").addEventListener("click", () => ($("syntax").hidden = !$("syntax").hidden));
-    for (const ex of document.querySelectorAll(".example")) ex.addEventListener("click", () => (($("query").value = ex.textContent), validateQuery()));
+    for (const ex of document.querySelectorAll(".example")) ex.addEventListener("click", () => useQueryText(ex.textContent));
     $("run").addEventListener("click", run);
     $("import").addEventListener("click", () => importSelected(false));
     $("sources-chip").addEventListener("click", () => toggleDrawer("sources"));
@@ -204,6 +207,122 @@ App.panels.search = (() => {
     validateQuery();
     updateChips();
     updateImportBar();
+  }
+
+  // ------------------------------------------------------ query builder ----
+  // Builder rows and the text query are two views of the same query; #query always
+  // holds the text that is actually searched.
+  let kwView = "builder";
+  let blocks = [];
+  let lastCompiled = null;
+  const QB = () => ZR.QueryBuilder;
+  const emptyRow = () => ({ op: "AND", field: "any", terms: [] });
+
+  function setView(view) {
+    if (view === "builder") {
+      const q = $("query").value.trim();
+      if (q !== lastCompiled) {
+        const b = QB().fromQuery(q);
+        if (!b) {
+          view = "text";
+          st("This query has nested groups the builder can't show — keep editing it as text.");
+        } else blocks = b;
+      }
+      if (!blocks.length) blocks = [emptyRow()];
+    }
+    kwView = view;
+    for (const b of $("kw-view").children) {
+      b.classList.toggle("on", b.dataset.view === view);
+      b.setAttribute("aria-checked", String(b.dataset.view === view));
+    }
+    $("builder").hidden = view !== "builder";
+    $("query").hidden = view !== "text";
+    $("syntax-toggle").hidden = view !== "text";
+    if (view === "builder") renderBuilder();
+    else $("query").focus();
+  }
+
+  /** Put query text into whichever view is active. */
+  function useQueryText(text) {
+    $("query").value = text;
+    lastCompiled = null;
+    validateQuery();
+    setView(kwView);
+  }
+
+  function syncFromBuilder() {
+    lastCompiled = QB().toQuery(blocks);
+    $("query").value = lastCompiled;
+    validateQuery();
+  }
+
+  function renderBuilder(focusRow = -1) {
+    const box = $("builder");
+    box.replaceChildren();
+    blocks.forEach((b, i) => {
+      const input = el("input", { type: "text", class: "qb-input", spellcheck: "false", placeholder: b.terms.length ? "or…" : i === 0 ? "type a term, press Enter — e.g. IFC5" : "type a term, press Enter" });
+      const addTerms = (text) => {
+        const parts = String(text).split(/[,;\n]/).map((t) => t.trim()).filter(Boolean);
+        if (!parts.length) return false;
+        b.terms.push(...parts);
+        syncFromBuilder();
+        renderBuilder(i);
+        return true;
+      };
+      input.addEventListener("keydown", (e) => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          if (!addTerms(input.value) && !App.busy) run();
+        } else if (e.key === "," || e.key === ";") {
+          e.preventDefault();
+          addTerms(input.value);
+        } else if (e.key === "Backspace" && !input.value && b.terms.length) {
+          b.terms.pop();
+          syncFromBuilder();
+          renderBuilder(i);
+        }
+      });
+      input.addEventListener("paste", (e) => {
+        const text = e.clipboardData.getData("text");
+        if (/[,;\n]/.test(text)) {
+          e.preventDefault();
+          addTerms(text);
+        }
+      });
+      input.addEventListener("blur", () => input.value.trim() && addTerms(input.value));
+      const chips = el("div", { class: "qb-chips", title: "Terms in one row are alternatives (OR)", onclick: (e) => e.target === chips && input.focus() });
+      b.terms.forEach((t, k) => {
+        if (k) chips.append(el("span", { class: "qb-or", text: "or" }));
+        chips.append(
+          el("span", { class: "qb-chip" }, [
+            t,
+            el("button", { title: "Remove", text: "×", onclick: () => (b.terms.splice(k, 1), syncFromBuilder(), renderBuilder(i)) }),
+          ])
+        );
+      });
+      chips.append(input);
+      box.append(
+        el("div", { class: "qb-row" }, [
+          i === 0
+            ? el("span", { class: "qb-first", text: "Find" })
+            : el(
+                "select",
+                { class: "qb-op", title: "How this row combines with the rows above", onchange: (e) => ((b.op = e.target.value), syncFromBuilder()) },
+                QB().OPS.map((o) => el("option", { value: o.id, text: o.label, title: o.hint, selected: b.op === o.id }))
+              ),
+          el("select", { class: "qb-field", title: "Where the terms must appear", onchange: (e) => ((b.field = e.target.value), syncFromBuilder()) }, QB().FIELDS.map((x) => el("option", { value: x.id, text: x.label, selected: b.field === x.id }))),
+          chips,
+          blocks.length > 1 ? el("button", { class: "qb-remove", title: "Remove this row", text: "×", onclick: () => (blocks.splice(i, 1), syncFromBuilder(), renderBuilder()) }) : null,
+        ])
+      );
+      if (i === focusRow) setTimeout(() => input.focus(), 0);
+    });
+    box.append(
+      el("div", { class: "qb-foot" }, [
+        el("button", { class: "link", text: "+ Add row", onclick: () => (blocks.push(emptyRow()), renderBuilder(blocks.length - 1)) }),
+        el("span", { class: "hint", text: "Terms in a row are alternatives (OR). Rows combine with AND · OR · NOT · XOR. Multi-word terms are searched as exact phrases; build* matches word endings." }),
+      ])
+    );
   }
 
   function setMode(mode) {
@@ -334,6 +453,7 @@ App.panels.search = (() => {
       skipExisting: o.skipExisting,
       hideExcluded: o.hideExcluded,
       screen: $("screen").checked,
+      kwView,
     });
   }
 
@@ -383,7 +503,7 @@ App.panels.search = (() => {
     box.replaceChildren(
       el("div", {}, [el("b", { text: "The AI searched for: " }), el("code", { text: plan.query })]),
       plan.rationale ? el("div", { class: "hint", text: plan.rationale }) : null,
-      el("div", {}, el("button", { class: "link", text: "Edit this query as keywords", onclick: () => (($("query").value = plan.query), setMode("structured"), $("query").focus()) }))
+      el("div", {}, el("button", { class: "link", text: "Edit this query as keywords", onclick: () => (setMode("structured"), useQueryText(plan.query)) }))
     );
     box.hidden = false;
   }
@@ -489,16 +609,18 @@ App.panels.search = (() => {
           ]),
         ]),
         el("div", { class: "r-side" }, [
-          r.llmScore != null ? el("span", { class: "score " + scoreClass(r.llmScore), text: String(r.llmScore), title: "AI relevance 0–10" }) : null,
-          r.llmReason ? el("span", { class: "reason", text: r.llmReason }) : null,
-          r.citationCount ? el("span", { class: "hint", text: `${r.citationCount} citations` }) : null,
-          el("select", { class: "mark", title: "Remember your judgement for future searches", onchange: (e) => mark(r, e.target.value) }, [
-            el("option", { value: "", text: "Judge ▾" }),
+          el("div", { class: "r-side-row" }, [
+            r.citationCount ? el("span", { class: "hint", text: `${r.citationCount} citations` }) : null,
+            el("select", { class: "mark", title: "Remember your judgement for future searches", onchange: (e) => mark(r, e.target.value) }, [
+            el("option", { value: "", text: "Judge" }),
             el("option", { value: "relevant", text: "👍 Relevant" }),
             el("option", { value: "off", text: "👎 Not relevant" }),
             el("option", { value: "weak", text: "👎 Weak / low quality" }),
             el("option", { value: "clear", text: "Forget judgement" }),
+            ]),
           ]),
+          r.llmScore != null ? el("span", { class: "score " + scoreClass(r.llmScore), text: String(r.llmScore), title: "AI relevance 0–10" }) : null,
+          r.llmReason ? el("span", { class: "reason", text: r.llmReason }) : null,
         ]),
       ]);
       box.append(row);
@@ -566,5 +688,5 @@ App.panels.search = (() => {
     }
   }
 
-  return { init, renderSources, runRelated, showRecords, updateImportBar, setMode, onShow: updateImportBar };
+  return { init, renderSources, runRelated, showRecords, updateImportBar, setMode, setView, useQueryText, onShow: updateImportBar };
 })();

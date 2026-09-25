@@ -6,6 +6,7 @@
   <title>Zotero Researcher</title>
   <link rel="stylesheet" href="chrome://zotero-researcher/content/dialog/research.css"/>
   <script src="chrome://zotero/content/include.js"></script>
+  <script src="chrome://zotero-researcher/content/dropdown.js"></script>
   <script src="chrome://zotero-researcher/content/dialog/research.js"></script>
   <script src="chrome://zotero-researcher/content/dialog/items.js"></script>
   <script src="chrome://zotero-researcher/content/dialog/review.js"></script>
@@ -29,11 +30,19 @@
   <!-- ============================== SEARCH ============================== -->
   <section class="panel" id="panel-search">
     <div class="hero">
-      <div class="seg" id="mode-seg" role="radiogroup" aria-label="Search mode">
-        <button data-mode="structured" role="radio">Keywords</button>
-        <button data-mode="llm" role="radio">Describe it (AI)</button>
+      <div class="mode-row">
+        <div class="seg" id="mode-seg" role="radiogroup" aria-label="Search mode">
+          <button data-mode="structured" role="radio">Keywords</button>
+          <button data-mode="llm" role="radio">Describe it (AI)</button>
+        </div>
+        <span class="spacer"></span>
+        <div class="seg small structured-only" id="kw-view" role="radiogroup" aria-label="Query editor">
+          <button data-view="builder" role="radio" title="Build the query row by row">Builder</button>
+          <button data-view="text" role="radio" title="Type the boolean query directly">Text</button>
+        </div>
       </div>
       <div class="query-row">
+        <div id="builder" class="builder structured-only" hidden="hidden"></div>
         <input id="query" class="structured-only" type="text" spellcheck="false" placeholder='e.g. ("IFC5" OR IFCX) AND BIM'/>
         <textarea id="request" class="llm-only" rows="2" placeholder="Describe what you are looking for, e.g. “papers on IFC 5 / IFCX and how they change BIM data exchange, since 2019”"></textarea>
         <button id="run" class="primary big">Search</button>

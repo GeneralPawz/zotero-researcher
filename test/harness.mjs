@@ -7,7 +7,7 @@ import vm from "node:vm";
 import assert from "node:assert/strict";
 
 const content = join(fileURLToPath(import.meta.url), "..", "..", "addon", "content");
-const FILES = ["lib/util.js", "lib/prefs.js", "lib/secrets.js", "lib/store.js", "lib/query.js", "lib/records.js", "sources/registry.js", "sources/adapters.js", "lib/llm.js", "lib/assist.js", "lib/prisma.js", "lib/citations.js"];
+const FILES = ["lib/util.js", "lib/prefs.js", "lib/secrets.js", "lib/store.js", "lib/query.js", "lib/querybuilder.js", "lib/records.js", "sources/registry.js", "sources/adapters.js", "lib/llm.js", "lib/assist.js", "lib/prisma.js", "lib/citations.js"];
 
 export function load({ http, prefs = {} } = {}) {
   const ZR = { id: "test", version: "test" };

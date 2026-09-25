@@ -1,7 +1,7 @@
 {
   "manifest_version": 2,
   "name": "Zotero Researcher",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "description": "Find papers for a collection in scholarly databases (boolean or AI-assisted), screen them PRISMA-style, link citations as related items, fetch PDFs and fix sparse metadata.",
   "author": "Friedrich Schroedter",
   "icons": {

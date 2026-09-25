@@ -86,5 +86,19 @@ for (const s of report.steps) {
   if (detail !== undefined && detail !== true) console.log("      " + JSON.stringify(detail, null, 2).replace(/\n/g, "\n      "));
 }
 console.log(`\n${report.passed} passed, ${report.failed} failed — screenshots in ${out}`);
-if (argv.includes("--clean") && !report.failed) rmSync(base, { recursive: true, force: true });
+if (argv.includes("--clean") && !report.failed) {
+  // The report is written before Zotero finishes quitting; retry while it still holds files.
+  for (let i = 0; ; i++) {
+    try {
+      rmSync(base, { recursive: true, force: true });
+      break;
+    } catch (e) {
+      if (i >= 30) {
+        console.warn(`Could not remove ${base}: ${e.code}`);
+        break;
+      }
+      await new Promise((r) => setTimeout(r, 1000));
+    }
+  }
+}
 process.exit(report.failed ? 1 : 0);

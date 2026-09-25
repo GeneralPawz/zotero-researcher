@@ -116,6 +116,23 @@ ZR.SelfTest = (() => {
     };
   }
 
+  /** Choose an option through the in-document dropdown, the way a user clicks it. */
+  async function pick(select, text) {
+    const doc = select.ownerDocument;
+    const button = select.zrDropdownButton;
+    if (!button) throw new Error("select not enhanced: " + (select.id || select.className));
+    button.scrollIntoView({ block: "center" });
+    await U.sleep(150);
+    button.click();
+    const item = await waitFor(() => [...doc.querySelectorAll(".zr-dd-menu .zr-dd-item")].find((i) => i.textContent.includes(text)), 5000);
+    const menu = item.parentElement;
+    const style = doc.defaultView.getComputedStyle(menu);
+    const visible = menu.getBoundingClientRect().height > 0 && style.backgroundColor !== "rgba(0, 0, 0, 0)" && style.backgroundColor !== "transparent";
+    item.click();
+    await waitFor(() => !doc.querySelector(".zr-dd-menu"), 5000);
+    return { visible, label: button.textContent };
+  }
+
   async function openResearch(win, opts, readyCheck = (d) => d.getElementById("sources")?.children.length) {
     const w = ZR.UI.openDialog(win, opts);
     await waitFor(() => w.document.readyState === "complete" && w.App?.ZR && readyCheck(w.document), 20000);
@@ -301,6 +318,48 @@ ZR.SelfTest = (() => {
       return { defaultSources: ids.length, pubmedAfterEnabling: shown };
     });
 
+    await step("query builder: rows, chips, operators, fields ↔ text", async () => {
+      const w = await openResearch(win, { tab: "find", itemIDs: [] });
+      const d = w.document;
+      d.querySelector('#mode-seg button[data-mode="structured"]').click();
+      d.querySelector('#kw-view button[data-view="text"]').click();
+      w.App.panels.search.useQueryText("");
+      d.querySelector('#kw-view button[data-view="builder"]').click();
+      const type = (row, text) => {
+        const input = d.querySelectorAll("#builder .qb-row")[row].querySelector(".qb-input");
+        input.value = text;
+        input.dispatchEvent(new w.KeyboardEvent("keydown", { key: "Enter", bubbles: true }));
+      };
+      type(0, '"IFC5"');
+      await U.sleep(50);
+      type(0, "IFCX");
+      await U.sleep(50);
+      [...d.querySelectorAll("#builder .qb-foot button")].find((b) => /Add row/.test(b.textContent)).click();
+      await U.sleep(50);
+      type(1, "BIM");
+      await U.sleep(50);
+      const opPick = await pick(d.querySelectorAll("#builder select.qb-op")[0], "XOR");
+      const xor = d.getElementById("query").value;
+      await pick(d.querySelectorAll("#builder select.qb-op")[0], "AND");
+      // screenshot with a menu open
+      d.querySelectorAll("#builder select.qb-field")[1].zrDropdownButton.click();
+      await U.sleep(200);
+      await shot(w, "03b-builder-dropdown.png");
+      [...d.querySelectorAll(".zr-dd-menu .zr-dd-item")].find((i) => i.textContent === "Title").click();
+      await U.sleep(100);
+      const built = d.getElementById("query").value;
+      // text → builder round trip
+      d.querySelector('#kw-view button[data-view="text"]').click();
+      w.App.panels.search.useQueryText('"digital twin" NOT title:review');
+      d.querySelector('#kw-view button[data-view="builder"]').click();
+      const rows = [...d.querySelectorAll("#builder .qb-row")].map((r) => [...r.querySelectorAll(".zr-dd-label")].map((l) => l.textContent).concat([...r.querySelectorAll(".qb-chip")].map((c) => c.firstChild.textContent)).join(" · "));
+      const res = { built, xor, feedback: d.getElementById("query-feedback").textContent, opMenuVisible: opPick.visible, rowsFromText: rows };
+      w.close();
+      if (built !== '("IFC5" OR IFCX) AND title:BIM') throw new Error("unexpected query " + JSON.stringify(res));
+      if (!/AND NOT/.test(xor)) throw new Error("XOR not compiled " + xor);
+      return res;
+    });
+
     let judged;
     await step("search in dialog, judge a paper as weak, add others", async () => {
       await zp.collectionsView.selectCollection(collection.id);
@@ -308,8 +367,7 @@ ZR.SelfTest = (() => {
       const w = await openResearch(win, { tab: "find", itemIDs: [] });
       const d = w.document;
       d.querySelector('#mode-seg button[data-mode="structured"]').click();
-      d.getElementById("query").value = 'IFC AND "building information model*"';
-      d.getElementById("query").dispatchEvent(new w.Event("input"));
+      w.App.panels.search.useQueryText('IFC AND "building information model*"');
       for (const cb of d.querySelectorAll("#sources input")) cb.checked = ["crossref", "arxiv", "doaj"].includes(cb.value);
       d.getElementById("limit").value = "4";
       d.getElementById("attach-pdfs").checked = false;
@@ -319,9 +377,10 @@ ZR.SelfTest = (() => {
       // Judge the first result as weak via the row's "Judge…" menu
       const firstRow = d.querySelector("#results .result");
       judged = firstRow.querySelector(".r-title").textContent;
-      const sel = firstRow.querySelector("select.mark");
-      sel.value = "weak";
-      sel.dispatchEvent(new w.Event("change"));
+      const judgeRow = firstRow.querySelector(".r-side-row");
+      const sameLine = !!judgeRow?.querySelector(".zr-dd.mark");
+      const picked = await pick(firstRow.querySelector("select.mark"), "Weak");
+      if (!picked.visible) throw new Error("dropdown menu has no opaque background");
       await U.sleep(300);
       const badge = d.querySelector("#results .result .tag.excluded")?.textContent;
       // Add two of the remaining results
@@ -332,7 +391,7 @@ ZR.SelfTest = (() => {
       }
       d.getElementById("import").click();
       await waitFor(() => /Added \d+ new|Adding failed/.test(d.getElementById("search-status").textContent), 90000);
-      const res = { judged, badge, status: d.getElementById("search-status").textContent, chips: d.getElementById("sources-chip").textContent };
+      const res = { judged, badge, judgeBesideCitations: sameLine, status: d.getElementById("search-status").textContent, chips: d.getElementById("sources-chip").textContent };
       w.close();
       if (!badge) throw new Error("no excluded badge: " + JSON.stringify(res));
       return res;
@@ -384,7 +443,13 @@ ZR.SelfTest = (() => {
       await shot(pw, "06-preferences.png");
       d.querySelector("#zr-llm-list button")?.click();
       await U.sleep(300);
-      const res = { checklist: d.querySelectorAll("#zr-checklist .zr-check-row").length, areas: d.querySelectorAll("#zr-areas .zr-area").length, databasesShown: rowsDefault, pubmedListed, aiEditor: !!d.querySelector("#zr-llm-editor .zr-editor") };
+      const prov = await pick(d.getElementById("zr-llm-provider"), "Anthropic");
+      const baseAfterPick = [...d.querySelectorAll("#zr-llm-editor input")].map((i) => i.value).find((v) => v.startsWith("http"));
+      d.getElementById("zr-llm-provider").zrDropdownButton.click();
+      await U.sleep(200);
+      await shot(pw, "06b-preferences-dropdown.png");
+      d.querySelector(".zr-dd-menu .zr-dd-item")?.click();
+      const res = { checklist: d.querySelectorAll("#zr-checklist .zr-check-row").length, areas: d.querySelectorAll("#zr-areas .zr-area").length, databasesShown: rowsDefault, pubmedListed, aiEditor: !!d.querySelector("#zr-llm-editor .zr-editor"), providerMenuVisible: prov.visible, baseAfterPick };
       pw.close();
       if (pubmedListed) throw new Error("PubMed listed although medicine is off");
       return res;
@@ -471,8 +536,7 @@ ZR.SelfTest = (() => {
         const d = rw.document;
         rw.App.showTab("search");
         d.querySelector('#mode-seg button[data-mode="structured"]').click();
-        d.getElementById("query").value = '("industry foundation classes" OR IFC) AND BIM';
-        d.getElementById("query").dispatchEvent(new rw.Event("input"));
+        rw.App.panels.search.useQueryText('("industry foundation classes" OR IFC) AND BIM');
         for (const cb of d.querySelectorAll("#sources input")) cb.checked = ["crossref", "doaj", "arxiv"].includes(cb.value);
         d.getElementById("limit").value = "4";
         d.getElementById("hide-excluded").checked = false;
@@ -560,6 +624,8 @@ ZR.SelfTest = (() => {
       const d = w.document;
       w.App.showTab("citations");
       await U.sleep(500);
+      const scopeLabel = (await pick(d.getElementById("cite-scope"), "Whole library")).label;
+      await pick(d.getElementById("cite-scope"), "Papers in this collection");
       d.getElementById("cite-scan").click();
       await waitFor(() => /citation links among/.test(d.getElementById("cite-status").textContent) || /failed/.test(d.getElementById("cite-status").textContent), 150000);
       await U.sleep(500);
@@ -572,6 +638,7 @@ ZR.SelfTest = (() => {
         attentionRelatedToResNet: Zotero.Items.get(attention.id).relatedItems.includes(resnet.key),
         directionStored: ((await ZR.Store.getCitations(libraryID))[resnet.key] || []).includes(googlenet.key),
         graphShown: d.getElementById("graph-empty").hidden,
+        scopeDropdown: scopeLabel,
       };
       w.close();
       if (!res.resnetRelatedToGoogLeNet || !res.directionStored) throw new Error(JSON.stringify(res));

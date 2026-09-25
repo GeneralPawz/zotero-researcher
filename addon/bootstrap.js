@@ -11,6 +11,7 @@ const LIB_FILES = [
   "lib/secrets.js",
   "lib/store.js",
   "lib/query.js",
+  "lib/querybuilder.js",
   "lib/records.js",
   "sources/registry.js",
   "sources/adapters.js",

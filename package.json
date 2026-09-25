@@ -1,6 +1,6 @@
 {
   "name": "zotero-researcher",
-  "version": "0.2.2",
+  "version": "0.2.3",
   "private": true,
   "description": "Zotero 7–10 plugin: collect papers from scholarly databases (boolean or AI-assisted), PRISMA screening, citation links, PDFs and metadata.",
   "type": "module",
