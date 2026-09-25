@@ -173,6 +173,12 @@ const Autopilot = (window.Autopilot = (() => {
     $("ap-collapse").replaceChildren(App.icon(collapsed ? "expand" : "collapse"));
     $("ap-collapse").title = collapsed ? (running ? "Show the autopilot (running)" : "Show the autopilot") : "Collapse the autopilot panel";
     $("ap-history").classList.toggle("on", !!viewing);
+    // the "✦ Autopilot" button in the review's subheader follows the state
+    const open = $("ap-open");
+    if (open) {
+      open.textContent = running ? "✦ Autopilot running" : s?.on ? "✦ Autopilot (paused)" : "✦ Autopilot";
+      open.classList.toggle("on", !!s?.on || running);
+    }
     App.syncLayout?.();
   }
 
@@ -251,7 +257,8 @@ const Autopilot = (window.Autopilot = (() => {
 
   /** Go to a step (and a protocol field) from the conversation. */
   async function jump(a) {
-    App.showTab("review");
+    // switching tabs refreshes the review; wait for it, or it redraws after the jump
+    if (App.currentTab !== "review") await App.showTab("review");
     if (a.field) return R().showField(a.field);
     await R().go(a.step);
   }
