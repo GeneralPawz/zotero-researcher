@@ -2,15 +2,15 @@
 "use strict";
 
 // Review tab: a methodology-based pipeline for the current project.
-//   Protocol  – choose a methodology, then describe the goal in plain words (the AI fills
+//   Protocol  - choose a methodology, then describe the goal in plain words (the AI fills
 //               the form) or fill the form by hand. The form depends on the methodology.
-//   Search    – logged searches; results go into the project's candidate pool.
-//   Screen    – the funnel: a System 1 model estimates for every paper how likely it is
+//   Search    - logged searches; results go into the project's candidate pool.
+//   Screen    - the funnel: a System 1 model estimates for every paper how likely it is
 //               to be relevant; thresholds settle the clear cases in bulk, the AI reasons
 //               about the uncertain middle, you decide the rest. Included papers are
 //               added to the Zotero collection.
-//   Full text / quality / extraction / classification – as the methodology requires.
-//   Report    – PRISMA flow diagram from the logged searches and every decision.
+//   Full text / quality / extraction / classification - as the methodology requires.
+//   Report    - PRISMA flow diagram from the logged searches and every decision.
 // Decisions are item tags plus the library ledger (lib/store.js), so they survive the plugin.
 
 App.panels.review = (() => {
@@ -27,13 +27,20 @@ App.panels.review = (() => {
   const libraryID = () => App.target.libraryID;
   const dstage = () => (step === "fulltext" ? "ft" : "ta"); // decision stage
   const today = () => new Date().toISOString().slice(0, 10);
-  const pct = (p) => (p == null ? "–" : Math.round(p * 100) + "%");
+  const pct = (p) => (p == null ? "-" : Math.round(p * 100) + "%");
   const ENGINE_NAMES = { typesafe: "TypeSafe Jev", local: "the local model", llm: "your AI provider", rules: "keyword rules" };
 
   function init() {
     ZR = App.ZR;
     $("rv-start-btn").addEventListener("click", startReview);
-    for (const b of $("rv-protocol-mode").children) b.addEventListener("click", () => setProtocolMode(b.dataset.mode));
+    for (const b of $("rv-protocol-mode").children) {
+      b.append(App.icon(b.dataset.mode === "describe" ? "sparkle" : "pencil"));
+      b.addEventListener("click", () => setProtocolMode(b.dataset.mode));
+    }
+    for (const b of $("rv-view").children) {
+      b.append(App.icon(b.dataset.view === "structured" ? "list" : "text"));
+      b.addEventListener("click", () => setProtocolView(b.dataset.view));
+    }
     $("rv-fill").addEventListener("click", fillWithAI);
     $("rv-description").addEventListener("keydown", (e) => e.key === "Enter" && (e.ctrlKey || e.metaKey) && !App.busy && fillWithAI());
     $("rv-save").addEventListener("click", saveProtocol);
@@ -119,7 +126,7 @@ App.panels.review = (() => {
     if (s.request) App.project.description = s.request;
     await App.loadProjects(App.project.id);
     reset();
-    st(`“${q.name}” is now a structured review — its search settings and history are kept. Choose a methodology and describe what you want to achieve.`);
+    st(`“${q.name}” is now a structured review: its search settings and history are kept. Choose a methodology and describe what you want to achieve.`);
     await refresh();
   }
 
@@ -171,11 +178,69 @@ App.panels.review = (() => {
   }
 
   function renderSteps() {
+    const ap = project().autopilot;
+    const apStage = ap?.on ? ap.stage : null;
     $("rv-steps").replaceChildren(
       ...method().stages.map((s, i) =>
-        el("button", { "data-step": s, class: s === step ? "on" : "", title: ZR.Methodologies.STAGES[s].label, onclick: () => go(s) }, [el("span", { class: "num", text: String(i + 1) }), el("span", { class: "st-label", text: ZR.Methodologies.STAGES[s].short }), el("small", { text: stepInfo(s) })])
+        el("button", { "data-step": s, class: (s === step ? "on" : "") + (s === apStage ? " ap-here" : ""), title: `${ZR.Methodologies.STAGES[s].label}${s === apStage ? " (the autopilot is here)" : ""}. Right-click: run the autopilot from here`, onclick: () => go(s), oncontextmenu: (e) => stepMenu(e, s) }, [el("span", { class: "num", text: String(i + 1) }), el("span", { class: "st-label", text: ZR.Methodologies.STAGES[s].short }), el("small", { text: stepInfo(s) })])
       )
     );
+  }
+
+  /** Decisions the AI or System 1 made at this step and after (yours are never touched). */
+  function machineDecisions(s) {
+    const stages = { protocol: ["ta", "ft"], search: ["ta", "ft"], screen: ["ta", "ft"], fulltext: ["ft"] }[s] || [];
+    return stages.flatMap((st) => cands.filter((c) => c[st] && ["llm", "s1"].includes(c[st + "Info"]?.by)).map((c) => ({ c, stage: st })));
+  }
+
+  async function clearMachineDecisions(s) {
+    const list = machineDecisions(s);
+    for (const { c, stage } of list) await decideByKey(c.key, stage, null, "", "me");
+    return list.length;
+  }
+
+  /** Right-click on a step: let the autopilot run from here, or redo from here. */
+  function stepMenu(e, s) {
+    e.preventDefault();
+    const label = ZR.Methodologies.STAGES[s].label;
+    const running = Autopilot.isRunning();
+    const machine = machineDecisions(s).length;
+    const items = [
+      {
+        id: "ctx-ap-from",
+        icon: "sparkle",
+        label: s === "report" ? "Autopilot: finish with the report" : `Autopilot from “${label}” to the end`,
+        hint: (running ? "Stops the current run first. " : "") + "Keeps what is there and continues from this step, asking you at every decision.",
+        run: () => Autopilot.runFrom(s),
+      },
+    ];
+    if (machine)
+      items.push({
+        id: "ctx-ap-redo",
+        icon: "replay",
+        label: `Redo from “${label}” with the autopilot…`,
+        hint: `Clears the ${machine} decision(s) the AI or System 1 made from this step on (yours stay), then runs again.`,
+        run: () => redoFrom(s),
+      });
+    PaperView.openMenu(e.clientX, e.clientY, items);
+  }
+
+  async function redoFrom(s) {
+    const label = ZR.Methodologies.STAGES[s].label;
+    const n = machineDecisions(s).length;
+    const c = await App.ask(
+      `Redo from “${label}” with the autopilot?`,
+      `${n} decision(s) made by the AI or System 1 from this step on are cleared. Your own decisions stay, and papers already added to Zotero stay in the collection. Then the autopilot runs from “${label}” in a new session and asks you at every decision.`,
+      [
+        { id: "cancel", label: "Cancel" },
+        { id: "redo", label: "Clear and redo", primary: true },
+      ]
+    );
+    if (c !== "redo") return;
+    if (Autopilot.isRunning()) await Autopilot.stopAndWait();
+    await clearMachineDecisions(s);
+    await refresh();
+    await Autopilot.runFrom(s);
   }
 
   async function go(s) {
@@ -231,6 +296,7 @@ App.panels.review = (() => {
     if (protocolMode === "form" && mode !== "form") readForm();
     protocolMode = mode;
     for (const b of $("rv-protocol-mode").children) b.classList.toggle("on", b.dataset.mode === mode);
+    $("rv-view").hidden = mode !== "form";
     $("rv-describe").hidden = mode !== "describe";
     $("rv-form").hidden = mode !== "form";
     $("rv-save").closest(".rv-save-row").hidden = mode !== "form";
@@ -252,7 +318,7 @@ App.panels.review = (() => {
       ),
       ...(collapsed ? [el("button", { class: "link method-change", text: "Change methodology…", onclick: () => ((draft.showAll = true), renderMethods()) })] : [])
     );
-    $("rv-method-current").textContent = draft.methodology !== project().methodology ? "Changed — save the protocol to apply it." : "";
+    $("rv-method-current").textContent = draft.methodology !== project().methodology ? "Changed. Save the protocol to apply it." : "";
     renderNext();
   }
 
@@ -286,11 +352,130 @@ App.panels.review = (() => {
     );
   }
 
+  // Lists and the query as structured editors (one entry per row, + to add; the query
+  // builder) or as raw text. One switch for all; the textareas stay the source of truth.
+  const LISTS = {
+    questions: { prefix: "RQ", add: "Add a question", placeholder: "Research question", hint: "e.g. How is IFC 5 used for data exchange between BIM tools?" },
+    inclusion: { prefix: "IC", add: "Add a criterion", placeholder: "Include papers that…", hint: "Each written so that a yes/no answer is possible" },
+    exclusion: { prefix: "EC", add: "Add a criterion", placeholder: "Exclude papers that…", hint: "" },
+    reasons: { prefix: "", add: "Add a reason", placeholder: "Exclusion reason" },
+    quality: { prefix: "Q", add: "Add a question", placeholder: "Answered with yes / partly / no", hint: "Each answered with yes / partly / no" },
+    extraction: { prefix: "E", add: "Add a field", placeholder: "Field, e.g. Method", hint: "e.g. Method, Data set, Key finding" },
+    facets: { prefix: "C", add: "Add a facet", placeholder: "Facet: category, category, …", hint: "A facet with its categories, e.g. Research type: evaluation, solution, validation, philosophical" },
+  };
+  let structured = true;
+
+  const grow = (t) => {
+    if (!t.offsetParent) return;
+    t.style.height = "auto";
+    t.style.height = t.scrollHeight + 2 + "px";
+  };
+
+  function setProtocolView(view) {
+    readForm();
+    ZR.Prefs.set("protocolView", view);
+    renderForm();
+  }
+
+  /** A list field: rows with a number and a remove button, Enter adds a row; or raw text. */
+  function listControls(f, values, textarea) {
+    const src = textarea(`pf-${f}`, values.join("\n"), Math.max(2, values.length + 1), "autogrow");
+    src.addEventListener("input", () => grow(src));
+    if (!structured) return [src];
+    src.hidden = true;
+    const spec = LISTS[f] || { prefix: "", add: "Add", placeholder: "" };
+    const list = el("div", { class: "pf-list", "data-list": f });
+    const renumber = () => [...list.children].forEach((r, i) => (r.firstChild.textContent = spec.prefix + (i + 1)));
+    const write = () => {
+      src.value = [...list.querySelectorAll("textarea")].map((t) => t.value.replace(/\s+/g, " ").trim()).filter(Boolean).join("\n");
+      renumber();
+    };
+    const addRow = (value = "", after = null, focus = false) => {
+      const t = el("textarea", { rows: "1", class: "autogrow", placeholder: spec.placeholder, spellcheck: "true" });
+      t.value = value;
+      const r = el("div", { class: "pf-li" }, [
+        el("span", { class: "pf-num" }),
+        t,
+        el("button", { class: "icon-action danger pf-del", title: "Remove", onclick: () => (r.remove(), list.children.length || addRow(), write()) }, App.icon("close")),
+      ]);
+      t.addEventListener("input", () => (grow(t), write()));
+      t.addEventListener("keydown", (e) => {
+        if (e.key === "Enter" && !e.shiftKey) {
+          e.preventDefault();
+          addRow("", r, true);
+          write();
+        } else if (e.key === "Backspace" && !t.value && list.children.length > 1) {
+          e.preventDefault();
+          const other = r.previousElementSibling || r.nextElementSibling;
+          r.remove();
+          write();
+          other.querySelector("textarea").focus();
+        }
+      });
+      t.addEventListener("paste", (e) => {
+        const lines = e.clipboardData.getData("text").split(/\r?\n/).map((s) => s.trim()).filter(Boolean);
+        if (lines.length < 2) return;
+        e.preventDefault();
+        t.value = (t.value + " " + lines.shift()).trim();
+        let at = r;
+        for (const l of lines) at = addRow(l, at);
+        write();
+        grow(t);
+      });
+      if (after) after.after(r);
+      else list.append(r);
+      renumber();
+      requestAnimationFrame(() => grow(t));
+      if (focus) t.focus();
+      return r;
+    };
+    for (const v of values.length ? values : [""]) addRow(v);
+    const add = el("button", { class: "link pf-add", "data-add": f, onclick: () => {
+      const last = list.lastElementChild?.querySelector("textarea");
+      if (last && !last.value.trim()) return last.focus();
+      addRow("", null, true);
+    } }, [App.icon("add"), spec.add]);
+    return [src, el("div", { class: "pf-list-wrap" }, [list, add])];
+  }
+
+  /** The search query: the query builder (like the Search tab) or text; checked as you type. */
+  function queryControls(q, textarea) {
+    const src = textarea("pf-query", q, 1, "mono autogrow");
+    const fb = el("span", { class: "hint pf-query-fb", id: "pf-query-fb" });
+    const check = () => {
+      const text = src.value.trim();
+      fb.className = "hint pf-query-fb";
+      fb.title = "";
+      if (!text) return (fb.textContent = "Used as the default query in the Search tab.");
+      try {
+        fb.title = ZR.Query.toCanonical(ZR.Query.parse(text));
+        fb.textContent = "✓ Valid query";
+        fb.classList.add("ok");
+      } catch (e) {
+        fb.title = e.message;
+        fb.textContent = "✗ Query problem (hover for details)";
+        fb.classList.add("error");
+      }
+    };
+    src.addEventListener("input", () => (grow(src), check()));
+    check();
+    if (!structured) return [src, fb];
+    const box = el("div", { class: "builder pf-builder", id: "pf-query-builder" });
+    const qb = App.queryBuilder(box, { onChange: (text) => ((src.value = text), check()) });
+    if (!qb.load(q)) return [src, fb, el("span", { class: "hint pf-nested", text: "This query has nested groups the builder can't show, so it stays text." })];
+    src.hidden = true;
+    qb.render();
+    return [src, box, fb];
+  }
+
   function renderForm() {
     const M = ZR.Methodologies;
     const m = M.get(draft.methodology);
     const P = draft.protocol;
     const box = $("rv-form");
+    structured = ZR.Prefs.get("protocolView", "structured") !== "text";
+    for (const b of $("rv-view").children) b.classList.toggle("on", b.dataset.view === (structured ? "structured" : "text"));
+    requestAnimationFrame(() => box.querySelectorAll("textarea.autogrow").forEach(grow));
     box.replaceChildren();
     const row = (id, label, hint, controls) => el("div", { class: "pf-row", "data-field": id }, [el("span", { class: "pf-label", text: label }), el("div", { class: "pf-controls" }, controls), hint ? el("span", { class: "hint pf-hint", text: hint }) : null]);
     const textarea = (id, value, rows, cls = "") => {
@@ -302,7 +487,7 @@ App.panels.review = (() => {
       const rec = M.get(draft.recommended.methodology);
       box.append(
         el("div", { class: "ai-box" }, [
-          el("span", {}, [el("b", { text: `The AI suggests: ${rec.name}` }), draft.recommended.why ? ` — ${draft.recommended.why}` : ""]),
+          el("span", {}, [el("b", { text: `The AI suggests: ${rec.name}` }), draft.recommended.why ? `: ${draft.recommended.why}` : ""]),
           el("span", { class: "spacer" }),
           el("button", { text: "Switch and re-fill", onclick: () => (chooseMethod(rec.id), fillWithAI()) }),
           el("button", { class: "link", text: "keep", onclick: () => ((draft.recommended = null), renderForm()) }),
@@ -312,31 +497,14 @@ App.panels.review = (() => {
     for (const f of m.fields) {
       const F = M.FIELDS[f];
       if (F.type === "text") box.append(row(f, F.label, F.hint, [el("input", { type: "text", id: `pf-${f}`, value: P[f] || "" })]));
-      else if (F.type === "textarea") box.append(row(f, F.label, F.hint, [textarea(`pf-${f}`, P[f], 2)]));
-      else if (F.type === "list") box.append(row(f, F.label, F.hint, [textarea(`pf-${f}`, (P[f] || []).join("\n"), Math.min(8, Math.max(2, (P[f] || []).length + 1)))]));
-      else if (F.type === "query") {
-        const fb = el("span", { class: "hint", id: "pf-query-fb" });
-        const t = textarea("pf-query", P.query, 2, "mono");
-        const check = () => {
-          const q = t.value.trim();
-          fb.className = "hint";
-          if (!q) return (fb.textContent = "Used as the default query in the Search tab.");
-          try {
-            fb.textContent = "✓ " + ZR.Query.toCanonical(ZR.Query.parse(q));
-            fb.classList.add("ok");
-          } catch (e) {
-            fb.textContent = "Query problem: " + e.message;
-            fb.classList.add("error");
-          }
-        };
-        t.addEventListener("input", check);
-        check();
-        box.append(row(f, F.label, F.hint, [t, fb]));
-      } else if (F.type === "years")
+      else if (F.type === "textarea") box.append(row(f, F.label, F.hint, [textarea(`pf-${f}`, P[f], 2, "autogrow")]));
+      else if (F.type === "list") box.append(row(f, F.label, structured ? LISTS[f]?.hint ?? F.hint : F.hint, listControls(f, P[f] || [], textarea)));
+      else if (F.type === "query") box.append(row(f, F.label, structured ? "" : F.hint, queryControls(P.query, textarea)));
+      else if (F.type === "years")
         box.append(
           row(f, F.label, "", [
             el("input", { type: "number", id: "pf-yearFrom", min: "1900", max: "2100", placeholder: "from", value: P.yearFrom ?? "" }),
-            el("span", { text: "–" }),
+            el("span", { text: "to" }),
             el("input", { type: "number", id: "pf-yearTo", min: "1900", max: "2100", placeholder: "to", value: P.yearTo ?? "" }),
           ])
         );
@@ -408,7 +576,7 @@ App.panels.review = (() => {
       draft.recommended = out.recommended.methodology !== draft.methodology ? out.recommended : null;
       $("rv-fill-note").textContent = "";
       setProtocolMode("form");
-      $("rv-save-note").textContent = "Filled in by the AI — check every field, then save.";
+      $("rv-save-note").textContent = "Filled in by the AI. Check every field, then save.";
       st(out.rationale || "Protocol drafted. Review it, then save.");
     } catch (e) {
       $("rv-fill-note").textContent = "";
@@ -431,7 +599,7 @@ App.panels.review = (() => {
     }
     await persistProtocol(draft.methodology, protocol, $("rv-description").value.trim());
     $("rv-save-note").textContent = `Saved ${new Date().toLocaleTimeString()}.`;
-    st(cands.length ? "Protocol saved. Re-rate papers with System 1 if the criteria changed." : "Protocol saved. Next: find papers (step 2) — the search tab is pre-filled from the protocol.");
+    st(cands.length ? "Protocol saved. Re-rate papers with System 1 if the criteria changed." : "Protocol saved. Next: find papers (step 2). The search tab is pre-filled from the protocol.");
   }
 
   /** Save methodology + protocol; its search settings become the project's search settings. */
@@ -498,6 +666,8 @@ App.panels.review = (() => {
     acceptAll,
     decideRest,
     decideByKey,
+    machineDecisions: (s) => machineDecisions(s).length,
+    clearMachineDecisions,
     setThresholds,
     thresholds: () => thresholds(),
     population: () => population(),
@@ -564,7 +734,7 @@ App.panels.review = (() => {
       const outcome = d === "exclude" ? "Excluded at screening" : d === "maybe" ? "Maybe (screening)" : hasFT ? "Passed screening" : "Included";
       return Object.assign({ outcome, step: "screening" }, info(c.taInfo));
     }
-    return { outcome: "In pool — not screened yet", step: "pool", reason: row.fate === "known" ? row.reason : "" };
+    return { outcome: "In pool: not screened yet", step: "pool", reason: row.fate === "known" ? row.reason : "" };
   }
 
   async function auditRows() {
@@ -586,7 +756,7 @@ App.panels.review = (() => {
     // Papers of the review that no recorded search brought in (in the collection already, older searches)
     for (const c of fresh) {
       if (seen.has(c.key)) continue;
-      rows.push(Object.assign({ run: "—", runID: "", searchResult: c.itemID ? "in the collection" : "in pool (earlier search)", key: c.key, title: c.title, year: c.year, venue: c.venue, doi: c.doi, sources: c.record?.sources || [], creators: [] }, outcomeOf({ fate: "known" }, c)));
+      rows.push(Object.assign({ run: "-", runID: "", searchResult: c.itemID ? "in the collection" : "in pool (earlier search)", key: c.key, title: c.title, year: c.year, venue: c.venue, doi: c.doi, sources: c.record?.sources || [], creators: [] }, outcomeOf({ fate: "known" }, c)));
     }
     return rows;
   }
@@ -636,7 +806,7 @@ App.panels.review = (() => {
         el("span", { class: "hint", text: "›" }),
         el("span", { title: "The same paper found in several databases counts once" }, [el("b", { text: String(merged) }), " duplicates merged"]),
         el("span", { class: "hint", text: "›" }),
-        el("span", { title: Object.entries(byStage).map(([k, v]) => `${k}: ${v}`).join("\n") }, [el("b", { text: String(count((r) => r.outcome === "Not added")) }), " not added (" + (Object.entries(byStage).map(([k, v]) => `${v} ${k}`).join(", ") || "—") + ")"]),
+        el("span", { title: Object.entries(byStage).map(([k, v]) => `${k}: ${v}`).join("\n") }, [el("b", { text: String(count((r) => r.outcome === "Not added")) }), " not added (" + (Object.entries(byStage).map(([k, v]) => `${v} ${k}`).join(", ") || "-") + ")"]),
         el("span", { class: "hint", text: "›" }),
         el("span", {}, [el("b", { text: String(count((r) => r.outcome !== "Not added")) }), " in the review"]),
         el("span", { class: "hint", text: "›" }),
@@ -661,7 +831,7 @@ App.panels.review = (() => {
             ])
           ),
         ]),
-        list.length > 1500 ? el("div", { class: "hint", text: `…and ${list.length - 1500} more — export the CSV for the full list` }) : null
+        list.length > 1500 ? el("div", { class: "hint", text: `…and ${list.length - 1500} more. Export the CSV for the full list` }) : null
       );
       $("audit-count").textContent = `${list.length} of ${rows.length} rows`;
     }
@@ -685,10 +855,10 @@ App.panels.review = (() => {
     const layer = el("div", { class: "modal-layer", id: "audit-layer" }, [
       el("div", { class: "modal audit-modal", role: "dialog" }, [
         el("div", { class: "row-between" }, [
-          el("h2", { text: `Audit trail — ${p.name}` }),
+          el("h2", { text: `Audit trail: ${p.name}` }),
           el("button", { class: "icon-btn", text: "×", title: "Close", onclick: () => layer.remove() }),
         ]),
-        el("p", { class: "hint", text: "Every paper your searches found and what happened to it: removed by a filter or option, added to the pool, and then screened, excluded or included — with the reason, who decided and when." + (runsWithoutAudit ? ` ${runsWithoutAudit} search(es) logged before version 0.7 have counts only.` : "") }),
+        el("p", { class: "hint", text: "Every paper your searches found and what happened to it: removed by a filter or option, added to the pool, and then screened, excluded or included, with the reason, who decided and when." + (runsWithoutAudit ? ` ${runsWithoutAudit} search(es) logged before version 0.7 have counts only.` : "") }),
         summary,
         el("div", { class: "audit-filters" }, [runSel, outSel, search, el("span", { class: "hint", id: "audit-count" }), el("span", { class: "spacer" }), el("button", { class: "primary", id: "audit-csv", text: "Export CSV", onclick: exportCSV })]),
         table,
@@ -758,7 +928,7 @@ App.panels.review = (() => {
     renderFunnel();
   }
 
-  /** ✓2 ?1 ✗1 — the verdicts of a paper's full-text annotations, for the queue. */
+  /** ✓2 ?1 ✗1 - the verdicts of a paper's full-text annotations, for the queue. */
   function annoCounts(c) {
     if (!c.itemID) return null;
     const list = ZR.FullText.annotationsOf(Zotero.Items.get(c.itemID));
@@ -799,7 +969,7 @@ App.panels.review = (() => {
       const max = Math.max(1, ...bins);
       $("s1-hist").replaceChildren(
         ...bins.map((n, i) =>
-          el("div", { class: "bin " + band((i + 0.5) / 10), title: `${i * 10}–${i * 10 + 10}%: ${n} undecided paper(s)` }, el("div", { class: "bar", style: `height:${Math.round((n / max) * 100)}%` }))
+          el("div", { class: "bin " + band((i + 0.5) / 10), title: `${i * 10}-${i * 10 + 10}%: ${n} undecided paper(s)` }, el("div", { class: "bar", style: `height:${Math.round((n / max) * 100)}%` }))
         ),
         el("div", { class: "axis" }, [el("span", { text: "0%" }), el("span", { text: "not relevant ← → relevant" }), el("span", { text: "100%" })])
       );
@@ -921,7 +1091,7 @@ App.panels.review = (() => {
       await ZR.Projects.savePool(libraryID(), p.id);
       for (const c of cands) c.dup = dups[c.key] || null;
       const n = openDuplicates().length;
-      if (!quiet) st(n ? `Found ${n} possible duplicate(s) — marked ⧉. Check them one by one, or exclude them all (the better-documented version stays).` : "No duplicates found.");
+      if (!quiet) st(n ? `Found ${n} possible duplicate(s): marked ⧉. Check them one by one, or exclude them all (the better-documented version stays).` : "No duplicates found.");
       return n;
     } catch (e) {
       if (!quiet) st("Duplicate check failed: " + e.message);
@@ -939,7 +1109,7 @@ App.panels.review = (() => {
     App.setBusy("review", true);
     try {
       for (const c of list) await decide(c, "exclude", dupReason(), "dup", { advance: false, render: false });
-      st(`Excluded ${list.length} duplicate(s) — reason “${dupReason()}”, recorded as “duplicate check”.`);
+      st(`Excluded ${list.length} duplicate(s): reason “${dupReason()}”, recorded as “duplicate check”.`);
     } finally {
       App.setBusy("review", false);
       renderScreen();
@@ -959,7 +1129,7 @@ App.panels.review = (() => {
     const other = cands.find((x) => x.key === c.dup.of);
     if (!other) return null;
     return el("div", { class: "dup-box" }, [
-      el("span", {}, [el("b", { text: "⧉ Possible duplicate" }), ` of “${ZR.Util.truncate(other.title, 90)}” (${[other.year, other.venue].filter(Boolean).join(", ") || "n.d."}) — ${pct(c.dup.sim)} similar`]),
+      el("span", {}, [el("b", { text: "⧉ Possible duplicate" }), ` of “${ZR.Util.truncate(other.title, 90)}” (${[other.year, other.venue].filter(Boolean).join(", ") || "n.d."}): ${pct(c.dup.sim)} similar`]),
       el("span", { class: "spacer" }),
       el("button", { text: "Exclude as duplicate", onclick: () => decide(c, "exclude", dupReason(), "dup") }),
       el("button", { class: "link", text: "not a duplicate", onclick: () => notDuplicate(c) }),
@@ -1004,7 +1174,7 @@ App.panels.review = (() => {
     const pop = population();
     const unrated = pop.filter((c) => !c.s1);
     const list = all || !unrated.length ? pop : unrated;
-    if (!list.length) return st("The pool is empty — add papers in step 2 first.");
+    if (!list.length) return st("The pool is empty. Add papers in step 2 first.");
     const eng = ZR.System1.engine();
     App.setBusy("review", true);
     let failed = 0;
@@ -1024,10 +1194,10 @@ App.panels.review = (() => {
       let dupNote = "";
       if (ZR.Embed.isAvailable()) {
         const found = await findDuplicates({ quiet: true });
-        if (found) dupNote = ` Found ${found} possible duplicate(s) — marked ⧉.`;
+        if (found) dupNote = ` Found ${found} possible duplicate(s): marked ⧉.`;
       }
       st(
-        `Rated ${n} paper(s) with ${ENGINE_NAMES[eng]}${learned ? ` (with what the local model learned from ${learned.labels} of your decisions)` : ""}${failed ? ` — ${failed} failed: ${lastError}` : ""}. Papers are sorted by probability; set the thresholds to settle the clear cases.${dupNote}`
+        `Rated ${n} paper(s) with ${ENGINE_NAMES[eng]}${learned ? ` (with what the local model learned from ${learned.labels} of your decisions)` : ""}${failed ? `; ${failed} failed (${lastError})` : ""}. Papers are sorted by probability; set the thresholds to settle the clear cases.${dupNote}`
       );
     } catch (e) {
       st("Rating failed: " + e.message);
@@ -1053,7 +1223,7 @@ App.panels.review = (() => {
         await decide(c, kind, r, "s1", { advance: false, render: false });
         if (++n % 5 === 0) st(`${kind === "exclude" ? "Excluding" : "Including"} ${n}/${list.length}…`);
       }
-      st(`${kind === "exclude" ? "Excluded" : "Included"} ${n} paper(s) by System 1 threshold — marked “by System 1”; you can change any of them.${kind === "include" ? " They were added to the collection." : ""}`);
+      st(`${kind === "exclude" ? "Excluded" : "Included"} ${n} paper(s) by System 1 threshold: marked “by System 1”; you can change any of them.${kind === "include" ? " They were added to the collection." : ""}`);
     } catch (e) {
       Zotero.logError(e);
       st(`Stopped after ${n}: ${e.message}`);
@@ -1096,7 +1266,7 @@ App.panels.review = (() => {
     const fw = ZR.Methodologies.FRAMEWORKS[protocol.framework];
     const parts = (fw?.fields || []).filter((f) => protocol.frameworkFields?.[f.id]).map((f) => `${f.label}: ${protocol.frameworkFields[f.id]}`);
     return {
-      question: [(protocol.questions || []).join(" "), protocol.objective, parts.join("; ")].filter(Boolean).join(" — "),
+      question: [(protocol.questions || []).join(" "), protocol.objective, parts.join("; ")].filter(Boolean).join(". "),
       include: (protocol.inclusion || []).join("; "),
       exclude: (protocol.exclusion || []).join("; "),
       reasons: protocol.reasons,
@@ -1126,7 +1296,7 @@ App.panels.review = (() => {
         c.llm = map[c.key] = Object.assign({ stage: s, at: today(), model: profile.model }, out[k]);
       });
       await ZR.Projects.setScores(libraryID(), p.id, "llm", map);
-      st(`The AI suggested decisions for ${Object.keys(map).length} of ${todo.length} paper(s) — marked with a ring. Check them, or accept the confident ones.`);
+      st(`The AI suggested decisions for ${Object.keys(map).length} of ${todo.length} paper(s): marked with a ring. Check them, or accept the confident ones.`);
     } catch (e) {
       st("AI suggestions failed: " + e.message);
     } finally {
@@ -1148,7 +1318,7 @@ App.panels.review = (() => {
     } finally {
       App.setBusy("review", false);
     }
-    st(n ? `Accepted ${n} confident AI suggestion(s) — recorded as “by AI”.` : "No undecided suggestions with ≥ 80 % confidence.");
+    st(n ? `Accepted ${n} confident AI suggestion(s): recorded as “by AI”.` : "No undecided suggestions with ≥ 80 % confidence.");
     renderScreen();
   }
 
@@ -1200,7 +1370,7 @@ App.panels.review = (() => {
               ? "Pick another filter, or continue with the next step."
               : s === "ft"
                 ? "Include papers in the screening step first."
-                : "Find papers in step 2 — search results are collected here for screening.",
+                : "Find papers in step 2: search results are collected here for screening.",
           }),
         ])
       );
@@ -1213,7 +1383,7 @@ App.panels.review = (() => {
     const pre = c.reason || (sg?.d === "exclude" && sg.r) || s1r || "";
     if (pre && !reasons.includes(pre)) reasons.push(pre);
     const current = c[s];
-    const reasonSel = el("select", { id: "reason-select", title: "Exclusion reason (keys 1–9)" }, reasons.map((r, i) => el("option", { value: r, text: `${i + 1}. ${ZR.Util.truncate(r, 70)}`, title: r, selected: r === pre })));
+    const reasonSel = el("select", { id: "reason-select", title: "Exclusion reason (keys 1-9)" }, reasons.map((r, i) => el("option", { value: r, text: `${i + 1}. ${ZR.Util.truncate(r, 70)}`, title: r, selected: r === pre })));
     const link = c.doi ? "https://doi.org/" + c.doi : c.record?.url || "";
     const showTerms = ZR.Prefs.get("showQueryTerms", true);
     const terms = showTerms ? termsOfProject() : [];
@@ -1233,7 +1403,7 @@ App.panels.review = (() => {
           link ? el("button", { class: "link", text: c.doi ? "doi:" + c.doi : "web page ↗", onclick: () => Zotero.launchURL(link) }) : null,
           c.itemID
             ? el("button", { class: "link", text: "Show in Zotero", onclick: () => App.ZR.UI.revealItem(c.itemID, { preferCollectionID: App.target.collectionID }) })
-            : el("span", { class: "tag", text: "in the pool — added to Zotero when included", title: "Pool papers stay outside your library until they pass screening" }),
+            : el("span", { class: "tag", text: "in the pool: added to Zotero when included", title: "Pool papers stay outside your library until they pass screening" }),
           s === "ft" && c.itemID && !ZR.FullText.pdfOf(Zotero.Items.get(c.itemID)) ? pdfButton(c) : null,
           el("span", { class: "spacer" }),
           el("button", {
@@ -1258,7 +1428,7 @@ App.panels.review = (() => {
         s1Box(c, s),
         sg
           ? el("div", { class: "ai-box" }, [
-              el("span", {}, [el("b", { text: `AI suggests: ${sg.d}` }), sg.r ? ` — ${sg.r}` : "", sg.c != null ? ` (${Math.round(sg.c * 100)}% sure)` : ""]),
+              el("span", {}, [el("b", { text: `AI suggests: ${sg.d}` }), sg.r ? `: ${sg.r}` : "", sg.c != null ? ` (${Math.round(sg.c * 100)}% sure)` : ""]),
               el("span", { class: "hint", text: sg.why || "" }),
               el("span", { class: "spacer" }),
               el("button", { text: "Accept", onclick: () => decide(c, sg.d, sg.r, "llm") }),
@@ -1296,7 +1466,7 @@ App.panels.review = (() => {
       const items = list.map((c) => Zotero.Items.get(c.itemID));
       const records = new Map(list.map((c) => [c.itemID, c.record]));
       onLine(`${labels.get(sid) || sid}: ${items.length} paper(s)…`);
-      const r = await ZR.PDFHunt.run(items, sid, { records, onProgress: (n, total, item) => st(`${labels.get(sid)}: ${n}/${total} — ${ZR.Util.truncate(item.getField("title"), 50)}`) });
+      const r = await ZR.PDFHunt.run(items, sid, { records, onProgress: (n, total, item) => st(`${labels.get(sid)}: ${n}/${total} · ${ZR.Util.truncate(item.getField("title"), 50)}`) });
       for (const x of r.results) {
         const c = cands.find((y) => y.itemID === x.itemID);
         if (c) c.hasPDF = true;
@@ -1316,7 +1486,7 @@ App.panels.review = (() => {
     const runBtn = el("button", { class: "primary", id: "hunt-run", text: "Run the selected strategies" });
     const renderCount = () => {
       const n = missingPDFs().length;
-      count.textContent = n ? `${n} paper(s) at the full-text step have no PDF — without one they cannot be read or annotated.` : "Every paper at this step has a PDF.";
+      count.textContent = n ? `${n} paper(s) at the full-text step have no PDF: without one they cannot be read or annotated.` : "Every paper at this step has a PDF.";
       runBtn.disabled = !n || App.busy;
     };
     const strategies = ZR.PDFHunt.strategies();
@@ -1341,7 +1511,7 @@ App.panels.review = (() => {
       el("div", { class: "modal hunt-modal", role: "dialog" }, [
         el("div", { class: "row-between" }, [el("h2", { text: "Find missing PDFs" }), el("button", { class: "icon-btn", text: "×", title: "Close", onclick: () => layer.remove() })]),
         count,
-        el("p", { class: "hint", text: "Strategies run one after another; papers found by one are skipped by the next. Every file is checked before it is attached — it must be a PDF of exactly that paper. You can run again with other strategies." }),
+        el("p", { class: "hint", text: "Strategies run one after another; papers found by one are skipped by the next. Every file is checked before it is attached: it must be a PDF of exactly that paper. You can run again with other strategies." }),
         list,
         el("div", { class: "actions" }, [el("span", { class: "spacer" }), el("button", { text: "Close", onclick: () => layer.remove() }), runBtn]),
         log,
@@ -1360,7 +1530,7 @@ App.panels.review = (() => {
     const item = c.itemID && Zotero.Items.get(c.itemID);
     const att = item && ZR.FullText.pdfOf(item);
     const head = (extra) => el("div", { class: "anno-head" }, [el("b", { text: "Full-text annotations" }), ...extra]);
-    if (!att) return el("div", { class: "anno-box" }, [head([]), el("div", { class: "hint", text: "No PDF attached yet — use Find PDF above, or attach the file in Zotero." })]);
+    if (!att) return el("div", { class: "anno-box" }, [head([]), el("div", { class: "hint", text: "No PDF attached yet. Use Find PDF above, or attach the file in Zotero." })]);
     const list = ZR.FullText.annotationsOf(item);
     const n = (k) => list.filter((a) => a.kind === k).length;
     const untagged = list.filter((a) => !a.kind).length;
@@ -1385,7 +1555,7 @@ App.panels.review = (() => {
             { class: "anno-list" },
             list.map((a) =>
               el("div", { class: `anno-row k-${a.kind || "none"}`, "data-key": a.key, title: "Click to show it in the PDF", onclick: () => ZR.FullText.open(a) }, [
-                el("span", { class: "anno-who", title: a.isBot ? `${a.author} — written by the AI` : `${a.author || "You"}`, text: a.isBot ? "🤖" : "👤" }),
+                el("span", { class: "anno-who", title: a.isBot ? `${a.author}: written by the AI` : `${a.author || "You"}`, text: a.isBot ? "🤖" : "👤" }),
                 el("div", { class: "anno-main" }, [
                   el("div", { class: "anno-text", text: a.text ? `“${ZR.Util.truncate(a.text, 300)}”` : "(note without text)" }),
                   a.comment ? el("div", { class: "anno-comment", text: a.comment }) : null,
@@ -1397,7 +1567,7 @@ App.panels.review = (() => {
                   ["include", "maybe", "exclude"].map((k) =>
                     el("button", {
                       class: `kind-btn ${k}${a.kind === k ? " on" : ""}`,
-                      title: a.kind === k ? "Remove the verdict" : `Mark as ${KIND_LABEL[k]} — sets the tag and the colour in Zotero`,
+                      title: a.kind === k ? "Remove the verdict" : `Mark as ${KIND_LABEL[k]}: sets the tag and the colour in Zotero`,
                       text: k === "include" ? "✓" : k === "maybe" ? "?" : "✗",
                       onclick: () => setAnnotationKind(a, a.kind === k ? null : k),
                     })
@@ -1436,7 +1606,7 @@ App.panels.review = (() => {
     if (!quiet) App.setBusy("review", true);
     try {
       const r = await ZR.FullText.annotateWithAI({ item, protocol: project().protocol, profile, max: ZR.Prefs.get("annoMax", 10), onStatus: (m) => st(`${ZR.Util.truncate(c.title, 50)}: ${m}`) });
-      const msg = `The AI added ${r.created} annotation(s) to “${ZR.Util.truncate(c.title, 60)}”${r.notFound.length ? ` — ${r.notFound.length} quote(s) were not found verbatim in the PDF and skipped` : ""}.${r.summary ? " " + r.summary : ""}`;
+      const msg = `The AI added ${r.created} annotation(s) to “${ZR.Util.truncate(c.title, 60)}”${r.notFound.length ? `: ${r.notFound.length} quote(s) were not found verbatim in the PDF and skipped` : ""}.${r.summary ? " " + r.summary : ""}`;
       if (!quiet) st(msg);
       return r;
     } catch (e) {
@@ -1519,7 +1689,7 @@ App.panels.review = (() => {
 
   function termChip(t, fields) {
     const term = t.text.toLowerCase();
-    const chip = el("button", { class: "kw-chip" + (termFocus.has(term) ? " on" : ""), style: `--kw-h:${termHue(termsOfProject(), t.text)}`, "aria-pressed": String(termFocus.has(term)), title: `Found in ${fields.join(", ")} — hover to see where, click to keep it marked (several at once)` }, [el("b", { text: t.text }), " " + fields.join(", ")]);
+    const chip = el("button", { class: "kw-chip" + (termFocus.has(term) ? " on" : ""), style: `--kw-h:${termHue(termsOfProject(), t.text)}`, "aria-pressed": String(termFocus.has(term)), title: `Found in ${fields.join(", ")}. Hover to see where, click to keep it marked (several at once)` }, [el("b", { text: t.text }), " " + fields.join(", ")]);
     chip.addEventListener("mouseenter", () => termSpans(term).forEach((s) => s.classList.add("kw-hover")));
     chip.addEventListener("mouseleave", () => termSpans(term).forEach((s) => s.classList.remove("kw-hover")));
     chip.addEventListener("click", () => {
@@ -1533,7 +1703,7 @@ App.panels.review = (() => {
     return chip;
   }
 
-  /** Which search terms occur where — "why is this paper here?" */
+  /** Which search terms occur where - "why is this paper here?" */
   function foundBy(c, terms) {
     if (!terms.length) return null;
     const where = terms.map((t) => ({
@@ -1552,7 +1722,7 @@ App.panels.review = (() => {
       el("span", { class: "hint", text: hit.length ? "Search terms here:" : "No search term in title, authors or abstract" }),
       ...hit.map((w) => termChip(w.t, w.fields)),
       miss.length
-        ? el("span", { class: "hint", title: "These terms of your searches do not occur here — the database may have matched keywords or the full text, or the paper came from another alternative of an OR", text: ` · not here: ${miss.map((w) => w.t.text).join(", ")}` })
+        ? el("span", { class: "hint", title: "These terms of your searches do not occur here: the database may have matched keywords or the full text, or the paper came from another alternative of an OR", text: ` · not here: ${miss.map((w) => w.t.text).join(", ")}` })
         : null,
     ]);
   }
@@ -1589,7 +1759,7 @@ App.panels.review = (() => {
     const list = (c.highlights || []).slice().sort((a, b) => a.start - b.start);
     if (!list.length) return null;
     return el("div", { class: "hl-list" }, [
-      el("div", { class: "hl-head", text: `Your highlights (${list.length}) — ${c.itemID ? "kept as a note on the Zotero item" : "added to Zotero as a note when you include the paper"}` }),
+      el("div", { class: "hl-head", text: `Your highlights (${list.length}): ${c.itemID ? "kept as a note on the Zotero item" : "added to Zotero as a note when you include the paper"}` }),
       ...list.map((h) =>
         el("div", { class: "hl-row" }, [
           el("span", { class: `hl hl-${h.kind} hl-quote`, text: `“${ZR.Util.truncate(h.text, 200)}”` }),
@@ -1689,7 +1859,7 @@ App.panels.review = (() => {
         st("Looking for a PDF…");
         const ok = await ZR.Importer.attachFullText(item);
         c.hasPDF = !!ok;
-        st(ok ? "PDF attached." : "No legally accessible PDF found — attach one by hand, or exclude with “Full text not available”.");
+        st(ok ? "PDF attached." : "No legally accessible PDF found. Attach one by hand, or exclude with “Full text not available”.");
         renderScreen();
       },
     });
@@ -1797,13 +1967,13 @@ App.panels.review = (() => {
       const col = spec.cols[i];
       if (spec.field === "qa") {
         const a = c.qa?.[i];
-        return el("td", { title: a?.why ? `${a.why}${a.by === "llm" ? " (AI)" : ""}` : "" }, el("select", { class: "qa " + (a?.a || ""), onchange: (e) => setCell(c, spec, i, e.target.value) }, ["", "yes", "partly", "no"].map((v) => el("option", { value: v, text: v || "–", selected: (a?.a || "") === v }))));
+        return el("td", { title: a?.why ? `${a.why}${a.by === "llm" ? " (AI)" : ""}` : "" }, el("select", { class: "qa " + (a?.a || ""), onchange: (e) => setCell(c, spec, i, e.target.value) }, ["", "yes", "partly", "no"].map((v) => el("option", { value: v, text: v || "-", selected: (a?.a || "") === v }))));
       }
       const v = c.extract?.[col] || "";
       const options = spec.facets?.[i]?.options || [];
       if (options.length) {
         const opts = v && !options.includes(v) ? [...options, v] : options;
-        return el("td", {}, el("select", { onchange: (e) => setCell(c, spec, i, e.target.value) }, ["", ...opts].map((o) => el("option", { value: o, text: o || "–", selected: o === v }))));
+        return el("td", {}, el("select", { onchange: (e) => setCell(c, spec, i, e.target.value) }, ["", ...opts].map((o) => el("option", { value: o, text: o || "-", selected: o === v }))));
       }
       const t = el("textarea", { rows: "2", onchange: (e) => setCell(c, spec, i, e.target.value.trim()) });
       t.value = v;
@@ -1888,7 +2058,7 @@ App.panels.review = (() => {
         }
         st(`The AI filled ${++done}/${rows.length} paper(s)…`);
       });
-      st(`The AI filled ${done - failed} paper(s)${failed ? `, ${failed} failed` : ""}. It used the full text where Zotero has indexed it, otherwise the abstract — check the values.`);
+      st(`The AI filled ${done - failed} paper(s)${failed ? `, ${failed} failed` : ""}. It used the full text where Zotero has indexed it, otherwise the abstract. Check the values.`);
     } finally {
       App.setBusy("review", false);
       renderTable();
@@ -1997,7 +2167,7 @@ App.panels.review = (() => {
 
   async function renderReport() {
     const c = counts();
-    lastSVG = ZR.Prisma.svg(c, { title: `${method().name} — ${project().name}` });
+    lastSVG = ZR.Prisma.svg(c, { title: `${method().name} · ${project().name}` });
     const doc = new DOMParser().parseFromString(lastSVG, "image/svg+xml");
     const view = $("prisma-view");
     view.replaceChildren(document.importNode(doc.documentElement, true));
@@ -2022,20 +2192,20 @@ App.panels.review = (() => {
 
   const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 
-  /** The protocol as note HTML — the documented method for the paper or thesis. */
+  /** The protocol as note HTML - the documented method for the paper or thesis. */
   function protocolHTML(p) {
     const P = p.protocol;
     const m = method();
-    const list = (a) => (a?.length ? `<ul>${a.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : "<p>—</p>");
+    const list = (a) => (a?.length ? `<ul>${a.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : "<p>-</p>");
     const fw = ZR.Methodologies.FRAMEWORKS[P.framework];
     return (
       `<h1>${esc(P.title || p.name)}</h1>` +
       `<p><strong>Methodology:</strong> ${esc(m.name)} (${esc(m.reference)})</p>` +
       (P.objective ? `<p><strong>Objective:</strong> ${esc(P.objective)}</p>` : "") +
       `<h2>Research questions</h2>${list(P.questions)}` +
-      (fw?.fields.length ? `<h2>${esc(fw.name)}</h2><ul>${fw.fields.map((f) => `<li><strong>${esc(f.label)}:</strong> ${esc(P.frameworkFields?.[f.id] || "—")}</li>`).join("")}</ul>` : "") +
+      (fw?.fields.length ? `<h2>${esc(fw.name)}</h2><ul>${fw.fields.map((f) => `<li><strong>${esc(f.label)}:</strong> ${esc(P.frameworkFields?.[f.id] || "-")}</li>`).join("")}</ul>` : "") +
       `<h2>Inclusion criteria</h2>${list(P.inclusion)}<h2>Exclusion criteria</h2>${list(P.exclusion)}` +
-      `<h2>Search</h2><p><code>${esc(P.query || "—")}</code></p><p>Years: ${P.yearFrom || "…"}–${P.yearTo || "…"}; languages: ${esc(P.languages.join(", ") || "any")}; types: ${esc(P.types.join(", ") || "any")}</p>` +
+      `<h2>Search</h2><p><code>${esc(P.query || "-")}</code></p><p>Years: ${P.yearFrom || "…"}-${P.yearTo || "…"}; languages: ${esc(P.languages.join(", ") || "any")}; types: ${esc(P.types.join(", ") || "any")}</p>` +
       `<p><em>Screening support: System 1 relevance probabilities (${esc(ENGINE_NAMES[ZR.System1.engine()])}) with thresholds ${Math.round(thresholds().excludeBelow * 100)}% / ${Math.round(thresholds().includeAbove * 100)}%; decisions by System 1, the AI or the reviewer are recorded per paper.</em></p>`
     );
   }
@@ -2058,5 +2228,17 @@ App.panels.review = (() => {
   /** Open this step the next time the tab is shown. */
   const setStep = (s) => (step = s);
 
-  return { init, onShow, refresh, reset, go, setStep, focusItem, api, get step() { return step; }, get candidates() { return cands; } };
+  /** Step 1 with one protocol field in view and briefly marked (from the autopilot chat). */
+  async function showField(field) {
+    await go("protocol");
+    if (protocolMode !== "form") setProtocolMode("form");
+    const row = $("rv-form").querySelector(`.pf-row[data-field="${field}"]`);
+    if (!row) return;
+    row.scrollIntoView({ block: "center" });
+    row.classList.remove("flash");
+    void row.offsetWidth; // restart the animation
+    row.classList.add("flash");
+  }
+
+  return { init, onShow, refresh, reset, go, setStep, showField, focusItem, api, get step() { return step; }, get candidates() { return cands; } };
 })();

@@ -1,10 +1,10 @@
 /* global ZR, Zotero */
 // Citation links between library items, built from existing open citation graphs
 // rather than from scratch:
-//   1. OpenAlex    – batch lookup by DOI (50 per request), `referenced_works`
-//   2. Semantic Scholar – batch lookup (500 per request) incl. arXiv-only papers
-//   3. OpenCitations – open DOI→DOI index, for papers that still have no links
-//   4. Crossref    – publisher-deposited reference lists, last gap filler
+//   1. OpenAlex    - batch lookup by DOI (50 per request), `referenced_works`
+//   2. Semantic Scholar - batch lookup (500 per request) incl. arXiv-only papers
+//   3. OpenCitations - open DOI→DOI index, for papers that still have no links
+//   4. Crossref    - publisher-deposited reference lists, last gap filler
 // Links become Zotero "Related" relations (undirected, native) and the direction
 // (who cites whom) is kept in the ledger for graph views and exports.
 
@@ -109,7 +109,7 @@ ZR.Citations = (() => {
     stats.found.openalex = oa.found.size;
     external = oa.external;
 
-    // 2) Semantic Scholar batch — every paper with a DOI or arXiv id (union improves recall)
+    // 2) Semantic Scholar batch - every paper with a DOI or arXiv id (union improves recall)
     const s2Nodes = nodes.filter((n) => n.doi || n.arxiv);
     const s2Key = ZR.Sources.keyFor("semanticscholar");
     const s2Found = new Set();

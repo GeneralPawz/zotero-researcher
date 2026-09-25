@@ -193,7 +193,7 @@ ZR.Importer = (() => {
       .map(([id, s]) => `<tr><td>${e(ZR.Sources.get(id)?.name || id)}</td><td><code>${e(s.query || "")}</code></td><td>${s.count ?? 0}</td><td>${e(s.error || "")}</td></tr>`)
       .join("");
     return (
-      `<h2>Search protocol — ${e(run.started)}</h2>` +
+      `<h2>Search protocol: ${e(run.started)}</h2>` +
       `<p><strong>Mode:</strong> ${e(run.mode)}${run.llmProfile ? ` (LLM: ${e(run.llmProfile)})` : ""}</p>` +
       (run.request ? `<p><strong>Request:</strong> ${e(run.request)}</p>` : "") +
       `<p><strong>Boolean query:</strong> <code>${e(run.query)}</code></p>` +

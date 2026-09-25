@@ -68,7 +68,7 @@ App.panels.items = (() => {
         s.status === "running"
           ? "working…"
           : s.message ||
-            (s.proposal ? (s.proposal.recognize ? "will run Zotero’s PDF recognizer" : n || s.proposal.typeChange ? `${n} change(s) found — click to review` : "already up to date") : c.missing.length ? "missing: " + c.missing.slice(0, 3).join(", ") : "complete");
+            (s.proposal ? (s.proposal.recognize ? "will run Zotero’s PDF recognizer" : n || s.proposal.typeChange ? `${n} change(s) found. Click to review` : "already up to date") : c.missing.length ? "missing: " + c.missing.slice(0, 3).join(", ") : "complete");
       const head = el("div", { class: "sel-head", onclick: () => ((s.open = !s.open), selState.set(item.id, s), render()) }, [
         el("div", { class: "meter", title: `${pct}% of key metadata present${c.missing.length ? "\nMissing: " + c.missing.join(", ") : ""}` }, el("div", { class: pct >= 80 ? "good" : pct >= 50 ? "mid" : "low", style: `width:${pct}%` })),
         el("div", { class: "t", text: title, title }),
@@ -94,7 +94,7 @@ App.panels.items = (() => {
     return el("tr", { class: kind }, [
       el("td", {}, el("input", { type: "checkbox", checked: obj.selected, onchange: (e) => ((obj.selected = e.target.checked), ($("apply-bar").hidden = !hasSelectedChanges())) })),
       el("td", { text: label }),
-      el("td", { class: "old", text: ZR.Util.truncate(oldV || "—", 300) }),
+      el("td", { class: "old", text: ZR.Util.truncate(oldV || "-", 300) }),
       el("td", { class: "new", text: ZR.Util.truncate(newV, 600) }),
     ]);
   }
@@ -243,7 +243,7 @@ App.panels.items = (() => {
       compareHTML = await ZR.Assist.compare(profile, papers, $("compare-instruction").value.trim());
       $("compare-output").innerHTML = compareHTML;
       $("compare-save").disabled = !App.target.editable;
-      st("Comparison ready — save it as a note to keep it with the collection.");
+      st("Comparison ready. Save it as a note to keep it with the collection.");
     } catch (e) {
       Zotero.logError(e);
       st("Comparison failed: " + e.message);
@@ -260,7 +260,7 @@ App.panels.items = (() => {
     try {
       if (!(await ZR.Embed.available())) {
         const s = ZR.Embed.status;
-        return st(`The local model is not available: ${s?.error || "turned off in Settings"} — see Settings → Local models.`);
+        return st(`The local model is not available: ${s?.error || "turned off in Settings"}. See Settings → Local models.`);
       }
       const all = (await Zotero.Items.getAll(App.target.libraryID, true, false)).filter((i) => i.isRegularItem() && (i.getField("title") || i.getField("abstractNote")));
       const papers = all.map(ZR.Embed.itemPaper);
@@ -292,7 +292,7 @@ App.panels.items = (() => {
           : [el("div", { class: "hint", text: "No other papers with a title or abstract in this library." })])
       );
       $("similar-box").hidden = false;
-      st(`${hits.length} similar paper(s) — computed on this computer by ${ZR.Embed.config().model}. Click one to show it in Zotero.`);
+      st(`${hits.length} similar paper(s): computed on this computer by ${ZR.Embed.config().model}. Click one to show it in Zotero.`);
     } catch (e) {
       Zotero.logError(e);
       st("Similar papers failed: " + e.message);
@@ -306,7 +306,7 @@ App.panels.items = (() => {
     const items = App.selectedItems().filter((i) => i.isRegularItem());
     const e = ZR.Util.escapeHTML;
     const header =
-      `<h1>AI comparison — ${e(new Date().toISOString().slice(0, 10))}</h1>` +
+      `<h1>AI comparison: ${e(new Date().toISOString().slice(0, 10))}</h1>` +
       `<p><em>Instruction:</em> ${e($("compare-instruction").value.trim())}</p>` +
       `<p><em>Papers:</em></p><ul>${items.map((i) => `<li>${e(i.getField("title"))}</li>`).join("")}</ul>`;
     const note = await ZR.Importer.createNote(header + compareHTML, { libraryID: App.target.libraryID, collectionID: App.target.collectionID });

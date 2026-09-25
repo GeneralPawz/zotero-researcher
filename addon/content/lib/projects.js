@@ -3,9 +3,9 @@
 //
 // A project is bound to a Zotero collection and remembers its search settings and
 // search history. Two kinds:
-//   quick  – "get me papers on X": search settings + history; results go straight into
+//   quick  - "get me papers on X": search settings + history; results go straight into
 //            the collection.
-//   review – a methodology-based pipeline (PRISMA, scoping, Kitchenham, …) with a
+//   review - a methodology-based pipeline (PRISMA, scoping, Kitchenham, …) with a
 //            protocol and a funnel. Search results first enter a *candidate pool*
 //            outside Zotero; only papers that pass title/abstract screening are added
 //            to the collection. A quick project can be converted into a review.

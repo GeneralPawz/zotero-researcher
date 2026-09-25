@@ -1,23 +1,23 @@
 /* global ZR */
 // "System 1" relevance scoring: a fast, cheap, calibrated probability that a paper
-// belongs in the review — the complement to the LLM ("System 2"), which sets up the
+// belongs in the review - the complement to the LLM ("System 2"), which sets up the
 // review and reasons about the uncertain cases.
 //
 // Engines
-//   typesafe – TypeSafe's Jev model (https://docs.typesafe.ai). One request per paper;
+//   typesafe - TypeSafe's Jev model (https://docs.typesafe.ai). One request per paper;
 //              the paper is the `state`, and each criterion is its own literal yes/no
 //              ("noul") question, evaluated in parallel. Probabilities are combined
 //              in code, as TypeSafe recommends (no arithmetic or dates in the model).
-//   local    – embeddings on this computer (e.g. Ollama): similarity to the protocol at
+//   local    - embeddings on this computer (e.g. Ollama): similarity to the protocol at
 //              first, then a model that learns from your own screening decisions
 //              (active learning) and re-ranks the pool as you screen
-//   llm      – the configured LLM profile (slower; confidence mapped to a probability)
-//   rules    – keyword rules only: does title/abstract satisfy the review query?
+//   llm      - the configured LLM profile (slower; confidence mapped to a probability)
+//   rules    - keyword rules only: does title/abstract satisfy the review query?
 //
 // Result per paper: {p, relevance, exclusion, criteria: [{kind, text, p}], suggest: {d, r}, engine, model, at}
-//   relevance – P(relevant to the review question)
-//   exclusion – max P over exclusion criteria
-//   p         – relevance × (1 − exclusion): the chance the paper survives screening
+//   relevance - P(relevant to the review question)
+//   exclusion - max P over exclusion criteria
+//   p         - relevance × (1 − exclusion): the chance the paper survives screening
 // Once the local model has learned from enough of your decisions, TypeSafe/LLM results are
 // blended with it (pref s1Blend): p = ½ (base + learned); base is kept for re-blending.
 
@@ -26,8 +26,8 @@ ZR.System1 = (() => {
   const ENDPOINT = "https://api.typesafe.ai/v1/systemone";
 
   const ENGINES = [
-    { id: "typesafe", name: "TypeSafe Jev — System 1 model (fast, calibrated, API key)", keyURL: "https://console.typesafe.ai/", docsURL: "https://docs.typesafe.ai/" },
-    { id: "local", name: "Local model on this computer — learns from your decisions (free, offline)" },
+    { id: "typesafe", name: "TypeSafe Jev: System 1 model (fast, calibrated, API key)", keyURL: "https://console.typesafe.ai/", docsURL: "https://docs.typesafe.ai/" },
+    { id: "local", name: "Local model on this computer: learns from your decisions (free, offline)" },
     { id: "llm", name: "Your AI provider (slower; reasons instead of estimating)" },
     { id: "rules", name: "Keyword rules only (no AI)" },
   ];
@@ -77,7 +77,7 @@ ZR.System1 = (() => {
     return ctx;
   }
 
-  // Publication years and languages are form fields and are checked in code — TypeSafe
+  // Publication years and languages are form fields and are checked in code - TypeSafe
   // advises against dates and arithmetic in the model, and metadata is exact anyway.
   const CODE_CHECKED = /\b(1[89]\d\d|20\d\d)\b|\bpublished (before|after|between|since|from|in)\b|\blanguages?\b|\bwritten in\b|\b(english|german|french|spanish|chinese)\b/i;
   const modelCriterion = (text) => !CODE_CHECKED.test(text);
@@ -88,7 +88,7 @@ ZR.System1 = (() => {
     const y = Number(c.year) || null;
     if (y && (protocol.yearFrom || protocol.yearTo)) {
       const ok = (!protocol.yearFrom || y >= protocol.yearFrom) && (!protocol.yearTo || y <= protocol.yearTo);
-      out.push({ kind: "exclude", text: `Published outside ${protocol.yearFrom || "…"}–${protocol.yearTo || "…"}`, note: `${y}, checked from the metadata`, p: ok ? 0 : 1, code: true });
+      out.push({ kind: "exclude", text: `Published outside ${protocol.yearFrom || "…"}-${protocol.yearTo || "…"}`, note: `${y}, checked from the metadata`, p: ok ? 0 : 1, code: true });
     }
     const lang = c.language ? ZR.Records.normLang(c.language) : "";
     if (lang && protocol.languages?.length) {
@@ -218,7 +218,7 @@ ZR.System1 = (() => {
     return parts.filter(Boolean).join("\n") || protocol.query || "";
   }
 
-  /** Screening decisions made by the reviewer (not by System 1 or the AI) — the training labels. */
+  /** Screening decisions made by the reviewer (not by System 1 or the AI) - the training labels. */
   const isLabel = (c) => (c.ta === "include" || c.ta === "exclude") && !["s1", "llm", "dup"].includes(c.by);
 
   /**
@@ -304,7 +304,7 @@ ZR.System1 = (() => {
 
   /**
    * Re-rank after new decisions (active learning): local results are recomputed, blended
-   * results re-blended from their stored base. Uses cached embeddings — fast.
+   * results re-blended from their stored base. Uses cached embeddings - fast.
    * @returns {Promise<{results, trained, labels}>} updated results for rated `cands`
    */
   async function relearn(cands, protocol, all = cands) {
@@ -342,7 +342,7 @@ ZR.System1 = (() => {
     if (eng === "local") return stamp(applyCodeChecks(await scoreLocal(cands, protocol, all, onProgress), cands, protocol), at);
     if (eng === "llm") return stamp(applyCodeChecks(await blend(await scoreLLM(cands, protocol, onProgress), cands, protocol, all), cands, protocol), at);
     const key = apiKey();
-    if (!key) throw new Error("TypeSafe API key missing — add it under Settings → System 1 model");
+    if (!key) throw new Error("TypeSafe API key missing. Add it under Settings → System 1 model");
     const questions = buildQuestions(protocol);
     const results = {};
     let done = 0;
@@ -407,7 +407,7 @@ ZR.System1 = (() => {
     const profile = ZR.Prefs.getActiveLLMProfile();
     if (!profile) return out;
     const list = passages.map((a, i) => `[${i}] "${U.truncate(a.text, 400)}"`).join("\n");
-    const res = await ZR.LLM.chatJSON(profile, [{ role: "user", content: `Review questions: ${(protocol.questions || []).join(" | ")}\nInclusion criteria: ${JSON.stringify(protocol.inclusion || [])}\n\nPassages:\n${list}\n\nFor each passage: probability (0–1) that it is evidence the paper fits the review.\nReply with JSON only: [{"i": <index>, "p": <0-1>}, …]` }], { maxTokens: 2000 });
+    const res = await ZR.LLM.chatJSON(profile, [{ role: "user", content: `Review questions: ${(protocol.questions || []).join(" | ")}\nInclusion criteria: ${JSON.stringify(protocol.inclusion || [])}\n\nPassages:\n${list}\n\nFor each passage: probability (0-1) that it is evidence the paper fits the review.\nReply with JSON only: [{"i": <index>, "p": <0-1>}, …]` }], { maxTokens: 2000 });
     for (const row of Array.isArray(res) ? res : []) if (passages[row.i] && Number.isFinite(Number(row.p))) out[passages[row.i].key] = Math.max(0, Math.min(1, Number(row.p)));
     return out;
   }

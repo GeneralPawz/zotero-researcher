@@ -1,6 +1,6 @@
 /* global ZR */
-// Activity log: what the plugin is doing behind the scenes — web requests, AI calls,
-// CLI runs, local-model calls — with timing, so a slow step can be told apart from a
+// Activity log: what the plugin is doing behind the scenes - web requests, AI calls,
+// CLI runs, local-model calls - with timing, so a slow step can be told apart from a
 // stuck one. Kept in memory only (last 400 entries); shown by the Log button.
 
 ZR.Activity = (() => {
@@ -139,7 +139,7 @@ ZR.Activity = (() => {
   function text() {
     const t = (ms) => new Date(ms).toISOString().slice(11, 19);
     return entries
-      .map((e) => `${t(e.started)} [${e.kind}] ${e.label} — ${e.ended ? `${e.ok ? "ok" : "FAILED"} in ${((e.ended - e.started) / 1000).toFixed(1)} s` : "running"}${e.result ? "\n    " + e.result.split("\n")[0] : ""}`)
+      .map((e) => `${t(e.started)} [${e.kind}] ${e.label} · ${e.ended ? `${e.ok ? "ok" : "FAILED"} in ${((e.ended - e.started) / 1000).toFixed(1)} s` : "running"}${e.result ? "\n    " + e.result.split("\n")[0] : ""}`)
       .join("\n");
   }
 

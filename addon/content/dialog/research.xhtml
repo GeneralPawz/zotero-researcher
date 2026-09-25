@@ -28,8 +28,10 @@
       <select id="project-select" title="Project: remembers its search settings, history and review"></select>
       <div class="target" id="target" title="Where papers are added"></div>
     </div>
-    <button class="icon-btn" id="help" title="Show the guided tour">?</button>
-    <button class="icon-btn" id="open-prefs" title="Settings: API keys, AI providers, research areas">⚙</button>
+    <div class="top-icons">
+      <button class="top-icon" id="help" title="Show the guided tour" aria-label="Help"></button>
+      <button class="top-icon" id="open-prefs" title="Settings: API keys, AI providers, research areas" aria-label="Settings"></button>
+    </div>
   </header>
 
   <!-- ============================== SEARCH ============================== -->
@@ -58,7 +60,7 @@
         <button class="link structured-only" id="syntax-toggle">How to write a query</button>
       </div>
       <div id="syntax" class="syntax" hidden="hidden">
-        <div><code>AND</code> <code>OR</code> <code>NOT</code> and <code>( )</code> combine terms — side-by-side terms are ANDed.</div>
+        <div><code>AND</code> <code>OR</code> <code>NOT</code> and <code>( )</code> combine terms: side-by-side terms are ANDed.</div>
         <div><code>"exact phrase"</code>, <code>build*</code> matches build/building/builder, <code>title:</code> <code>abstract:</code> <code>author:</code> search one field.</div>
         <div class="hint">Your query is translated for every database automatically. Try:
           <button class="example link">("IFC5" OR IFCX) AND BIM</button> ·
@@ -84,7 +86,7 @@
         <div class="opt-grid">
           <div class="opt-group">
             <div class="opt-title">Results</div>
-            <label class="inline">Years <input type="number" id="year-from" placeholder="from" min="1500" max="2100"/> – <input type="number" id="year-to" placeholder="to" min="1500" max="2100"/></label>
+            <label class="inline">Years <input type="number" id="year-from" placeholder="from" min="1500" max="2100"/> to <input type="number" id="year-to" placeholder="to" min="1500" max="2100"/></label>
             <label class="inline">Max per source <input type="number" id="limit" min="1" max="500"/></label>
             <label class="check" title="Keep only results with an open PDF link; imported items without a downloadable PDF are removed again"><input type="checkbox" id="fulltext-only"/> Only papers with full text (PDF)</label>
             <label class="check"><input type="checkbox" id="oa-only"/> Open access only</label>
@@ -92,9 +94,9 @@
           </div>
           <div class="opt-group">
             <div class="opt-title">Filters</div>
-            <div class="opt-label">Languages <span class="hint">— none selected = any</span></div>
+            <div class="opt-label">Languages <span class="hint">(none selected = any)</span></div>
             <div id="lang-picks" class="picks"></div>
-            <div class="opt-label">Publication types <span class="hint">— none selected = any</span></div>
+            <div class="opt-label">Publication types <span class="hint">(none selected = any)</span></div>
             <div id="type-picks" class="picks"></div>
             <label class="inline" title="Papers whose source reports no citation count are kept">At least <input type="number" id="min-cites" min="0" step="1" placeholder="0"/> citations</label>
             <label class="check"><input type="checkbox" id="has-abstract"/> Has an abstract</label>
@@ -112,7 +114,7 @@
             <div class="opt-title">AI</div>
             <label class="check"><input type="checkbox" id="screen"/> Rate relevance of results</label>
             <label class="inline">Pre-select from score <input type="number" id="min-score" min="0" max="10" step="1"/></label>
-            <label class="check" title="Search, rate and add the best results without asking — “YOLO mode”"><input type="checkbox" id="auto-import"/> Add results automatically (no review)</label>
+            <label class="check" title="Search, rate and add the best results without asking (“YOLO mode”)"><input type="checkbox" id="auto-import"/> Add results automatically (no review)</label>
           </div>
         </div>
       </div>
@@ -131,13 +133,13 @@
         <option value="cited">Most cited</option>
         <option value="newest">Newest first</option>
         <option value="oldest">Oldest first</option>
-        <option value="title">Title A–Z</option>
+        <option value="title">Title A-Z</option>
       </select></label>
     </div>
     <div class="scroll" id="results-scroll">
       <div id="search-empty" class="empty-state">
         <div class="empty-title">Find papers for <b id="empty-target"></b></div>
-        <div>Type keywords above — combine them with <code>AND</code> / <code>OR</code> / <code>NOT</code> — or switch to <b>Describe it (AI)</b> and write what you need in your own words.</div>
+        <div>Type keywords above (combine them with <code>AND</code> / <code>OR</code> / <code>NOT</code>) or switch to <b>Describe it (AI)</b> and write what you need in your own words.</div>
         <div class="hint">Papers you judged before are remembered and marked, so you never screen the same paper twice.</div>
       </div>
       <div id="results" class="results"></div>
@@ -174,9 +176,15 @@
           <div class="card">
             <div class="row-between">
               <h3>Protocol</h3>
-              <div class="seg small" id="rv-protocol-mode">
-                <button data-mode="describe">Describe in your own words</button>
-                <button data-mode="form">Fill in the form</button>
+              <div class="pf-tools">
+                <div class="seg small icons" id="rv-view" role="radiogroup" aria-label="How the lists and the query are edited" hidden="hidden">
+                  <button data-view="structured" role="radio" title="Structured: one entry per row with + to add more, and the query builder" aria-label="Structured"></button>
+                  <button data-view="text" role="radio" title="Raw text: one entry per line, the query as text" aria-label="Raw text"></button>
+                </div>
+                <div class="seg small icons" id="rv-protocol-mode" role="radiogroup" aria-label="Who fills in the form">
+                  <button data-mode="describe" role="radio" title="Let the AI fill out the form: describe your review in your own words" aria-label="Let the AI fill out the form"></button>
+                  <button data-mode="form" role="radio" title="Fill out the form yourself" aria-label="Fill out the form yourself"></button>
+                </div>
               </div>
             </div>
             <div id="rv-describe" hidden="hidden">
@@ -215,7 +223,7 @@
             <select id="queue-sort" title="Order">
               <option value="p">Most likely first</option>
               <option value="p-asc">Least likely first</option>
-              <option value="title">Title A–Z</option>
+              <option value="title">Title A-Z</option>
             </select>
             <span id="queue-count" class="hint"></span>
           </div>
@@ -272,7 +280,7 @@
       <button id="find-pdfs">Find PDFs</button>
       <button id="compare-open">Compare with AI</button>
       <button id="find-related" title="Papers these items cite, and related works (OpenAlex)">Find related papers</button>
-      <button id="find-similar" title="Papers in your library with similar content — local model on this computer">Similar in my library</button>
+      <button id="find-similar" title="Papers in your library with similar content: local model on this computer">Similar in my library</button>
       <span class="spacer"></span>
       <select id="llm-profile-2" title="AI profile"></select>
     </div>
@@ -308,7 +316,7 @@
         <option value="library">Whole library</option>
       </select>
       <label class="check" title="Adds Zotero's native “Related” link between papers that cite each other"><input type="checkbox" id="cite-related" checked="checked"/> Link as “Related” in Zotero</label>
-      <label class="check" id="cite-similar-wrap" title="Dashed lines between papers with very similar content (local model) — useful where citation data is missing"><input type="checkbox" id="cite-similar"/> Show similar papers</label>
+      <label class="check" id="cite-similar-wrap" title="Dashed lines between papers with very similar content (local model): useful where citation data is missing"><input type="checkbox" id="cite-similar"/> Show similar papers</label>
       <button id="cite-scan" class="primary">Find citation links</button>
       <span class="spacer"></span>
       <button id="cite-missing" title="Papers cited by several of yours that are not in your library">Suggest missing papers</button>
@@ -320,7 +328,7 @@
       <canvas id="graph"></canvas>
       <div id="graph-empty" class="empty-state">
         <div class="empty-title">See which papers cite each other</div>
-        <div>Citation data is taken from existing open graphs — OpenAlex, Semantic Scholar, OpenCitations and Crossref — so only gaps need filling. Links are stored with your library and can be added as Zotero “Related” items.</div>
+        <div>Citation data is taken from existing open graphs (OpenAlex, Semantic Scholar, OpenCitations and Crossref), so only gaps need filling. Links are stored with your library and can be added as Zotero “Related” items.</div>
       </div>
       <div id="graph-tip" class="graph-tip" hidden="hidden"></div>
       <div class="legend" id="graph-legend"></div>
@@ -336,7 +344,7 @@
         <label class="choice"><input type="radio" name="np-kind" value="review"/><span><b>Structured review</b><small>A methodology-based pipeline (PRISMA, scoping review, …) with protocol, screening funnel and report.</small></span></label>
       </div>
       <div class="field" id="np-ap" hidden="hidden">
-        <label class="choice"><input type="checkbox" id="np-ap-on"/><span><b>Autopilot</b><small>An AI of your choice runs the review with you: methodology, protocol, search, screening checks, full-text annotation, tables — asking you at every decision.</small></span></label>
+        <label class="choice"><input type="checkbox" id="np-ap-on"/><span><b>Autopilot</b><small>An AI of your choice runs the review with you: methodology, protocol, search, screening checks, full-text annotation, tables, asking you at every decision.</small></span></label>
         <div id="np-ap-fields" class="np-ap-fields" hidden="hidden">
           <label class="field">Harness model <select id="np-ap-profile"></select></label>
           <label class="field">Research question <textarea id="np-ap-question" rows="3" placeholder="What you want to find out and why, in your own words"></textarea></label>

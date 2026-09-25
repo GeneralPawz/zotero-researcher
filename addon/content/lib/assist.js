@@ -33,13 +33,13 @@ ZR.Assist = (() => {
   }
 
   /**
-   * Score each record's relevance to the request (0–10). Mutates records with
+   * Score each record's relevance to the request (0-10). Mutates records with
    * .llmScore and .llmReason. Batches to keep prompts small.
    */
   async function screen(profile, request, records, { batchSize = 12, onProgress } = {}) {
     const system =
       "You screen search results for a systematic literature review. Judge relevance strictly from title, venue, year, and abstract. " +
-      "Score 0–10: 9–10 directly on topic, 6–8 clearly relevant, 3–5 tangential, 0–2 off-topic. Be calibrated and concise.";
+      "Score 0-10: 9-10 directly on topic, 6-8 clearly relevant, 3-5 tangential, 0-2 off-topic. Be calibrated and concise.";
     let done = 0;
     for (let i = 0; i < records.length; i += batchSize) {
       const batch = records.slice(i, i + batchSize);
@@ -81,7 +81,7 @@ ZR.Assist = (() => {
     const reasons = review.reasons?.length ? review.reasons : ["Off topic"];
     const system =
       `You assist with ${stage === "ft" ? "full-text eligibility assessment" : "title/abstract screening"} in a PRISMA 2020 systematic review. ` +
-      "Apply the criteria literally. At title/abstract stage, be inclusive when information is missing (answer maybe or include) — exclusion needs clear evidence. " +
+      "Apply the criteria literally. At title/abstract stage, be inclusive when information is missing (answer maybe or include): exclusion needs clear evidence. " +
       "At full-text stage, decide include or exclude. Never invent content that is not in the text.";
     const criteria = `Review question: ${review.question || "(not stated)"}\nInclusion criteria: ${review.include || "(not stated)"}\nExclusion criteria: ${review.exclude || "(not stated)"}\nAllowed exclusion reasons: ${reasons.map((r) => `"${r}"`).join(", ")}`;
     const out = new Array(papers.length).fill(null);
@@ -124,7 +124,7 @@ ZR.Assist = (() => {
       "You are an experienced research librarian and review methodologist. From the user's description you draft a review protocol that a careful researcher would accept: " +
       "focused research questions, literal and checkable inclusion/exclusion criteria (each one a single condition a yes/no answer can decide from a title and abstract), " +
       "a high-recall boolean search query, and methodology-appropriate extras (quality checklist, data extraction fields, classification facets). Use the user's language for text fields. " +
-      "Rules for criteria: 2–4 inclusion and 1–4 exclusion criteria. An exclusion criterion must add a new condition — never the negation of an inclusion criterion. " +
+      "Rules for criteria: 2-4 inclusion and 1-4 exclusion criteria. An exclusion criterion must add a new condition: never the negation of an inclusion criterion. " +
       "Do NOT write publication years or languages into criteria: they are separate fields (yearFrom, yearTo, languages) and are checked automatically. " +
       "Only exclude reviews, surveys or opinion pieces if the user asks for primary studies; for questions about the state or development of a field they are relevant. " +
       QUERY_SYNTAX;
@@ -162,7 +162,7 @@ Reply with JSON only:
     const system =
       "You annotate the full text of a research paper for a systematic literature review. " +
       "Pick the passages a careful reviewer would mark as evidence for the eligibility decision: what the paper studies, its method, data and findings as they relate to the criteria. " +
-      "Every quote must be copied EXACTLY from the text — same words, same order, one to three sentences, no ellipses, no paraphrase. " +
+      "Every quote must be copied EXACTLY from the text: same words, same order, one to three sentences, no ellipses, no paraphrase. " +
       "kind is include (evidence the paper meets the criteria), exclude (evidence it does not), or maybe (relevant but inconclusive). The comment names the criterion and says why, in at most 25 words, in the language of the review.";
     const criteria = [
       protocol.questions?.length ? "Research questions:\n" + protocol.questions.map((q) => "- " + q).join("\n") : "",
@@ -212,7 +212,7 @@ Reply with JSON only:
    * @param {string[][]} clusters  titles per cluster
    */
   async function nameClusters(profile, clusters, context = "") {
-    const system = "You name topic clusters of research papers for a systematic mapping study. Each name is 1–4 words, specific, and distinct from the other names.";
+    const system = "You name topic clusters of research papers for a systematic mapping study. Each name is 1-4 words, specific, and distinct from the other names.";
     const list = clusters.map((titles, i) => `[${i}]\n${titles.slice(0, 10).map((t) => "- " + U.truncate(t, 140)).join("\n")}`).join("\n\n");
     const user = `${context ? "Review: " + context + "\n\n" : ""}Clusters:\n${list}\n\nReply with JSON only: {"names": ["<name for cluster 0>", ...]} with exactly ${clusters.length} names.`;
     const out = await ZR.LLM.chatJSON(profile, [{ role: "user", content: user }], { system, maxTokens: 1000 });

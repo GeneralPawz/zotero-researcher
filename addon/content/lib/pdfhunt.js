@@ -2,14 +2,14 @@
 // Finding PDFs the usual sources don't have.
 //
 // Strategies (run one after another, as often as you like):
-//   oa       – links from the search (arXiv, DOAJ, CORE, …), DOI resolvers, Unpaywall
-//   ai:<id>  – an AI provider looks on the web (Codex / Claude Code CLIs with web search,
+//   oa       - links from the search (arXiv, DOAJ, CORE, …), DOI resolvers, Unpaywall
+//   ai:<id>  - an AI provider looks on the web (Codex / Claude Code CLIs with web search,
 //              Perplexity, OpenRouter ":online" models; others answer from memory)
-//   crawler:<id> – a web search / crawl API (Firecrawl, SerpApi Google Scholar, Tavily,
+//   crawler:<id> - a web search / crawl API (Firecrawl, SerpApi Google Scholar, Tavily,
 //              Exa, Brave Search) with its own key (Settings → Web search & crawlers)
 //
 // Every candidate is downloaded by Zotero and checked: it must be a PDF whose first pages
-// contain the paper's title. Anything else is removed again — a wrong or invented link
+// contain the paper's title. Anything else is removed again - a wrong or invented link
 // never ends up attached.
 
 ZR.PDFHunt = (() => {
@@ -17,7 +17,7 @@ ZR.PDFHunt = (() => {
 
   const CRAWLERS = [
     { id: "firecrawl", name: "Firecrawl", note: "web search and scraping", keyURL: "https://www.firecrawl.dev/app/api-keys" },
-    { id: "serpapi", name: "SerpApi — Google Scholar", note: "Google Scholar results, with direct PDF links", keyURL: "https://serpapi.com/manage-api-key" },
+    { id: "serpapi", name: "SerpApi (Google Scholar)", note: "Google Scholar results, with direct PDF links", keyURL: "https://serpapi.com/manage-api-key" },
     { id: "tavily", name: "Tavily", note: "web search for AI agents", keyURL: "https://app.tavily.com/home" },
     { id: "exa", name: "Exa", note: "neural web search", keyURL: "https://dashboard.exa.ai/api-keys" },
     { id: "brave", name: "Brave Search", note: "web search API", keyURL: "https://api-dashboard.search.brave.com/app/keys" },
@@ -35,7 +35,7 @@ ZR.PDFHunt = (() => {
   /** Strategies available right now: [{id, label, kind}] */
   function strategies() {
     const out = [{ id: "oa", label: "Open-access sources (links from the search, DOI, Unpaywall)", kind: "oa" }];
-    for (const p of ZR.Prefs.getLLMProfiles()) out.push({ id: "ai:" + p.id, label: `AI agent: ${p.name}${p.model ? " · " + p.model : ""}${webCapable(p) ? " (web search)" : " (no web access — answers from memory)"}`, kind: "ai" });
+    for (const p of ZR.Prefs.getLLMProfiles()) out.push({ id: "ai:" + p.id, label: `AI agent: ${p.name}${p.model ? " · " + p.model : ""}${webCapable(p) ? " (web search)" : " (no web access, answers from memory)"}`, kind: "ai" });
     for (const c of configuredCrawlers()) out.push({ id: "crawler:" + c.id, label: `Crawler: ${c.name}`, kind: "crawler" });
     return out;
   }
@@ -59,7 +59,7 @@ ZR.PDFHunt = (() => {
   /** Candidate PDF links from a crawler API. */
   async function crawlerURLs(id, paper) {
     const key = crawlerKey(id);
-    if (!key) throw new Error(`No key for ${id} — add it in Settings → Web search & crawlers`);
+    if (!key) throw new Error(`No key for ${id}. Add it in Settings → Web search & crawlers`);
     const q = `"${paper.title}" pdf`;
     const http = (method, url, o = {}) => ZR.http(method, url, Object.assign({ timeout: 45000, noRetry: true }, o)).then((r) => r.json());
     if (id === "firecrawl") {
@@ -95,7 +95,7 @@ ZR.PDFHunt = (() => {
   async function aiURLs(profile, paper) {
     let p = profile;
     if (profile.provider === "openrouter" && p.model && !p.model.endsWith(":online")) p = Object.assign({}, p, { model: p.model + ":online" });
-    const user = `Find a legally accessible full-text PDF of this paper: open-access version, author's copy, institutional or preprint repository.\n\nTitle: ${paper.title}\nAuthors: ${paper.creators}\nYear: ${paper.year || ""}\nVenue: ${paper.venue}\nDOI: ${paper.doi || "(none)"}\n\nSearch the web. Give only links that you have seen and that lead directly to a PDF file of exactly this paper — no landing pages, no guesses.\nReply with JSON only: {"urls": ["<direct PDF link>", …]} (empty list if you found none).`;
+    const user = `Find a legally accessible full-text PDF of this paper: open-access version, author's copy, institutional or preprint repository.\n\nTitle: ${paper.title}\nAuthors: ${paper.creators}\nYear: ${paper.year || ""}\nVenue: ${paper.venue}\nDOI: ${paper.doi || "(none)"}\n\nSearch the web. Give only links that you have seen and that lead directly to a PDF file of exactly this paper: no landing pages, no guesses.\nReply with JSON only: {"urls": ["<direct PDF link>", …]} (empty list if you found none).`;
     const out = await ZR.LLM.chatJSON(p, [{ role: "user", content: user }], { system: "You locate open-access copies of research papers on the web.", maxTokens: 1500, timeout: 300000, web: true });
     return Array.isArray(out?.urls) ? out.urls : [];
   }

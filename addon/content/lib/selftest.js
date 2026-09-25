@@ -110,7 +110,7 @@ ZR.SelfTest = (() => {
   }
 
   // Mock local embedding server (Ollama API): hashed bag of words, so papers that share
-  // words are similar — deterministic stand-in for a real embedding model.
+  // words are similar - deterministic stand-in for a real embedding model.
   const MOCK_EMBED = "http://mock-embed.invalid";
   function bagOfWords(text) {
     const v = new Array(256).fill(0);
@@ -245,7 +245,7 @@ ZR.SelfTest = (() => {
 
   /**
    * Open Settings on the plugin's pane. The window takes focus when it opens, so a stray
-   * keystroke from another app can land in its search box — clear it and navigate back.
+   * keystroke from another app can land in its search box - clear it and navigate back.
    */
   async function openPrefs() {
     const pw = Zotero.Utilities.Internal.openPreferences("zotero-researcher-prefs");
@@ -677,7 +677,7 @@ ZR.SelfTest = (() => {
       const keyRowHidden = [...d.querySelectorAll("#zr-llm-editor label")].find((l) => l.textContent === "API key")?.hidden;
       // The key field itself must be gone for CLIs, and nothing may stick out of the pane
       const editor = d.querySelector("#zr-llm-editor .zr-editor");
-      if (!editor.getBoundingClientRect().width) throw new Error("the AI provider editor is not visible (Settings search active?) — layout can't be checked");
+      if (!editor.getBoundingClientRect().width) throw new Error("the AI provider editor is not visible (Settings search active?): layout can't be checked");
       const keyFieldShown = d.querySelector('#zr-llm-editor input[type="password"]').getBoundingClientRect().width > 0;
       const claudeModels = await waitFor(() => d.querySelectorAll("#zr-llm-editor .zr-model-row").length >= 4 && [...d.querySelectorAll("#zr-llm-editor .zr-model-row")].map((r) => r.querySelector(".zr-model-id").textContent), 15000).catch(() => []);
       const right = editor.getBoundingClientRect().right;
@@ -825,6 +825,51 @@ ZR.SelfTest = (() => {
         if (!kitchenham.includes("quality") || scoping.includes("quality") || scopingFramework !== "PCC") throw new Error("form does not follow methodology: " + JSON.stringify({ kitchenham, scoping, scopingFramework }));
         if (!p.protocol.inclusion.length || p.search.query !== p.protocol.query) throw new Error("protocol not saved: " + JSON.stringify(p));
         return { filled, recommended: recommended.slice(0, 80), savedCriteria: p.protocol.inclusion.length + p.protocol.exclusion.length, searchSynced: p.search.query, years: [p.protocol.yearFrom, p.protocol.yearTo] };
+      });
+
+      await step("protocol form: structured lists with +, the query builder or raw text (one switch), a growing query box", async () => {
+        const d = rv();
+        const R = rw.App.panels.review;
+        await R.go("protocol");
+        d.querySelector('#rv-protocol-mode button[data-mode="form"]').click();
+        d.querySelector('#rv-view button[data-view="structured"]').click();
+        const modeIcons = [...d.querySelectorAll("#rv-protocol-mode button")].map((b) => ({ icon: !!b.querySelector("svg"), title: b.title, text: b.textContent.trim() }));
+        const list = d.querySelector('.pf-list[data-list="questions"]');
+        const before = list.querySelectorAll(".pf-li").length;
+        d.querySelector('.pf-add[data-add="questions"]').click();
+        const rows = list.querySelectorAll(".pf-li");
+        const t = rows[rows.length - 1].querySelector("textarea");
+        t.value = "Which exchange problems are reported?";
+        t.dispatchEvent(new rw.Event("input"));
+        const hidden = d.getElementById("pf-questions").value.split("\n");
+        const numbers = [...list.querySelectorAll(".pf-num")].map((n) => n.textContent);
+        const builderRows = d.querySelectorAll("#pf-query-builder .qb-row").length;
+        const fb = d.getElementById("pf-query-fb");
+        const feedback = { text: fb.textContent, onHover: fb.title.slice(0, 60) };
+        const otherLists = [...d.querySelectorAll(".pf-list")].map((l) => l.dataset.list);
+        await shot(rw, "15a-protocol-structured.png");
+        // one switch turns every list and the query into text
+        d.querySelector('#rv-view button[data-view="text"]').click();
+        const q = d.getElementById("pf-query");
+        const textView = !d.getElementById("pf-questions").hidden && !q.hidden && !d.querySelector(".pf-list") && !d.getElementById("pf-query-builder");
+        const long = '(BIM OR "building information model*" OR "building information management" OR Bauwerksinformationsmodell* OR Gebäudedatenmodell*) AND (construction OR Bauausführung OR Bauphase OR Baustell* OR Bauprozess* OR "site management" OR "site coordination" OR "field management" OR "site logistics" OR "progress monitoring" OR "production planning" OR "4D BIM" OR "5D BIM")';
+        const original = q.value;
+        q.value = long;
+        q.dispatchEvent(new rw.Event("input"));
+        await U.sleep(50);
+        const grown = { height: q.clientHeight, content: q.scrollHeight };
+        await shot(rw, "15b-protocol-text.png");
+        q.value = original;
+        q.dispatchEvent(new rw.Event("input"));
+        d.querySelector('#rv-view button[data-view="structured"]').click();
+        const kept = [...d.querySelectorAll('.pf-list[data-list="questions"] textarea')].some((x) => /exchange problems/.test(x.value));
+        // unsaved edits are dropped again for the next steps
+        R.reset();
+        await R.refresh();
+        await R.go("protocol");
+        const res = { modeIcons, before, after: rows.length, hidden: hidden.length, numbers, builderRows, feedback, otherLists, textView, grown, kept };
+        if (rows.length !== before + 1 || hidden.length !== before + 1 || numbers.at(-1) !== `RQ${before + 1}` || !builderRows || feedback.text !== "✓ Valid query" || !feedback.onHover || !textView || grown.height < 60 || grown.height < grown.content - 4 || !kept || modeIcons.some((m) => !m.icon || m.text)) throw new Error(JSON.stringify(res));
+        return res;
       });
 
       await step("review search: pre-filled from the protocol; results go into the pool, not the library", async () => {
@@ -1243,10 +1288,31 @@ ZR.SelfTest = (() => {
         await U.sleep(200);
         const apDiff = Math.abs(d.querySelector("#ap-panel .ap-head").getBoundingClientRect().bottom - d.getElementById("rv-funnel").getBoundingClientRect().bottom);
         const gapToFooter = Math.round(d.querySelector("#panel-review .statusbar").getBoundingClientRect().top - d.getElementById("ap-panel").getBoundingClientRect().bottom);
+        // the footer line runs under the panel, to the window edge
+        const footerToEdge = Math.round(lw2.innerWidth - status.getBoundingClientRect().right);
+        // Zotero's grey: header, footer, subheader and the panel's header
+        const bg = (node) => lw2.getComputedStyle(node).backgroundColor;
+        const colours = { zotero: win.getComputedStyle(mdoc.documentElement).getPropertyValue("--material-sidepane").trim(), header: bg(d.querySelector("header.top")), footer: bg(status), subheader: bg(d.getElementById("rv-funnel")), apHead: bg(d.querySelector("#ap-panel .ap-head")) };
+        await lw2.App.panels.review.go("protocol");
+        colours.protocolCard = bg(d.querySelector("#rv-protocol .card"));
+        colours.page = bg(d.body);
+        const icons = ["help", "open-prefs"].map((id) => {
+          const b = d.getElementById(id);
+          return { svg: b.querySelector("svg")?.getBoundingClientRect().width, border: lw2.getComputedStyle(b).borderTopWidth, text: b.textContent.trim() };
+        });
+        // no model line in the header; a click on "Autopilot" shows it as details
+        const subtitle = !!d.getElementById("ap-model");
+        d.getElementById("ap-title").click();
+        const info = (await waitFor(() => d.getElementById("ap-pop"), 3000)).textContent;
         await shot(lw2, "14a-layout-autopilot.png");
+        d.getElementById("ap-title").click();
+        const infoClosed = !d.getElementById("ap-pop");
+        const centre = (node) => Math.round(node.getBoundingClientRect().top + node.getBoundingClientRect().height / 2);
+        const toggleY = centre(d.getElementById("ap-collapse"));
         d.getElementById("ap-collapse").click();
         await U.sleep(150);
         const collapsedWidth = Math.round(d.getElementById("ap-panel").getBoundingClientRect().width);
+        const collapsed = { playShown: !!d.getElementById("ap-toggle").getClientRects().length, historyShown: !!d.getElementById("ap-history").getClientRects().length, toggleMoved: centre(d.getElementById("ap-collapse")) - toggleY };
         await shot(lw2, "14b-autopilot-collapsed.png");
         d.getElementById("ap-collapse").click();
         await U.sleep(150);
@@ -1269,8 +1335,25 @@ ZR.SelfTest = (() => {
           await shot(lw2, "14c-rows.png");
           await lw2.App.switchProject(proj.id);
         }
-        // delete the project
-        await pick(d.getElementById("project-select"), "Delete");
+        // delete the project: right-click on the project, red trash can
+        const ddButton = d.getElementById("project-select").zrDropdownButton;
+        const r = ddButton.getBoundingClientRect();
+        ddButton.dispatchEvent(new lw2.MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: r.left + 10, clientY: r.bottom }));
+        const onButton = (await waitFor(() => d.getElementById("ctx-delete-project"), 3000)).textContent;
+        // Info: where the project adds papers (no longer a line under the project name)
+        d.getElementById("ctx-project-info").click();
+        const projectInfo = (await waitFor(() => d.getElementById("project-info"), 3000)).textContent;
+        await shot(lw2, "14e-project-info.png");
+        d.getElementById("project-info").remove();
+        const targetLineShown = !!d.getElementById("target").getClientRects().length;
+        lw2.PaperView.closeMenu();
+        ddButton.click();
+        const entry = await waitFor(() => d.querySelector(`.zr-dd-menu .zr-dd-item[data-value="${proj.id}"]`), 3000);
+        entry.dispatchEvent(new lw2.MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: r.left + 20, clientY: r.bottom + 40 }));
+        const del = await waitFor(() => d.getElementById("ctx-delete-project"), 3000);
+        const deleteItem = { onButton, text: del.textContent, red: lw2.getComputedStyle(del).color === lw2.getComputedStyle(d.documentElement).getPropertyValue("--bad").trim() || /\b(210|240), (59|107)/.test(lw2.getComputedStyle(del).color), icon: !!del.querySelector("svg"), menuClosed: !d.querySelector(".zr-dd-menu") };
+        await shot(lw2, "14d-delete-menu.png");
+        del.click();
         const ask = await waitFor(() => d.getElementById("ask-layer"), 5000);
         const askText = ask.textContent.slice(0, 90);
         ask.querySelector('[data-choice="delete"]').click();
@@ -1290,9 +1373,20 @@ ZR.SelfTest = (() => {
           poolFileGone: !(await IOUtils.exists(poolFile)),
           collectionKept: !!Zotero.Collections.getByLibraryAndKey(libraryID, proj.collectionKey),
           selectOptions: [...d.querySelectorAll("#project-select option")].map((o) => o.textContent).filter((t) => /Stop test/.test(t)).length,
+          deleteOption: [...d.querySelectorAll("#project-select option")].some((o) => /Delete/.test(o.textContent)),
+          deleteItem,
+          projectInfo: projectInfo.slice(0, 140),
+          targetLineShown,
+          footerToEdge,
+          colours,
+          icons,
+          subtitle,
+          info: info.slice(0, 120),
+          infoClosed,
+          collapsed,
         };
         lw2.close();
-        if (headerDiff > 2 || (footerDiff != null && footerDiff > 2) || apDiff > 1 || gapToFooter < 4 || collapsedWidth > 60 || expandedWidth < 300 || (bgs.length && bgs[0] === bgs[1]) || !res.deleted || !res.poolFileGone || !res.collectionKept || res.selectOptions) throw new Error(JSON.stringify(res));
+        if (headerDiff > 2 || (footerDiff != null && footerDiff > 2) || apDiff > 1 || gapToFooter < 4 || collapsedWidth > 60 || expandedWidth < 300 || (bgs.length && bgs[0] === bgs[1]) || !res.deleted || !res.poolFileGone || !res.collectionKept || res.selectOptions || res.deleteOption || targetLineShown || !/Adds papers to/.test(projectInfo) || !/zr-stop/.test(projectInfo) || !deleteItem.red || !deleteItem.icon || !deleteItem.menuClosed || Math.abs(footerToEdge) > 1 || colours.footer !== colours.header || colours.apHead !== colours.header || colours.subheader !== colours.header || colours.protocolCard !== colours.header || colours.footer === colours.page || icons.some((i) => i.svg < 20 || i.border !== "0px" || i.text) || subtitle || !/Harness/.test(info) || !infoClosed || collapsed.playShown || collapsed.historyShown || Math.abs(collapsed.toggleMoved) > 1) throw new Error(JSON.stringify(res));
         return res;
       });
 
@@ -1348,9 +1442,69 @@ ZR.SelfTest = (() => {
           }
           await U.sleep(400);
         }
+        // the conversation: step dividers, structured blocks instead of long sentences
+        await shot(aw, "13c-autopilot-done.png");
+        const chat = { problems: [] };
+        const logBox = d.getElementById("ap-log");
+        chat.dividers = [...logBox.querySelectorAll(".ap-stage")].map((x) => x.textContent);
+        chat.queryBlocks = logBox.querySelectorAll(".ap-query pre.q-code").length;
+        chat.coloured = [...new Set([...logBox.querySelectorAll(".ap-query pre.q-code span")].map((x) => x.className))];
+        chat.facts = logBox.querySelectorAll(".ap-facts").length;
+        chat.splits = logBox.querySelectorAll(".ap-split").length;
+        const DASH = new RegExp("[" + String.fromCharCode(0x2013, 0x2014) + "]");
+        chat.dashes = DASH.test(d.getElementById("ap-panel").textContent);
+        // scroll edges fade on the side with more content
+        logBox.scrollTop = logBox.scrollHeight;
+        logBox.dispatchEvent(new aw.Event("scroll"));
+        await U.sleep(50);
+        chat.fadeAtBottom = [...logBox.classList].filter((c) => c.startsWith("fade"));
+        logBox.scrollTop = 0;
+        logBox.dispatchEvent(new aw.Event("scroll"));
+        await U.sleep(50);
+        chat.fadeAtTop = [...logBox.classList].filter((c) => c.startsWith("fade"));
+        // "Show in the protocol" jumps to the query field
+        logBox.querySelector(".ap-query .ap-jump")?.click();
+        await waitFor(() => d.querySelector('#rv-form .pf-row[data-field="query"].flash'), 5000).catch(() => null);
+        chat.jumped = !!d.querySelector('#rv-form .pf-row[data-field="query"].flash') && !d.getElementById("rv-protocol").hidden;
+        // right-click on a step: run from here / redo from here
+        const stepBtn = (s) => d.querySelector(`#rv-steps button[data-step="${s}"]`);
+        const rightClick = (node) => {
+          const r = node.getBoundingClientRect();
+          node.dispatchEvent(new aw.MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: r.left + 10, clientY: r.bottom }));
+        };
+        rightClick(stepBtn("screen"));
+        const menu = await waitFor(() => d.getElementById("ctx-ap-from") && d.querySelector(".ctx-menu"), 3000);
+        chat.stepMenu = [...menu.querySelectorAll(".ctx-item")].map((x) => x.textContent);
+        await shot(aw, "13f-step-menu.png");
+        aw.PaperView.closeMenu();
+        // run again from the report step: a new session, the old one is kept
+        rightClick(stepBtn("report"));
+        (await waitFor(() => d.getElementById("ctx-ap-from"), 3000)).click();
+        const noNote = await waitFor(() => d.querySelector('#ap-prompt [data-choice="no"]'), 20000);
+        chat.newSession = d.querySelectorAll("#ap-log .ap-msg").length;
+        noNote.click();
+        await waitFor(() => aw.App.project.autopilot?.finished && !aw.Autopilot.isRunning(), 20000);
+        d.getElementById("ap-history").click();
+        const pop = await waitFor(() => d.getElementById("ap-pop"), 3000);
+        chat.sessions = [...pop.querySelectorAll(".ap-sess")].map((x) => x.textContent.slice(0, 80));
+        await shot(aw, "13g-sessions.png");
+        pop.querySelector('.ap-sess[data-session^="s"]').click();
+        await waitFor(() => d.querySelector("#ap-log .ap-archived"), 3000);
+        chat.archivedMessages = d.querySelectorAll("#ap-log .ap-msg").length;
+        await shot(aw, "13h-earlier-session.png");
+        d.getElementById("ap-back").click();
+        await waitFor(() => !d.querySelector("#ap-log .ap-archived"), 3000);
+        if (chat.dividers.length < 5) chat.problems.push("dividers");
+        if (!chat.queryBlocks || !chat.coloured.includes("qk-op")) chat.problems.push("query block");
+        if (chat.facts < 3 || chat.splits < 2) chat.problems.push("blocks");
+        if (chat.dashes) chat.problems.push("dashes");
+        if (!chat.fadeAtBottom.includes("fade-top") || !chat.fadeAtTop.includes("fade-bottom") || chat.fadeAtTop.includes("fade-top")) chat.problems.push("fade");
+        if (!chat.jumped) chat.problems.push("jump");
+        if (chat.stepMenu.length < 2) chat.problems.push("step menu");
+        if (chat.newSession > 4) chat.problems.push("new session");
+        if (chat.sessions.length < 2 || chat.archivedMessages < 20) chat.problems.push("sessions");
         const p = aw.App.project;
         const log = [...d.querySelectorAll("#ap-log .ap-msg")].map((m) => m.textContent);
-        await shot(aw, "13c-autopilot-done.png");
         const cands = await ZR.Projects.candidates(libraryID, p);
         const res = {
           methodology: p.methodology,
@@ -1363,11 +1517,12 @@ ZR.SelfTest = (() => {
           thresholdsChanged: p.funnel?.includeAbove === 0.8,
           prompts,
           crawlerCalls: mockLLM.crawlerCalls || 0,
+          chat,
           log: log.slice(-6).map((t) => t.slice(0, 120)),
           errors: log.filter((t) => /went wrong/.test(t)),
         };
         aw.close();
-        if (!res.finished || res.errors.length || !res.runs || res.screened !== res.pool || !res.thresholdsChanged) throw new Error(JSON.stringify(res));
+        if (!res.finished || res.errors.length || !res.runs || res.screened !== res.pool || !res.thresholdsChanged || chat.problems.length) throw new Error(JSON.stringify(res));
         return res;
       });
 

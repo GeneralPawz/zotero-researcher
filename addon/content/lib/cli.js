@@ -163,7 +163,7 @@ ZR.CLI = (() => {
         /* no config */
       }
       const list = (cache?.models || []).filter((m) => m.visibility !== "hide");
-      if (!list.length) throw new Error("Codex has not stored its model list yet — run codex once in a terminal");
+      if (!list.length) throw new Error("Codex has not stored its model list yet. Run codex once in a terminal");
       return list.map((m) => ({
         id: m.slug,
         name: m.display_name || m.slug,
@@ -222,11 +222,11 @@ ZR.CLI = (() => {
   }
 
   /** Chat through a CLI; returns the reply text. */
-  /** web: allow web search for this call (finding PDFs) — Claude: WebSearch/WebFetch tools; Codex: --search */
+  /** web: allow web search for this call (finding PDFs) - Claude: WebSearch/WebFetch tools; Codex: --search */
   async function chat(profile, messages, { system, timeout = 180000, web = false } = {}) {
     const kind = profile.provider;
     const path = profile.baseURL || (await detect(kind));
-    if (!path) throw new Error(`${TOOLS[kind].label} CLI not found — install it or set its path in the AI provider settings`);
+    if (!path) throw new Error(`${TOOLS[kind].label} CLI not found. Install it or set its path in the AI provider settings`);
     const dir = await tempDir();
     try {
       if (kind === "claude-cli") {

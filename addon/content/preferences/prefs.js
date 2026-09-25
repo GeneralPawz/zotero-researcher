@@ -53,7 +53,7 @@ var ZRPrefsPane = (() => {
     const ai = ZR.Prefs.getLLMProfiles().length > 0;
     const oaKey = !!ZR.Sources.keyFor("openalex");
     const rows = [
-      [true, "Free databases work right away — click the Researcher button next to “New Note”."],
+      [true, "Free databases work right away. Click the Researcher button next to “New Note”."],
       [email, email ? "E-mail set: Unpaywall can find open-access PDFs." : "Add your e-mail below so open-access PDFs can be found (Unpaywall)."],
       [oaKey, oaKey ? "OpenAlex key set." : "Recommended: a free OpenAlex key (Databases → OpenAlex). Without it OpenAlex allows only ~100 searches a day."],
       [ai, ai ? "AI is set up." : "Optional: add an AI provider to describe searches in plain words, screen papers and compare them."],
@@ -116,7 +116,7 @@ var ZRPrefsPane = (() => {
     s.addCondition("tag", "is", ZR.Store.TAG.ledger);
     const ids = await s.search();
     if (!ids.length) {
-      status.textContent = "No ledger yet in this library — it is created with your first judgement or review.";
+      status.textContent = "No ledger yet in this library: it is created with your first judgement or review.";
       return;
     }
     await win.ZoteroPane.selectItem(ids[0]);
@@ -208,7 +208,7 @@ var ZRPrefsPane = (() => {
         status.textContent = "looking for the program…";
         const found = await ZR.CLI.detect(providerSel.value);
         if (found) baseURL.value = found;
-        status.textContent = found ? "found " + found : "not found — install it, or enter the path to the program";
+        status.textContent = found ? "found " + found : "not found. Install it, or enter the path to the program";
         status.classList.add(found ? "zr-good" : "zr-bad");
         if (found) loadModels(false);
       },
@@ -236,7 +236,7 @@ var ZRPrefsPane = (() => {
             m.detail ? el("span", { class: "zr-model-detail", text: m.detail }) : null,
           ])
         ),
-        ...(shown.length > 300 ? [el("div", { class: "zr-help", text: `…and ${shown.length - 300} more — type to filter` })] : [])
+        ...(shown.length > 300 ? [el("div", { class: "zr-help", text: `…and ${shown.length - 300} more. Type to filter` })] : [])
       );
       list.hidden = !models.length;
       filter.hidden = models.length <= 10;
@@ -262,7 +262,7 @@ var ZRPrefsPane = (() => {
             ? "Aliases always run the latest model of their family. “Check which model each alias runs” shows the exact model."
             : prov.id === "codex-cli"
               ? `${models.length} models available on your ChatGPT plan (from Codex). Leave the field empty to use your Codex default.`
-              : `${models.length} models available${prov.id === "openrouter" ? " (prices per million tokens)" : ""} — click one to use it.`;
+              : `${models.length} models available${prov.id === "openrouter" ? " (prices per million tokens)" : ""}. Click one to use it.`;
         renderModels();
       } catch (e) {
         if (seq !== loadSeq) return;
@@ -283,7 +283,7 @@ var ZRPrefsPane = (() => {
       if (resetURL || (!baseURL.value && !cli)) baseURL.value = prov.baseURL;
       urlLabel.textContent = cli ? "Program" : "Base URL";
       baseURL.placeholder = cli ? "detected automatically" : prov.baseURL || "https://your-endpoint/v1";
-      urlHelp.textContent = cli ? "Signs in with the account you use in the terminal — no API key, uses your subscription." : "";
+      urlHelp.textContent = cli ? "Signs in with the account you use in the terminal: no API key, uses your subscription." : "";
       urlHelp.hidden = !cli;
       detectBtn.hidden = !cli;
       for (const e of [keyLabel, keyCell, tempLabel, tempCell]) e.hidden = cli;
@@ -402,7 +402,7 @@ var ZRPrefsPane = (() => {
         type: "checkbox",
         checked: ZR.Sources.isEnabled(s.id),
         disabled: !s.search,
-        title: s.search ? "Pre-select this source in the search dialog" : "Listed for reference — no search adapter",
+        title: s.search ? "Pre-select this source in the search dialog" : "Listed for reference: no search adapter",
         onchange: (e) => ZR.Prefs.setSourceSetting(s.id, { enabled: e.target.checked }),
       });
       const keyCell = el("td", { class: "zr-keys" });
@@ -432,12 +432,12 @@ var ZRPrefsPane = (() => {
     const status = el("span", { class: "zr-status" });
     const current = () => {
       const eng = S1.engine();
-      status.textContent = `In use: ${S1.ENGINES.find((e) => e.id === eng).name.split(" (")[0].split(" — ")[0]}`;
+      status.textContent = `In use: ${S1.ENGINES.find((e) => e.id === eng).name.split(" (")[0].split(": ")[0]}`;
     };
     const engine = el(
       "select",
       { id: "zr-s1-engine", onchange: () => (ZR.Prefs.set("s1Engine", engine.value), current()) },
-      [el("option", { value: "", text: "Automatic — best available" }), ...S1.ENGINES.map((e) => el("option", { value: e.id, text: e.name }))]
+      [el("option", { value: "", text: "Automatic (best available)" }), ...S1.ENGINES.map((e) => el("option", { value: e.id, text: e.name }))]
     );
     engine.value = ZR.Prefs.get("s1Engine", "");
     const model = el("input", { type: "text", size: 16, id: "zr-s1-model", value: ZR.Prefs.get("s1Model", "jev-latest"), onchange: () => ZR.Prefs.set("s1Model", model.value.trim() || "jev-latest") });
@@ -450,7 +450,7 @@ var ZRPrefsPane = (() => {
         testStatus.textContent = "Testing…";
         try {
           const r = await S1.test();
-          testStatus.textContent = r.ok ? `✓ Works — ${r.model}, answered in ${r.ms} ms` : "Unexpected answer from TypeSafe";
+          testStatus.textContent = r.ok ? `✓ Works: ${r.model}, answered in ${r.ms} ms` : "Unexpected answer from TypeSafe";
         } catch (e) {
           testStatus.textContent = "✗ " + e.message;
         } finally {
@@ -495,7 +495,7 @@ var ZRPrefsPane = (() => {
     api.value = cfg.api;
     const url = el("input", { type: "text", size: 30, id: "zr-local-url", value: cfg.url, onchange: () => (ZR.Prefs.set("embedURL", url.value.trim()), check()) });
     const model = el("input", { type: "text", size: 22, id: "zr-local-model", value: cfg.model, list: "zr-local-models", onchange: () => (ZR.Prefs.set("embedModel", model.value.trim() || "nomic-embed-text"), check()) });
-    const models = el("datalist", { id: "zr-local-models" }, E.MODELS.map((m) => el("option", { value: m.id, label: `${m.size} — ${m.note}` })));
+    const models = el("datalist", { id: "zr-local-models" }, E.MODELS.map((m) => el("option", { value: m.id, label: `${m.size}, ${m.note}` })));
     const blend = el("input", { type: "checkbox", id: "zr-s1-blend", checked: ZR.Prefs.get("s1Blend", true) !== false, onchange: () => ZR.Prefs.set("s1Blend", blend.checked) });
 
     async function check() {
@@ -503,7 +503,7 @@ var ZRPrefsPane = (() => {
       if (!E.config().enabled) return (status.textContent = "Turned off.");
       status.textContent = "Checking…";
       const s = await E.check();
-      if (s.ok) status.textContent = `✓ Ready — ${s.api === "ollama" ? "Ollama " + s.version + ", " : ""}${s.model} (${s.dim} dimensions)`;
+      if (s.ok) status.textContent = `✓ Ready: ${s.api === "ollama" ? "Ollama " + s.version + ", " : ""}${s.model} (${s.dim} dimensions)`;
       else {
         status.textContent = "✗ " + s.error;
         pullBtn.hidden = !(s.api === "ollama" && s.version && !s.hasModel);

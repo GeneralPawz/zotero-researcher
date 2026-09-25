@@ -28,7 +28,7 @@ test("paper keys are stable across sources", () => {
   assert.equal(S.keyForRecord({ doi: "https://doi.org/10.1234/ABC" }), "doi:10.1234/abc");
   assert.equal(S.keyForRecord({ ids: { arxiv: "1706.03762v5" }, title: "x" }), "arxiv:1706.03762");
   assert.equal(S.keyForRecord({ title: "Attention Is All You Need!" }), "t:attention is all you need");
-  assert.equal(S.describe({ ta: { d: "exclude", r: "Off topic", at: "2026-09-25", by: "llm" } }), "Excluded 2026-09-25 — Off topic · by AI");
+  assert.equal(S.describe({ ta: { d: "exclude", r: "Off topic", at: "2026-09-25", by: "llm" } }), "Excluded 2026-09-25: Off topic · by AI");
 });
 
 test("PRISMA counts follow the 2020 flow", () => {

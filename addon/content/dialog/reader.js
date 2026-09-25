@@ -111,7 +111,7 @@ const PaperView = (window.PaperView = (() => {
     node.style.top = Math.max(8, Math.min(y, window.innerHeight - r.height - 8)) + "px";
   }
 
-  /** items: [{label, kind?, run}] or "-" for a separator */
+  /** items: [{label, kind?, icon?, danger?, disabled?, hint?, id?, run}] or "-" for a separator */
   function openMenu(x, y, items) {
     closeMenu();
     menu = el(
@@ -120,7 +120,10 @@ const PaperView = (window.PaperView = (() => {
       items.map((it) =>
         it === "-"
           ? el("div", { class: "ctx-sep" })
-          : el("button", { class: "ctx-item", role: "menuitem", "data-kind": it.kind || "", onclick: () => (closeMenu(), it.run()) }, [el("span", { class: "ctx-dot" + (it.kind ? " hl-" + it.kind : "") }), it.label])
+          : el("button", { class: "ctx-item" + (it.danger ? " danger" : ""), role: "menuitem", id: it.id || null, disabled: !!it.disabled, title: it.hint || null, "data-kind": it.kind || "", onclick: () => (closeMenu(), it.run()) }, [
+              it.icon ? el("span", { class: "ctx-icon" }, App.icon(it.icon)) : el("span", { class: "ctx-dot" + (it.kind ? " hl-" + it.kind : "") }),
+              it.label,
+            ])
       )
     );
     place(menu, x, y);

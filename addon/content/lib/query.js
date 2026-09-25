@@ -504,8 +504,67 @@ ZR.Query = (() => {
     return out.sort((a, b) => a.start - b.start);
   }
 
+  /**
+   * Syntax colouring: the query split into pieces that join back to the exact input,
+   * tolerant of unfinished queries. kind: op | paren | phrase | term | field | wild | ws
+   * (parens carry their nesting depth; top-level AND / NOT carry top: true).
+   */
+  function syntax(input) {
+    const s = String(input || "");
+    const out = [];
+    let depth = 0;
+    const push = (kind, text, extra) => text && out.push(Object.assign({ kind, text }, extra));
+    let i = 0;
+    while (i < s.length) {
+      const c = s[i];
+      if (/\s/.test(c)) {
+        let j = i;
+        while (j < s.length && /\s/.test(s[j])) j++;
+        push("ws", s.slice(i, j));
+        i = j;
+      } else if (c === "(") {
+        push("paren", c, { depth: depth++ });
+        i++;
+      } else if (c === ")") {
+        depth = Math.max(0, depth - 1);
+        push("paren", c, { depth });
+        i++;
+      } else if (c === '"') {
+        const j = s.indexOf('"', i + 1);
+        const end = j < 0 ? s.length : j + 1;
+        push("phrase", s.slice(i, end));
+        i = end;
+        if (s[i] === "*") push("wild", s[i++]);
+      } else {
+        let j = i;
+        while (j < s.length && !/[\s()"]/.test(s[j])) j++;
+        let w = s.slice(i, j);
+        i = j;
+        if (/^(AND|OR|NOT|&&|\|\||!)$/i.test(w)) {
+          push("op", w, { top: depth === 0 && !/^(OR|\|\|)$/i.test(w) });
+          continue;
+        }
+        if (w.length > 1 && w[0] === "-" && (!out.length || /^(ws|paren)$/.test(out[out.length - 1].kind))) {
+          push("op", "-", { top: depth === 0 });
+          w = w.slice(1);
+        }
+        const f = w.match(/^([a-z]+):(.*)$/i);
+        if (f && FIELD_ALIASES[f[1].toLowerCase()]) {
+          push("field", f[1] + ":");
+          w = f[2];
+        }
+        if (w.length > 1 && w.endsWith("*")) {
+          push("term", w.slice(0, -1));
+          push("wild", "*");
+        } else push("term", w);
+      }
+    }
+    return out;
+  }
+
   return {
     QuerySyntaxError,
+    syntax,
     tokenize,
     parse,
     compile,

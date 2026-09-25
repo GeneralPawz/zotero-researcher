@@ -232,7 +232,7 @@ ZR.Enrich = (() => {
     }
 
     const title = item.getField("title");
-    if (!title || title.length < 8) return { itemID: item.id, error: "No identifier and no usable title — try LLM-assisted retrieval" };
+    if (!title || title.length < 8) return { itemID: item.id, error: "No identifier and no usable title. Try LLM-assisted retrieval" };
     const firstCreator = item.getCreators()[0];
     const cands = await titleCandidates(title, { author: firstCreator?.lastName || "", year: U.yearOf(item.getField("date")) });
     const best = cands[0];
@@ -308,7 +308,7 @@ ZR.Enrich = (() => {
         return withParent(item, makeProposal(item, tmp, `LLM-matched ${rec.sources.join("+")} record${rec.doi ? ` (DOI ${rec.doi})` : ""}: ${pick.reason}`, opts, pick.confidence), opts);
       }
     }
-    // 3) Fall back to the LLM's own extraction — flagged as unverified.
+    // 3) Fall back to the LLM's own extraction - flagged as unverified.
     const rec = ZR.Records.make("llm", {
       title: meta.title,
       creators: (meta.authors || []).map((a) => (a.lastName ? { firstName: a.firstName || "", lastName: a.lastName } : null)),
@@ -325,7 +325,7 @@ ZR.Enrich = (() => {
       url: meta.url,
       language: meta.language,
     });
-    const p = makeProposal(item, ZR.Importer.recordToItem(rec, item.libraryID), "LLM extraction (UNVERIFIED — check before applying)", opts, 0.4);
+    const p = makeProposal(item, ZR.Importer.recordToItem(rec, item.libraryID), "LLM extraction (UNVERIFIED, check before applying)", opts, 0.4);
     for (const c of p.changes) if (c.kind === "overwrite") c.selected = false;
     return withParent(item, p, opts);
   }

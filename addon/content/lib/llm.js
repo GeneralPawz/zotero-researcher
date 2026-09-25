@@ -11,7 +11,7 @@ ZR.LLM = (() => {
   const PROVIDERS = [
     {
       id: "claude-cli",
-      name: "Claude Code CLI — uses your Claude subscription",
+      name: "Claude Code CLI (uses your Claude subscription)",
       protocol: "cli",
       baseURL: "",
       keyURL: "https://docs.anthropic.com/en/docs/claude-code/overview",
@@ -20,7 +20,7 @@ ZR.LLM = (() => {
     },
     {
       id: "codex-cli",
-      name: "Codex CLI — uses your ChatGPT plan",
+      name: "Codex CLI (uses your ChatGPT plan)",
       protocol: "cli",
       baseURL: "",
       keyURL: "https://developers.openai.com/codex/cli",
@@ -87,7 +87,7 @@ ZR.LLM = (() => {
     },
     {
       id: "perplexity",
-      name: "Perplexity (Sonar — answers with live web search)",
+      name: "Perplexity (Sonar: answers with live web search)",
       protocol: "openai",
       baseURL: "https://api.perplexity.ai",
       keyURL: "https://www.perplexity.ai/account/api/keys",
@@ -157,14 +157,18 @@ ZR.LLM = (() => {
     return { provider, baseURL, apiKey };
   }
 
+  // Texts the user reads are written without em / en dashes (they read as machine-made)
+  const STYLE = "In any text for the user, do not use em dashes or en dashes; use commas, colons, parentheses or separate sentences.";
+
   /**
+   * Send a chat; recorded in the activity log (prompt and reply excerpts, timing).
    * @param {object} profile
    * @param {{role:string, content:string}[]} messages  user/assistant turns
    * @param {{system?:string, maxTokens?:number, temperature?:number, timeout?:number}} opts
    * @returns {Promise<string>}
    */
-  /** Send a chat; recorded in the activity log (prompt and reply excerpts, timing). */
   function chat(profile, messages, opts = {}) {
+    opts = Object.assign({}, opts, { system: opts.system ? opts.system + "\n\n" + STYLE : STYLE });
     if (!ZR.Activity || !profile) return chatRaw(profile, messages, opts);
     const last = messages[messages.length - 1]?.content || "";
     return ZR.Activity.track(

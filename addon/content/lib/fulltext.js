@@ -2,7 +2,7 @@
 // Full-text annotations for the review's full-text step.
 //
 // The AI reads a paper's PDF and writes real Zotero annotations: a highlight on a
-// verbatim passage, a short comment, and a tag — include / maybe / exclude — coloured
+// verbatim passage, a short comment, and a tag - include / maybe / exclude - coloured
 // green / yellow / red. They carry a separate author name ("Bot" by default), so they
 // are told apart from yours. Your own annotations with one of these tags count too;
 // both are read back into the review.

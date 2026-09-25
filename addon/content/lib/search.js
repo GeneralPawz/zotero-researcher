@@ -2,10 +2,10 @@
 // Orchestrates a search run across sources and the subsequent import.
 //
 // Modes
-//   structured – the boolean query is sent as-is; no LLM involved (fully deterministic)
-//   llm        – an LLM turns the request into a boolean query (editable), optionally
+//   structured - the boolean query is sent as-is; no LLM involved (fully deterministic)
+//   llm        - an LLM turns the request into a boolean query (editable), optionally
 //                screens results for relevance; the user reviews before importing
-//   yolo       – LLM plans, searches all selected sources, screens, and imports the
+//   yolo       - LLM plans, searches all selected sources, screens, and imports the
 //                results at/above the score threshold without a review step
 
 ZR.Search = (() => {
@@ -13,7 +13,7 @@ ZR.Search = (() => {
 
   function describeFilters(o) {
     const parts = [];
-    if (o.yearFrom || o.yearTo) parts.push(`years ${o.yearFrom || "…"}–${o.yearTo || "…"}`);
+    if (o.yearFrom || o.yearTo) parts.push(`years ${o.yearFrom || "…"}-${o.yearTo || "…"}`);
     if (o.languages?.length) parts.push("language: " + o.languages.join("/"));
     if (o.types?.length) parts.push("types: " + o.types.join("/"));
     if (o.minCitations > 0) parts.push(`≥ ${o.minCitations} citations`);
@@ -30,7 +30,7 @@ ZR.Search = (() => {
 
   /**
    * Deterministic post-filters. Values a source doesn't report (language, citations)
-   * never cause removal — only known values that fail a filter do.
+   * never cause removal - only known values that fail a filter do.
    * @returns {{records: object[], removed: object, dropped: {r, reason}[]}}
    */
   function applyFilters(recs, o) {
@@ -195,7 +195,7 @@ ZR.Search = (() => {
   function withDeadline(promise, ms) {
     let timer;
     const deadline = new Promise((_, reject) => {
-      timer = setTimeout(() => reject(new Error(`no answer within ${Math.round(ms / 1000)} s — skipped`)), ms);
+      timer = setTimeout(() => reject(new Error(`no answer within ${Math.round(ms / 1000)} s: skipped`)), ms);
     });
     return Promise.race([promise, deadline]).finally(() => clearTimeout(timer));
   }
