@@ -26,6 +26,12 @@
   </groupbox>
 
   <groupbox>
+    <label><html:h2>System 1 model (fast screening)</html:h2></label>
+    <html:p class="zr-help">In a structured review, a System 1 model estimates for every paper how likely it is to be relevant — quickly and cheaply, as a probability instead of long reasoning. The AI provider above sets up the review and reasons about the uncertain papers; the two complement each other. Without either, papers are rated by whether they match the review’s query.</html:p>
+    <html:div id="zr-s1"></html:div>
+  </groupbox>
+
+  <groupbox>
     <label><html:h2>Databases</html:h2></label>
     <html:p class="zr-help">Tick the databases to search by default and add API keys where needed. <html:b>free</html:b> works right away, <html:b>free key</html:b> needs a free registration, <html:b>paid</html:b> needs a subscription or institutional access.</html:p>
     <html:div id="zr-src-toolbar" class="zr-src-toolbar"></html:div>
@@ -34,7 +40,7 @@
 
   <groupbox>
     <label><html:h2>Your data</html:h2></label>
-    <html:p class="zr-help">Your judgements stay in your Zotero library — not in the plugin — so they sync (group members share them) and survive uninstalling: tags on papers (<html:code>zr:include</html:code>, <html:code>zr:exclude</html:code>, <html:code>zr:why:…</html:code>, <html:code>zr:unscreened</html:code>) plus one note per library called “Zotero Researcher — data ledger” for papers you judged but did not add, review setups, search logs and citation directions.</html:p>
+    <html:p class="zr-help">Your judgements stay in your Zotero library — not in the plugin — so they sync (group members share them) and survive uninstalling: tags on papers (<html:code>zr:include</html:code>, <html:code>zr:exclude</html:code>, <html:code>zr:why:…</html:code>, <html:code>zr:unscreened</html:code>) plus one note per library called “Zotero Researcher — data ledger” for papers you judged but did not add, projects and their review protocols, search logs and citation directions. A review’s candidate pool and model ratings are kept locally in the Zotero data folder (<html:code>zotero-researcher/projects</html:code>).</html:p>
     <html:div class="zr-actions"><html:button id="zr-show-ledger">Show the data ledger note</html:button><html:span id="zr-ledger-status" class="zr-help"></html:span></html:div>
   </groupbox>
 

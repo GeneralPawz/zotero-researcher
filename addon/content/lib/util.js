@@ -25,6 +25,7 @@ ZR.Util = (() => {
     403: "access denied — key invalid or no entitlement (institutional access needed?)",
     404: "not found",
     429: "rate limit or daily quota exceeded — wait, or add an API key in Settings",
+    529: "service overloaded — try again shortly",
   };
 
   class HTTPError extends Error {
@@ -66,8 +67,8 @@ ZR.Util = (() => {
     const text = xhr.responseText ?? xhr.response ?? "";
     // Some APIs (OpenAlex anonymous pool, Semantic Scholar shared pool) ask clients to
     // come back after a short pause; honour that once when the caller allows it.
-    if (xhr.status === 429 && options.retryAfterMax && !options._retried) {
-      const wait = retryAfterSeconds(xhr, text);
+    if ((xhr.status === 429 || xhr.status === 529) && options.retryAfterMax && !options._retried) {
+      const wait = retryAfterSeconds(xhr, text) ?? (xhr.status === 529 ? 3 : null);
       if (wait !== null && wait * 1000 <= options.retryAfterMax) {
         log(`429 from ${url.replace(/\?.*/, "")}, retrying in ${wait}s`);
         await sleep(wait * 1000 + 250);

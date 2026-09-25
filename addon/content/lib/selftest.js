@@ -97,14 +97,51 @@ ZR.SelfTest = (() => {
 
   // Mock OpenAI-compatible LLM; only URLs under MOCK are intercepted.
   const MOCK = "http://mock-llm.invalid/v1";
-  function mockLLM(realHTTP, calls) {
+  // Mock TypeSafe System 1 endpoint: probabilities cycle through the high, uncertain and
+  // low bands so every threshold path is exercised.
+  const TYPESAFE_BANDS = [0.92, 0.55, 0.08];
+  function mockTypeSafe(o, tsCalls) {
+    const band = TYPESAFE_BANDS[tsCalls.length % 3];
+    tsCalls.push(o.body);
+    const answers = {};
+    for (const id of Object.keys(o.body.questions)) answers[id] = { type: "noul", noul: id.startsWith("exc_") ? 0.02 : band };
+    const json = { model: "jev-mock", answers, usage: { input_tokens: 200, output_tokens: 5 } };
+    return { status: 200, text: JSON.stringify(json), json: () => json };
+  }
+
+  function mockLLM(realHTTP, calls, tsCalls = []) {
     return async (method, url, o = {}) => {
+      if (url === "https://api.typesafe.ai/v1/systemone") return mockTypeSafe(o, tsCalls);
       if (!url.startsWith(MOCK)) return realHTTP(method, url, o);
       const prompt = o.body.messages[o.body.messages.length - 1].content;
       calls.push(prompt.slice(0, 50));
       const n = (prompt.match(/^\[\d+\]/gm) || []).length;
       let content;
-      if (prompt.includes('{"query"')) content = JSON.stringify({ query: 'IFC AND ("building information model*" OR BIM)', yearFrom: 2015, yearTo: null, concepts: ["IFC", "BIM"], rationale: "IFC is the open BIM exchange schema." });
+      if (prompt.includes('"recommendedMethodology"'))
+        content = JSON.stringify({
+          title: "IFC-based BIM data exchange: a systematic review",
+          objective: "Establish how IFC is used for data exchange between BIM tools",
+          questions: ["RQ1: For which exchange scenarios is IFC used?", "RQ2: Which problems are reported?"],
+          framework: "PICO",
+          frameworkFields: { population: "BIM authoring and analysis tools", intervention: "IFC-based data exchange", comparison: "", outcome: "Exchange quality and problems" },
+          inclusion: ["Studies IFC-based data exchange", "Is a research paper"],
+          exclusion: ["Mentions IFC only in passing"],
+          query: '("industry foundation classes" OR IFC) AND BIM',
+          yearFrom: 2015,
+          yearTo: null,
+          languages: ["en"],
+          types: [],
+          quality: ["Is the research method described?", "Is the result evaluated?"],
+          extraction: ["Method", "Exchange scenario"],
+          recommendedMethodology: "kitchenham",
+          recommendationWhy: "an engineering topic",
+          rationale: "Drafted from your description.",
+        });
+      else if (prompt.includes("\nChecklist:\n")) content = JSON.stringify((prompt.match(/^\d+\. /gm) || []).map((_, i) => ({ i, answer: i ? "partly" : "yes", why: "stated in the abstract" })));
+      else if (prompt.includes("\nFields:\n")) {
+        const fields = prompt.split("\nFields:\n")[1].split("\n\n")[0].split("\n").map((l) => l.replace(/^- /, "").trim()).filter(Boolean);
+        content = JSON.stringify(Object.fromEntries(fields.map((f) => [f, "case study"])));
+      } else if (prompt.includes('{"query"')) content = JSON.stringify({ query: 'IFC AND ("building information model*" OR BIM)', yearFrom: 2015, yearTo: null, concepts: ["IFC", "BIM"], rationale: "IFC is the open BIM exchange schema." });
       else if (prompt.includes('"decision"')) content = JSON.stringify(Array.from({ length: n }, (_, i) => ({ i, decision: i % 2 ? "exclude" : "include", reason: i % 2 ? "Off topic" : "", confidence: i % 3 === 2 ? 0.6 : 0.9, why: i % 2 ? "not about IFC" : "IFC exchange case study" })));
       else if (prompt.includes("Papers:\n")) content = JSON.stringify(Array.from({ length: n }, (_, i) => ({ i, score: i % 2 ? 3 : 8, reason: i % 2 ? "tangential" : "directly about IFC-based BIM exchange" })));
       else if (prompt.includes("<h2>Comparison</h2>")) content = "<h2>Comparison</h2><table><tr><th>Paper</th><th>Method</th></tr><tr><td>A</td><td>Case study</td></tr></table><h2>Synthesis</h2><p>Both use IFC.</p><script>alert(1)</script>";
@@ -432,7 +469,9 @@ ZR.SelfTest = (() => {
     });
 
     await step("clicking a paper already in the library jumps to it / lists its collections", async () => {
-      ZR.Prefs.setJSON("dialogState", {}); // the previous step's filters are remembered by design
+      // the previous step's filters are remembered by design (globally and in the project)
+      ZR.Prefs.setJSON("dialogState", {});
+      for (const p of await ZR.Projects.list(libraryID)) (p.search = {}), await ZR.Projects.save(libraryID, p);
       await zp.collectionsView.selectCollection(collection.id);
       await U.sleep(400);
       const w = await openResearch(win, { tab: "find", itemIDs: [] });
@@ -527,7 +566,7 @@ ZR.SelfTest = (() => {
       await U.sleep(200);
       await shot(pw, "06b-preferences-dropdown.png");
       d.querySelector(".zr-dd-menu .zr-dd-item")?.click();
-      const res = { checklist: d.querySelectorAll("#zr-checklist .zr-check-row").length, areas: d.querySelectorAll("#zr-areas .zr-area").length, databasesShown: rowsDefault, pubmedListed, aiEditor: !!d.querySelector("#zr-llm-editor .zr-editor"), providerMenuVisible: prov.visible, baseAfterPick, cliProgram: program, cliHidesKey: keyRowHidden };
+      const res = { checklist: d.querySelectorAll("#zr-checklist .zr-check-row").length, areas: d.querySelectorAll("#zr-areas .zr-area").length, databasesShown: rowsDefault, pubmedListed, aiEditor: !!d.querySelector("#zr-llm-editor .zr-editor"), providerMenuVisible: prov.visible, baseAfterPick, cliProgram: program, cliHidesKey: keyRowHidden, system1: d.querySelectorAll("#zr-s1 select, #zr-s1 input").length };
       pw.close();
       if (pubmedListed) throw new Error("PubMed listed although medicine is off");
       return res;
@@ -536,7 +575,8 @@ ZR.SelfTest = (() => {
     // ------------------------------------------------ AI + review (mock LLM)
     const realHTTP = ZR.http;
     const llmCalls = [];
-    ZR.http = mockLLM(realHTTP, llmCalls);
+    const tsCalls = [];
+    ZR.http = mockLLM(realHTTP, llmCalls, tsCalls);
     ZR.Prefs.setLLMProfiles([{ id: "mock", name: "Mock AI", provider: "custom", baseURL: MOCK, model: "mock-1", temperature: "" }]);
     ZR.Prefs.set("activeLLMProfile", "mock");
     try {
@@ -590,94 +630,241 @@ ZR.SelfTest = (() => {
         return { saved: true };
       });
 
-      // --- PRISMA review on a fresh collection
-      const reviewCol = new Zotero.Collection({ name: "zr-review", libraryID });
-      await reviewCol.saveTx();
-      await zp.collectionsView.selectCollection(reviewCol.id);
-      await U.sleep(600);
+      // --- Structured review project: protocol → pool → System 1 → AI → decisions → report
       let rw;
-      await step("review: set up a PRISMA review for a collection", async () => {
+      let reviewProject;
+      let reviewCol;
+      await ZR.Secrets.set(ZR.System1.keyName, "ts-mock");
+      ZR.Prefs.set("s1Engine", "typesafe");
+      const rv = () => rw.document;
+      const rvStatus = () => rv().getElementById("review-status").textContent;
+      const goStep = async (s, ready) => {
+        rv().querySelector(`#rv-steps button[data-step="${s}"]`).click();
+        await waitFor(() => ready(rv()), 15000);
+        await U.sleep(250);
+      };
+      const key = (k) => rv().dispatchEvent(new rw.KeyboardEvent("keydown", { key: k, bubbles: true }));
+
+      await step("projects: a collection you add papers to remembers its searches in a quick project", async () => {
+        await zp.collectionsView.selectCollection(collection.id);
+        await U.sleep(400);
         rw = await openResearch(win, { tab: "find", itemIDs: [] });
-        const d = rw.document;
-        rw.App.showTab("review");
-        await waitFor(() => !d.getElementById("review-setup").hidden, 10000);
-        await shot(rw, "08-review-setup.png");
-        d.getElementById("rv-question").value = "How is IFC used for BIM data exchange?";
-        d.getElementById("rv-include").value = "Peer-reviewed studies on IFC-based exchange";
-        d.getElementById("rv-exclude").value = "Papers that only mention IFC in passing";
-        d.getElementById("rv-create").click();
-        await waitFor(() => !d.getElementById("review-main").hidden, 10000);
-        return { review: !!(await ZR.Store.getReview(libraryID, reviewCol.key)), pill: !d.getElementById("review-pill").hidden };
+        const d = rv();
+        const p = rw.App.project;
+        if (!p || p.kind !== "quick" || p.collectionKey !== collection.key) throw new Error("no quick project for the collection: " + JSON.stringify(p));
+        return { project: p.name, runs: p.runs.length, rememberedQuery: p.search.query || p.search.request, selectValue: d.getElementById("project-select").value === p.id };
       });
 
-      await step("review: search adds papers as unscreened and logs the search", async () => {
-        const d = rw.document;
-        rw.App.showTab("search");
-        d.querySelector('#mode-seg button[data-mode="structured"]').click();
-        rw.App.panels.search.useQueryText('("industry foundation classes" OR IFC) AND BIM');
+      await step("projects: create a structured review project with its own collection", async () => {
+        const d = rv();
+        await pick(d.getElementById("project-select"), "New project");
+        await waitFor(() => !d.getElementById("np-layer").hidden, 5000);
+        const useDisabled = d.querySelector('input[name="np-col"][value="use"]').disabled; // collection already has a project
+        d.getElementById("np-name").value = "IFC review";
+        d.querySelector('input[name="np-kind"][value="review"]').checked = true;
+        d.querySelector('input[name="np-col"][value="new"]').checked = true;
+        await shot(rw, "08-new-project.png");
+        d.getElementById("np-create").click();
+        await waitFor(() => rw.App.project?.name === "IFC review" && !d.getElementById("rv-main").hidden && !d.getElementById("rv-protocol").hidden, 15000);
+        reviewProject = rw.App.project;
+        reviewCol = Zotero.Collections.getByLibraryAndKey(libraryID, reviewProject.collectionKey);
+        return { kind: reviewProject.kind, methodology: reviewProject.methodology, collection: reviewCol?.name, target: d.getElementById("target").textContent, useCurrentDisabled: useDisabled, pill: d.getElementById("review-pill").textContent };
+      });
+
+      await step("review protocol: the form follows the methodology; describe in plain words → AI fills it", async () => {
+        const d = rv();
+        const fields = () => [...d.querySelectorAll("#rv-form .pf-row")].map((r) => r.dataset.field);
+        d.querySelector('#rv-protocol-mode button[data-mode="form"]').click();
+        d.querySelector('#rv-methods [data-method="kitchenham"]').click();
+        const kitchenham = fields();
+        d.querySelector('#rv-methods [data-method="scoping"]').click();
+        const scoping = fields();
+        const scopingFramework = d.getElementById("pf-framework").value;
+        d.querySelector('#rv-methods [data-method="prisma2020"]').click();
+        d.querySelector('#rv-protocol-mode button[data-mode="describe"]').click();
+        d.getElementById("rv-description").value = "For my thesis I want to know how IFC is used for BIM data exchange between tools. Only research papers since 2015, in English. Papers that only mention IFC in passing are out.";
+        d.getElementById("rv-fill").click();
+        await waitFor(() => !d.getElementById("rv-form").hidden && d.getElementById("pf-inclusion")?.value, 30000);
+        await shot(rw, "09-protocol.png");
+        const recommended = d.querySelector("#rv-form .ai-box")?.textContent || "";
+        const filled = { inclusion: d.getElementById("pf-inclusion").value, query: d.getElementById("pf-query").value, population: d.getElementById("pf-fw-population")?.value };
+        d.getElementById("rv-save").click();
+        await waitFor(() => /Saved/.test(d.getElementById("rv-save-note").textContent), 10000);
+        const p = await ZR.Projects.get(libraryID, reviewProject.id);
+        if (!kitchenham.includes("quality") || scoping.includes("quality") || scopingFramework !== "PCC") throw new Error("form does not follow methodology: " + JSON.stringify({ kitchenham, scoping, scopingFramework }));
+        if (!p.protocol.inclusion.length || p.search.query !== p.protocol.query) throw new Error("protocol not saved: " + JSON.stringify(p));
+        return { filled, recommended: recommended.slice(0, 80), savedCriteria: p.protocol.inclusion.length + p.protocol.exclusion.length, searchSynced: p.search.query, years: [p.protocol.yearFrom, p.protocol.yearTo] };
+      });
+
+      await step("review search: pre-filled from the protocol; results go into the pool, not the library", async () => {
+        const d = rv();
+        await goStep("search", (x) => !x.getElementById("rv-search").hidden);
+        d.getElementById("rv-add-search").click();
+        await waitFor(() => !d.getElementById("panel-search").hidden, 5000);
+        const prefilled = d.getElementById("query").value;
         for (const cb of d.querySelectorAll("#sources input")) cb.checked = ["crossref", "doaj", "arxiv"].includes(cb.value);
-        d.getElementById("limit").value = "4";
+        d.getElementById("limit").value = "5";
         d.getElementById("hide-excluded").checked = false;
-        d.getElementById("attach-pdfs").checked = true;
+        d.getElementById("skip-existing").checked = false;
         d.getElementById("run").click();
-        await waitFor(() => d.querySelectorAll("#results .result").length > 2 && !d.getElementById("run").disabled, 90000);
+        await waitFor(() => d.querySelectorAll("#results .result").length > 3 && !d.getElementById("run").disabled, 120000);
         const label = d.getElementById("import").textContent;
         d.getElementById("import").click();
-        await waitFor(() => /Added \d+ new|Adding failed/.test(d.getElementById("search-status").textContent), 120000);
-        const items = reviewCol.getChildItems().filter((i) => i.isRegularItem());
-        const review = await ZR.Store.getReview(libraryID, reviewCol.key);
-        return { importLabel: label, papers: items.length, unscreened: items.filter((i) => i.hasTag("zr:unscreened")).length, runsLogged: review.runs.length };
+        await waitFor(() => /screening pool|Adding failed/.test(d.getElementById("search-status").textContent), 60000);
+        const pool = await ZR.Projects.loadPool(libraryID, reviewProject.id);
+        const p = await ZR.Projects.get(libraryID, reviewProject.id);
+        const res = { prefilled, importLabel: label, pool: Object.keys(pool.records).length, inCollection: reviewCol.getChildItems().filter((i) => i.isRegularItem()).length, runsLogged: p.runs.length, status: d.getElementById("search-status").textContent };
+        if (!/screening pool/.test(label) || res.pool < 3 || res.inCollection !== 0 || res.runsLogged !== 1) throw new Error(JSON.stringify(res));
+        return res;
       });
 
-      await step("review: screen titles/abstracts with keyboard + AI suggestions", async () => {
-        const d = rw.document;
+      await step("System 1 (TypeSafe Jev, mocked): rate every paper, histogram, threshold decisions", async () => {
+        const d = rv();
         rw.App.showTab("review");
+        await waitFor(() => !d.getElementById("rv-main").hidden, 5000);
+        await goStep("screen", (x) => x.querySelector("#screen-card .paper-card"));
+        d.getElementById("s1-rate").click();
+        await waitFor(() => /Rated \d+/.test(rvStatus()), 60000);
         await U.sleep(300);
-        d.querySelector('#review-steps button[data-step="ta"]').click();
-        await waitFor(() => d.querySelector("#screen-card .paper-card"), 10000);
-        await shot(rw, "09-screening.png");
-        const key = (k) => d.dispatchEvent(new rw.KeyboardEvent("keydown", { key: k, bubbles: true }));
-        key("i"); // include first
+        const rated = d.querySelectorAll("#queue .q-p").length;
+        const bins = d.querySelectorAll("#s1-hist .bin").length;
+        const firstBody = tsCalls[0];
+        await shot(rw, "10-system1.png");
+        d.getElementById("s1-low").value = "30";
+        d.getElementById("s1-low").dispatchEvent(new rw.Event("change"));
+        d.getElementById("s1-high").value = "80";
+        d.getElementById("s1-high").dispatchEvent(new rw.Event("change"));
         await U.sleep(400);
-        key("2"); // choose reason 2
-        key("e"); // exclude second
-        await U.sleep(400);
-        d.getElementById("ai-suggest").click();
-        await waitFor(() => /AI suggested decisions/.test(d.getElementById("review-status").textContent), 60000);
-        const rings = d.querySelectorAll("#queue .dot.ai").length;
-        d.getElementById("ai-accept").click();
-        await U.sleep(800);
+        const exBtn = d.getElementById("s1-exclude");
+        const toExclude = parseInt(exBtn.textContent.replace(/\D+/g, ""), 10) || 0;
+        exBtn.click(); // arms
+        const armedText = exBtn.textContent;
+        exBtn.click(); // confirms
+        await waitFor(() => /Excluded \d+ paper/.test(rvStatus()), 30000);
+        const inBtn = d.getElementById("s1-include");
+        const toInclude = parseInt(inBtn.textContent.replace(/\D+/g, ""), 10) || 0;
+        inBtn.click();
+        inBtn.click();
+        await waitFor(() => /Included \d+ paper/.test(rvStatus()), 60000);
         const items = reviewCol.getChildItems().filter((i) => i.isRegularItem());
-        const tags = (t) => items.filter((i) => i.hasTag(t)).length;
-        return { included: tags("zr:include"), excluded: tags("zr:exclude"), reasonTags: items.filter((i) => i.getTags().some((t) => t.tag.startsWith("zr:why:"))).length, aiRings: rings, stillUnscreened: tags("zr:unscreened"), status: d.getElementById("review-status").textContent };
+        const ledger = await ZR.Store.load(libraryID);
+        const byS1 = Object.values(ledger.decisions).filter((e) => e.c === reviewCol.key && e.ta?.by === "s1");
+        const res = {
+          typesafeCalls: tsCalls.length,
+          questions: Object.keys(firstBody?.questions || {}),
+          stateFields: Object.keys(firstBody?.state || {}),
+          rated,
+          bins,
+          armedText,
+          toExclude,
+          toInclude,
+          includedIntoCollection: items.filter((i) => i.hasTag("zr:include")).length,
+          decidedByS1: byS1.length,
+        };
+        if (!res.typesafeCalls || !res.questions.includes("relevant") || !res.questions.some((q) => q.startsWith("exc_")) || res.includedIntoCollection !== toInclude || res.decidedByS1 !== toExclude + toInclude) throw new Error(JSON.stringify(res));
+        return res;
       });
 
-      await step("review: full-text stage and PRISMA diagram", async () => {
-        const d = rw.document;
-        d.querySelector('#review-steps button[data-step="ft"]').click();
-        // Wait for the full-text view (the "maybe" filter is hidden there) and its card
-        await waitFor(() => d.querySelector('#queue-filter option[value="maybe"]').hidden && (d.querySelector("#screen-card .paper-card") || d.querySelector("#screen-card .empty-state")), 10000);
-        await U.sleep(300);
-        const hasCard = !!d.querySelector("#screen-card .paper-card");
-        const pdfButton = d.querySelector("#screen-card .actions button:not(.link)")?.textContent || "";
-        if (hasCard) {
-          d.dispatchEvent(new rw.KeyboardEvent("keydown", { key: "i", bubbles: true }));
-          await U.sleep(500);
+      await step("the AI reasons about the uncertain middle; keyboard screening of the rest", async () => {
+        const d = rv();
+        const uncertainLabel = d.getElementById("ai-uncertain").textContent;
+        d.getElementById("ai-uncertain").click();
+        await waitFor(() => /AI suggested decisions|AI suggestions failed/.test(rvStatus()), 60000);
+        const rings = d.querySelectorAll("#queue .dot.ai").length;
+        const aiStatus = rvStatus();
+        d.getElementById("ai-accept").click();
+        await waitFor(() => /Accepted|No undecided/.test(rvStatus()), 30000);
+        const accepted = rvStatus();
+        // decide what is left by keyboard
+        let guard = 0;
+        while (d.querySelector("#screen-card .paper-card") && guard++ < 30) {
+          key(guard % 2 ? "i" : "e");
+          await U.sleep(350);
         }
-        d.querySelector('#review-steps button[data-step="prisma"]').click();
-        await waitFor(() => d.querySelector("#prisma-view svg"), 10000);
+        const cands = await ZR.Projects.candidates(libraryID, reviewProject);
+        const res = { uncertainLabel, rings, aiStatus, accepted, undecided: cands.filter((c) => !c.ta).length, included: cands.filter((c) => c.ta === "include").length, inCollection: reviewCol.getChildItems().filter((i) => i.isRegularItem()).length };
+        if (!rings || res.undecided) throw new Error(JSON.stringify(res));
+        return res;
+      });
+
+      await step("full text, quality appraisal and data extraction (AI-filled)", async () => {
+        const d = rv();
+        await goStep("fulltext", (x) => x.querySelector('#queue-filter option[value="maybe"]').hidden && (x.querySelector("#screen-card .paper-card") || x.querySelector("#screen-card .empty-state")));
+        const pdfButton = d.querySelector("#screen-card .actions button:not(.link)")?.textContent || "";
+        let guard = 0;
+        while (d.querySelector("#screen-card .paper-card") && guard++ < 30) {
+          key("i");
+          await U.sleep(350);
+        }
+        await goStep("quality", (x) => x.querySelector("#rv-table-body table, #rv-table-body .empty-state"));
+        rw.App.status("review", "");
+        d.getElementById("rv-table-ai").click();
+        await waitFor(() => /The AI filled \d+ paper\(s\)(,|\.)/.test(rvStatus()), 60000);
         await U.sleep(300);
-        await shot(rw, "10-prisma.png");
+        const qa = [...d.querySelectorAll("#rv-table-body select.qa")].map((s) => s.value).filter(Boolean).length;
+        await goStep("extract", (x) => x.querySelector("#rv-table-body table, #rv-table-body .empty-state"));
+        rw.App.status("review", "");
+        d.getElementById("rv-table-ai").click();
+        await waitFor(() => /The AI filled \d+ paper\(s\)(,|\.)/.test(rvStatus()) && !d.getElementById("rv-table-ai").disabled, 60000);
+        await U.sleep(300);
+        await shot(rw, "11-extraction.png");
+        const extracted = [...d.querySelectorAll("#rv-table-body textarea")].filter((t) => t.value).length;
+        const pool = await ZR.Projects.loadPool(libraryID, reviewProject.id);
+        const res = { pdfButton, qaCells: qa, extractedCells: extracted, storedQA: Object.keys(pool.qa).length, storedExtract: Object.keys(pool.extract).length, steps: [...d.querySelectorAll("#rv-steps button")].map((b) => b.textContent).join(" | ") };
+        if (!qa || !extracted) throw new Error(JSON.stringify(res));
+        return res;
+      });
+
+      await step("report: flow diagram from the logged search and every decision; protocol note", async () => {
+        const d = rv();
+        await goStep("report", (x) => x.querySelector("#prisma-view svg"));
+        await shot(rw, "12-report.png");
         const svgText = d.querySelector("#prisma-view svg").textContent;
         d.getElementById("prisma-note").click();
-        await waitFor(() => /saved as a note/.test(d.getElementById("review-status").textContent), 10000);
-        const note = reviewCol.getChildItems().find((i) => i.isNote() && i.getNote().includes("PRISMA 2020 flow"));
-        return { ftCard: hasCard, pdfButton, included: (svgText.match(/Studies included in review \(n = (\d+)\)/) || [])[1], identified: (svgText.match(/Records identified from databases \(n = (\d+)\)/) || [])[1], note: !!note };
+        await waitFor(() => /saved as a note/.test(rvStatus()), 10000);
+        const note = reviewCol.getChildItems().find((i) => i.isNote() && i.getNote().includes("Methodology:"));
+        const funnel = d.getElementById("rv-funnel").textContent;
+        const res = { identified: (svgText.match(/Records identified from databases \(n = (\d+)\)/) || [])[1], screened: (svgText.match(/Records screened \(n = (\d+)\)/) || [])[1], included: (svgText.match(/Studies included in review \(n = (\d+)\)/) || [])[1], funnel, note: !!note && note.getNote().includes("PRISMA 2020 flow") };
+        if (!res.note || !res.identified) throw new Error(JSON.stringify(res));
+        return res;
+      });
+
+      await step("a quick project converts into a review; projects persist across reopening", async () => {
+        const d = rv();
+        await pick(d.getElementById("project-select"), "zr-selftest");
+        await waitFor(() => rw.App.project?.collectionKey === collection.key, 5000);
+        rw.App.showTab("review");
+        await waitFor(() => !d.getElementById("rv-start").hidden, 5000);
+        const offer = d.getElementById("rv-start-btn").textContent;
+        const quick = rw.App.project;
+        const quickQuery = quick.search.query;
+        const quickRuns = quick.runs.length;
+        d.getElementById("rv-start-btn").click();
+        await waitFor(() => !d.getElementById("rv-main").hidden && !d.getElementById("rv-protocol").hidden, 10000);
+        const converted = await ZR.Projects.get(libraryID, quick.id);
+        const funnelAfter = d.getElementById("rv-funnel").textContent;
+        rw.close();
+        rw = null;
+        // Reopen on the review collection: the review is still there
+        await zp.collectionsView.selectCollection(reviewCol.id);
+        await U.sleep(500);
+        rw = await openResearch(win, { tab: "find", itemIDs: [] });
+        rw.App.showTab("review");
+        await waitFor(() => !rv().getElementById("rv-main").hidden && rv().getElementById("rv-funnel").textContent, 10000);
+        const reopened = { project: rw.App.project?.name, funnel: rv().getElementById("rv-funnel").textContent, s1Kept: Object.keys((await ZR.Projects.loadPool(libraryID, reviewProject.id)).s1).length };
+        const res = { offer, kind: converted.kind, methodology: converted.methodology, queryCarriedOver: converted.protocol.query === (quickQuery || ""), runsKept: converted.runs.length === quickRuns, funnelAfter, reopened };
+        if (converted.kind !== "review" || !res.queryCarriedOver || !res.runsKept || reopened.project !== "IFC review") throw new Error(JSON.stringify(res));
+        return res;
       });
       rw?.close();
+      ZR.Prefs.set("s1Engine", "");
+      await ZR.Secrets.set(ZR.System1.keyName, "");
+      report.typesafeCalls = tsCalls.length;
     } finally {
       ZR.http = realHTTP;
       report.llmCalls = llmCalls.length;
+      ZR.Prefs.set("s1Engine", "");
+      await ZR.Secrets.set(ZR.System1.keyName, "");
     }
 
     // ---------------------------------------------------------- citations

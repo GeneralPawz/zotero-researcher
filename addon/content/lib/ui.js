@@ -163,6 +163,20 @@ ZR.UI = (() => {
     };
   }
 
+  /** Target for a collection of a library (e.g. the collection a project is bound to). */
+  function targetFor(libraryID, collectionKey) {
+    const library = Zotero.Libraries.get(libraryID);
+    const collection = collectionKey ? Zotero.Collections.getByLibraryAndKey(libraryID, collectionKey) : null;
+    if (collectionKey && !collection) return null;
+    return {
+      libraryID,
+      collectionID: collection?.id || null,
+      collectionKey: collection?.key || null,
+      label: library.name + (collection ? " › " + collectionPath(collection) : ""),
+      editable: library.editable,
+    };
+  }
+
   function openDialog(win, opts = {}) {
     win = win || Zotero.getMainWindow();
     const items = win.ZoteroPane.getSelectedItems().filter((i) => i.isRegularItem() || i.isAttachment());
@@ -440,5 +454,5 @@ ZR.UI = (() => {
     rerender(body, item);
   }
 
-  return { startup, shutdown, onMainWindowLoad, onMainWindowUnload, openDialog, openPreferences, getTarget, showWelcome, revealItem, collectionsOf };
+  return { startup, shutdown, onMainWindowLoad, onMainWindowUnload, openDialog, openPreferences, getTarget, targetFor, showWelcome, revealItem, collectionsOf };
 })();

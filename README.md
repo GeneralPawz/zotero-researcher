@@ -3,7 +3,8 @@
 A Zotero 7–10 plugin for building and curating a literature collection. It can:
 
 - find papers for a collection in scholarly databases,
-- screen them as a PRISMA 2020 systematic review,
+- remember each topic's search settings and history as a **project**,
+- run a structured review (PRISMA 2020, scoping review, Kitchenham SLR, mapping study, …) with a screening funnel in which a fast **System 1** model and an AI help you decide,
 - link papers that cite each other,
 - fetch full-text PDFs,
 - repair sparse metadata.
@@ -62,6 +63,12 @@ To test the whole update path locally, run `npm run e2e -- --update`. It install
 
 There are four tabs. Each shows one main action; the rest stays out of the way.
 
+**Projects.** The top right shows the current project and the collection papers go to. A project is bound to a collection and remembers its search settings and search history. There are two kinds:
+- **Quick search:** "get me papers on X". Type the parameters and go; results go straight into the collection. A collection gets a quick project automatically the first time you add papers to it.
+- **Structured review:** a methodology-based pipeline for a paper or thesis (see *Review* below).
+
+Pick a project from the menu to switch to it (and to its collection), or create one with **+ New project…**, using the current collection or a new one. A quick project can be **converted into a structured review** at any time. Its query, filters and search history carry over.
+
 **Search**
 - Choose **Keywords** or **Describe it (AI)**.
 - In Keywords mode you can switch between two editors:
@@ -79,13 +86,35 @@ There are four tabs. Each shows one main action; the rest stays out of the way.
 - Use *Judge* on any result to record a verdict without adding the paper.
 - In AI mode, *Add results automatically* is the hands-off "YOLO" mode: it searches, rates and adds without a review step.
 
-**Review (PRISMA 2020)** turns a collection into a systematic review:
-1. **Find papers.** Write the question and the inclusion and exclusion criteria. Every search you add papers from is then logged. Added papers are tagged `zr:unscreened`.
-2. **Screen titles & abstracts.** Papers are shown one card at a time.
-   - Keys: `I` include, `M` maybe, `E` exclude, `1–9` pick a reason, `↑/↓` move between papers.
-   - *AI suggestions* reads the whole list and pre-fills a decision for each paper, which you then confirm. *Accept confident ones* applies only suggestions with at least 80% confidence; those are recorded as decided "by AI".
-3. **Check full texts.** Only included papers appear here, with *Open PDF* / *Find PDF*. The AI can read the PDF text too.
-4. **PRISMA report.** The flow diagram is computed live from the logged searches and the tags on the papers. You can save it as a note or export it as SVG.
+**Review** runs a structured review for the current project. The steps shown depend on the methodology:
+
+| Methodology | Steps after the protocol |
+|---|---|
+| Systematic review (PRISMA 2020) | find → screen → full text → quality → extract → report |
+| Scoping review (PRISMA-ScR / JBI, PCC) | find → screen → full text → extract → report |
+| Rapid review (Cochrane RRMG) | find → screen → full text → report |
+| Systematic literature review (Kitchenham & Charters) | find → screen → full text → quality → extract → report |
+| Systematic mapping study (Petersen) | find → screen → classify → report |
+| Semi-systematic / narrative review (Snyder) | find → screen → report |
+
+1. **Protocol.** Choose the methodology, then either:
+   - **describe in your own words** what you want to achieve. The AI fills in the methodology's form (and may suggest a better-fitting methodology); or
+   - **fill in the form** yourself.
+
+   Either way you end up with the same form: working title, objective, research questions, a question framework (PICO, PICOS, PCC, SPIDER or PEO), inclusion and exclusion criteria, exclusion reasons, the search query, years, languages and publication types. Depending on the methodology it also asks for a quality checklist, data extraction fields or classification facets. Saving the protocol pre-fills the Search tab.
+2. **Find papers.** Search results go into the project's **candidate pool**, not into your library. Every search is logged for the report.
+3. **Screen titles & abstracts: the funnel.** Thousands of candidates are narrowed down to the relevant few:
+   - A **System 1 model** rates every paper: the probability that it belongs in the review, with one probability per criterion. This is fast and cheap. The queue is sorted by that probability, and a histogram shows the spread.
+   - Two **thresholds** settle the clear cases in bulk: *exclude below* and *include above*. Each needs a second click to confirm. The decisions are recorded as "by System 1".
+   - The **AI** reasons about the uncertain middle band and suggests a decision with a reason. *Accept confident AI suggestions* applies those with at least 80% confidence.
+   - You decide the rest. Keys: `I` include, `M` maybe, `E` exclude, `1–9` pick a reason, `↑/↓` move.
+
+   Papers are added to the Zotero collection **when you include them**.
+4. **Check full texts.** Only included papers appear, with *Open PDF*, *Find PDF* and *Find PDFs for all*. The AI can read the indexed full text.
+5. **Assess quality / extract data / classify.** A table of the included papers against the protocol's checklist, fields or facets. You fill it by hand or with *Fill with AI* (full text where indexed, otherwise the abstract), then export it as CSV.
+6. **Report.** The PRISMA flow diagram is computed from the logged searches and every decision. Mapping studies also get facet counts. *Save as note* writes the protocol plus the flow summary into the collection, ready for the method section. The diagram can also be exported as SVG.
+
+The LLM and the System 1 model complement each other. The LLM reasons: it sets up the protocol, handles the uncertain papers, and fills in quality and extraction tables. The System 1 model makes quick, calibrated guesses for every paper.
 
 **Selected items.** Fix metadata (identifier → Zotero translators, or an exact title match in Crossref, OpenAlex, Semantic Scholar or arXiv; with AI if needed), find PDFs, compare papers with AI (the result can be saved as a note), and find related papers.
 
@@ -104,15 +133,16 @@ Decisions live in your Zotero library, not in the plugin. They sync, group membe
   - `zr:include`, `zr:exclude`, `zr:maybe` for the title/abstract stage
   - `zr:ft:include`, `zr:ft:exclude` for the full-text stage
   - `zr:why:<reason>` for the exclusion reason
-  - `zr:unscreened` for papers waiting in a review
 - **One ledger note per library**, titled *"Zotero Researcher — data ledger"*. It stores:
-  - verdicts on papers you never added
-  - review setups and search logs
+  - verdicts on papers you never added, including papers excluded from a review's pool (with who decided: you, the AI or System 1)
+  - projects: search settings, search logs, review methodology and protocol
   - AI suggestions
   - citation directions (Zotero's "Related" links have no direction)
 
   Settings → *Your data* selects the ledger for you.
-- **A local cache file**, `<Zotero data dir>/zotero-researcher/cache.json`, records which results you have already seen.
+- **Local files** in `<Zotero data dir>/zotero-researcher/`:
+  - `cache.json` records which results you have already seen.
+  - `projects/` holds each review's candidate pool and per-paper model outputs (System 1 ratings, AI suggestions, quality answers, extracted data). These can be regenerated.
 
 A later search recognizes a paper you judged before by DOI, arXiv ID or title, marks it (e.g. *Excluded 2026-09-25 — Weak / low quality*), and leaves it unselected.
 
@@ -146,6 +176,20 @@ You can add any number of AI profiles and switch between them:
 
 *Fetch available models* lists the models your key can use, and *Test* checks the connection.
 
+## System 1 model (screening)
+
+**Settings → System 1 model** chooses what rates papers in a review:
+
+- **TypeSafe Jev** ([typesafe.ai](https://typesafe.ai/)): a System 1 model that answers typed questions with calibrated probabilities instead of text. It costs about $0.04 per million tokens and handles 1,200 requests a minute. Get a key at [console.typesafe.ai](https://console.typesafe.ai/). For each paper, only its title, abstract, venue, type and keywords are sent. Each paper goes out as one request:
+  - one yes/no question per inclusion and exclusion criterion, plus one on overall relevance to the research questions;
+  - the probabilities are combined in the plugin as relevance × (1 − strongest exclusion).
+  
+  Pin a model version (e.g. `jev-1.13.0`) instead of `jev-latest` for a reproducible review.
+- **Your AI provider:** slower, and its stated confidence is mapped to a probability.
+- **Keyword rules:** no AI at all; papers are rated by whether they match the protocol's query.
+
+*Automatic* uses the best one available.
+
 ## Development
 
 ```
@@ -171,7 +215,7 @@ Layout:
 `npm run e2e` works like this:
 1. It builds the XPI and installs it into a **throwaway profile and data directory**.
 2. It starts a separate Zotero (`-no-remote`).
-3. The in-app self-test (`content/lib/selftest.js`) drives the real UI: 25 steps covering the toolbar, multi-select, item pane, context menu, welcome pointer, tour, research areas, live searches, PDFs, metadata fixing, judging and decision memory, Settings, the AI flows (against a mock AI endpoint, with live databases), the full PRISMA review, citation linking on real papers (ResNet → GoogLeNet, Attention → ResNet), and disable/re-enable with the decisions surviving.
+3. The in-app self-test (`content/lib/selftest.js`) drives the real UI: 33 steps covering the toolbar, multi-select, item pane, context menu, welcome pointer, tour, research areas, live searches, PDFs, metadata fixing, judging and decision memory, Settings, the AI flows (against a mock AI endpoint, with live databases), projects (automatic quick projects, new review projects, conversion, persistence), the structured review (methodology-dependent forms, AI-filled protocol, candidate pool, System 1 rating against a mock TypeSafe endpoint with threshold decisions, AI on the uncertain papers, keyboard screening, full text, AI-filled quality and extraction tables, flow diagram and protocol note), citation linking on real papers (ResNet → GoogLeNet, Attention → ResNet), and disable/re-enable with the decisions surviving.
 4. It writes `report.json` and screenshots, then quits.
 
 Your normal profile and library are never touched. Use `--keep-open` to keep the test instance open, and `--clean` to delete the temp folder after a passing run.

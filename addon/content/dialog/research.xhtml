@@ -15,14 +15,17 @@
 </head>
 <body data-mode="structured">
   <header class="top">
-    <div class="brand"><img src="chrome://zotero-researcher/content/icons/researcher.svg" alt=""/>Researcher</div>
+    <div class="brand"><img src="chrome://zotero-researcher/content/icons/researcher.svg?v=__ZR_VERSION__" alt=""/>Researcher</div>
     <nav class="tabs" role="tablist">
       <button class="tab" data-tab="search" role="tab">Search</button>
       <button class="tab" data-tab="review" role="tab">Review <span id="review-pill" class="pill" hidden="hidden"></span></button>
       <button class="tab" data-tab="items" role="tab">Selected items <span id="sel-count" class="pill">0</span></button>
       <button class="tab" data-tab="citations" role="tab">Citations</button>
     </nav>
-    <div class="target" id="target" title="Where papers are added"></div>
+    <div class="project-box">
+      <select id="project-select" title="Project: remembers its search settings, history and review"></select>
+      <div class="target" id="target" title="Where papers are added"></div>
+    </div>
     <button class="icon-btn" id="help" title="Show the guided tour">?</button>
     <button class="icon-btn" id="open-prefs" title="Settings: API keys, AI providers, research areas">⚙</button>
   </header>
@@ -146,41 +149,58 @@
 
   <!-- ============================== REVIEW ============================== -->
   <section class="panel" id="panel-review" hidden="hidden">
-    <div id="review-setup" class="scroll pad" hidden="hidden">
+    <!-- No review yet: explain and offer to start one -->
+    <div id="rv-start" class="scroll pad" hidden="hidden">
       <div class="card narrow">
-        <h2>Start a systematic review for <span class="review-target"></span></h2>
-        <p class="hint">A review follows PRISMA 2020: search → screen titles &amp; abstracts → check full texts → report. Every search you add is logged, every decision is stored as a tag on the paper, and the flow diagram is built for you. You can screen by hand, or let an AI suggest decisions that you confirm.</p>
-        <label class="field">Review question <textarea id="rv-question" rows="2" placeholder="e.g. How is IFC 5 / IFCX used for BIM data exchange?"></textarea></label>
-        <label class="field">Include papers that… <textarea id="rv-include" rows="2" placeholder="e.g. propose, implement or evaluate IFC 5 / IFCX; peer-reviewed; 2019 or later"></textarea></label>
-        <label class="field">Exclude papers that… <textarea id="rv-exclude" rows="2" placeholder="e.g. only mention IFC in passing; opinion pieces"></textarea></label>
-        <label class="field">Exclusion reasons (one per line) <textarea id="rv-reasons" rows="5"></textarea></label>
-        <div class="actions"><button id="rv-create" class="primary">Start review</button><button id="rv-cancel-edit" hidden="hidden">Cancel</button></div>
+        <h2 id="rv-start-title">Turn this into a structured review</h2>
+        <p class="hint">A structured review follows a methodology (PRISMA, scoping review, Kitchenham SLR, …). You describe your goal in your own words or fill in the protocol yourself. Search results then flow through a funnel: a fast <b>System 1</b> model estimates for every paper how likely it is to be relevant, an <b>AI</b> reasons about the uncertain ones, and you decide. Only papers that pass title/abstract screening are added to your Zotero collection.</p>
+        <div class="actions"><button id="rv-start-btn" class="primary">Start a structured review</button></div>
       </div>
     </div>
 
-    <div id="review-main" class="panel" hidden="hidden">
-      <div class="stepper" id="review-steps">
-        <button data-step="identify"><span class="num">1</span>Find papers<small id="st-identify"></small></button>
-        <button data-step="ta"><span class="num">2</span>Screen titles &amp; abstracts<small id="st-ta"></small></button>
-        <button data-step="ft"><span class="num">3</span>Check full texts<small id="st-ft"></small></button>
-        <button data-step="prisma"><span class="num">4</span>PRISMA report<small id="st-prisma"></small></button>
-      </div>
+    <div id="rv-main" class="panel" hidden="hidden">
+      <div class="funnel" id="rv-funnel"></div>
+      <div class="stepper" id="rv-steps"></div>
 
-      <div class="step" id="step-identify">
+      <!-- Protocol -->
+      <div class="step" id="rv-protocol" hidden="hidden">
         <div class="scroll pad">
           <div class="card">
-            <div class="row-between"><h3>Review question</h3><button class="link" id="rv-edit">Edit setup</button></div>
-            <p id="rv-question-view"></p>
+            <div class="row-between"><h3>Methodology</h3><span id="rv-method-current" class="hint"></span></div>
+            <div id="rv-methods" class="method-grid"></div>
           </div>
           <div class="card">
-            <div class="row-between"><h3>Searches logged for this review</h3><button id="rv-add-search" class="primary">Search &amp; add papers</button></div>
-            <div id="rv-runs"></div>
-            <p class="hint">Papers you add from the Search tab while this collection is a review are tagged <code>zr:unscreened</code> and appear in step 2. Papers already in the collection are screened too.</p>
+            <div class="row-between">
+              <h3>Protocol</h3>
+              <div class="seg small" id="rv-protocol-mode">
+                <button data-mode="describe">Describe in your own words</button>
+                <button data-mode="form">Fill in the form</button>
+              </div>
+            </div>
+            <div id="rv-describe" hidden="hidden">
+              <p class="hint">Write what you want to find out, as you would explain it to a colleague: topic, purpose, time frame, what counts and what does not. The AI fills in the protocol form for the chosen methodology; you review and edit it.</p>
+              <textarea id="rv-description" rows="6" placeholder="e.g. I am writing a thesis on how IFC 5 / IFCX changes BIM data exchange. I need peer-reviewed studies since 2019 that implement or evaluate it, in English or German. Opinion pieces and papers that only mention IFC in passing are out."></textarea>
+              <div class="actions"><button id="rv-fill" class="primary">Fill the form with AI</button><span id="rv-fill-note" class="hint"></span></div>
+            </div>
+            <div id="rv-form" class="protocol-form"></div>
+            <div class="actions rv-save-row"><button id="rv-save" class="primary">Save protocol</button><span id="rv-save-note" class="hint"></span></div>
           </div>
         </div>
       </div>
 
-      <div class="step screen-step" id="step-screen" hidden="hidden">
+      <!-- Search / identification -->
+      <div class="step" id="rv-search" hidden="hidden">
+        <div class="scroll pad">
+          <div class="card">
+            <div class="row-between"><h3>Searches for this review</h3><button id="rv-add-search" class="primary">Search &amp; add to the pool</button></div>
+            <p class="hint">Search results go into the project's <b>candidate pool</b>, not into your library yet. Papers are added to the Zotero collection once they pass title/abstract screening. Every search is logged for the report.</p>
+            <div id="rv-runs"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Screening stages (title/abstract and full text) -->
+      <div class="step screen-step" id="rv-screen" hidden="hidden">
         <div class="queue">
           <div class="queue-head">
             <select id="queue-filter">
@@ -190,22 +210,44 @@
               <option value="exclude">Excluded</option>
               <option value="all">All</option>
             </select>
+            <select id="queue-sort" title="Order">
+              <option value="p">Most likely first</option>
+              <option value="p-asc">Least likely first</option>
+              <option value="title">Title A–Z</option>
+            </select>
             <span id="queue-count" class="hint"></span>
           </div>
           <div id="queue" class="queue-list"></div>
-          <div class="queue-ai">
-            <button id="ai-suggest" title="The AI reads each paper and suggests a decision; you still confirm">✦ AI suggestions for the list</button>
-            <button id="ai-accept" class="link" title="Apply AI suggestions with ≥ 80 % confidence">accept confident ones</button>
+          <div class="queue-ai" id="s1-panel">
+            <div class="s1-head"><b>System 1</b> <span id="s1-engine" class="hint"></span></div>
+            <button id="s1-rate">Rate papers</button>
+            <div id="s1-hist" class="s1-hist" hidden="hidden"></div>
+            <div class="s1-thresholds" id="s1-thresholds" hidden="hidden">
+              <div class="inline"><label class="inline">Exclude below <input type="number" id="s1-low" min="0" max="100" step="5"/>%</label><button id="s1-exclude" class="danger-soft">Exclude</button></div>
+              <div class="inline"><label class="inline">Include above <input type="number" id="s1-high" min="0" max="100" step="5"/>%</label><button id="s1-include" class="good-soft">Include</button></div>
+            </div>
+            <button id="ai-uncertain" title="The AI reads the uncertain papers and suggests a decision with a reason">✦ Ask AI about uncertain papers</button>
+            <button id="ai-accept" class="link" title="Apply AI suggestions with at least 80 % confidence">accept confident AI suggestions</button>
           </div>
         </div>
-        <div class="card-area scroll">
-          <div id="screen-card"></div>
-        </div>
+        <div class="card-area scroll"><div id="screen-card"></div></div>
       </div>
 
-      <div class="step" id="step-prisma" hidden="hidden">
+      <!-- Quality appraisal / data extraction / classification (tables) -->
+      <div class="step" id="rv-table" hidden="hidden">
+        <div class="toolbar">
+          <span id="rv-table-title" class="hint"></span>
+          <span class="spacer"></span>
+          <button id="rv-table-ai">✦ Fill with AI</button>
+          <button id="rv-table-csv">Export CSV</button>
+        </div>
+        <div class="scroll pad"><div id="rv-table-body"></div></div>
+      </div>
+
+      <!-- Report -->
+      <div class="step" id="rv-report" hidden="hidden">
         <div class="results-head">
-          <span class="hint">Counts come from the logged searches and the tags on the papers in this collection.</span>
+          <span class="hint">Computed from the logged searches and the decisions on every paper in this review.</span>
           <span class="spacer"></span>
           <button id="prisma-note">Save as note</button>
           <button id="prisma-svg">Export diagram (SVG)</button>
@@ -274,6 +316,22 @@
       <div class="legend" id="graph-legend"></div>
     </div>
   </section>
+
+  <div id="np-layer" class="modal-layer" hidden="hidden">
+    <div class="modal" role="dialog" aria-labelledby="np-title">
+      <h2 id="np-title">New project</h2>
+      <label class="field">Name <input type="text" id="np-name" placeholder="e.g. IFC 5 thesis"/></label>
+      <div class="field">What kind of project?
+        <label class="choice"><input type="radio" name="np-kind" value="quick" checked="checked"/><span><b>Quick search</b><small>Collect papers on a topic. Remembers your search settings and history. Can become a structured review later.</small></span></label>
+        <label class="choice"><input type="radio" name="np-kind" value="review"/><span><b>Structured review</b><small>A methodology-based pipeline (PRISMA, scoping review, …) with protocol, screening funnel and report.</small></span></label>
+      </div>
+      <div class="field">Collection
+        <label class="choice" id="np-use-wrap"><input type="radio" name="np-col" value="use" checked="checked"/><span id="np-use-label"></span></label>
+        <label class="choice"><input type="radio" name="np-col" value="new"/><span>Create a new collection named after the project</span></label>
+      </div>
+      <div class="actions"><span class="spacer"></span><button id="np-cancel">Cancel</button><button id="np-create" class="primary">Create project</button></div>
+    </div>
+  </div>
 
   <div id="tour-layer" hidden="hidden">
     <div id="tour-spot"></div>

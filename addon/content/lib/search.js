@@ -194,12 +194,11 @@ ZR.Search = (() => {
    * Import selected records into a collection.
    * @param {object} runInfo  from run()
    * @param {object[]} records
-   * @param {{libraryID, collectionID, attachPDFs, fulltextOnly, tags, protocolNote, review}} o
-   *        review: collection is a PRISMA review — new items get zr:unscreened and the run is logged
+   * @param {{libraryID, collectionID, attachPDFs, fulltextOnly, tags, protocolNote}} o
    */
   async function importRecords(runInfo, records, o, status = () => {}) {
     const stats = { imported: 0, existing: 0, withPDF: 0, droppedNoPDF: 0, failed: 0, items: [] };
-    const tags = [...(o.tags || []), ...(o.review ? [ZR.Store.TAG.unscreened] : [])];
+    const tags = o.tags || [];
     let done = 0;
     await U.mapLimit(records, 3, async (rec) => {
       try {
@@ -212,11 +211,6 @@ ZR.Search = (() => {
         rec.existingItemID = item.id;
         if (existing) {
           stats.existing++;
-          // Already-known paper joins the review: screen it unless it was decided before
-          if (o.review && !ZR.Store.decisionFromItem(item)) {
-            item.addTag(ZR.Store.TAG.unscreened);
-            await item.saveTx();
-          }
         } else {
           stats.imported++;
           stats.items.push(item);
@@ -241,10 +235,6 @@ ZR.Search = (() => {
       status(`Imported ${done}/${records.length}`);
     });
     Object.assign(runInfo, { imported: stats.imported, existing: stats.existing, withPDF: stats.withPDF });
-    if (o.review && o.collectionKey) {
-      await ZR.Store.addRun(o.libraryID, o.collectionKey, ZR.Prisma.runRecord(runInfo));
-      await ZR.Store.flush(o.libraryID);
-    }
     if (o.protocolNote) {
       await ZR.Importer.createNote(ZR.Importer.protocolHTML(runInfo), { libraryID: o.libraryID, collectionID: o.collectionID });
     }

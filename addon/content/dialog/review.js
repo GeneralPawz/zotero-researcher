@@ -1,133 +1,436 @@
 /* global Zotero, App, $, el, document, DOMParser */
 "use strict";
 
-// Review tab: PRISMA 2020 workflow bound to the target collection.
-//   1 Find papers  — logged searches (Search tab adds papers as zr:unscreened)
-//   2 Screen       — title/abstract: include / maybe / exclude (+ reason)
-//   3 Full text    — included papers: include / exclude (+ reason), PDF at hand
-//   4 PRISMA       — flow diagram from runs + tags; save as note / export SVG
-// Decisions are tags on the items (see lib/store.js), so they survive the plugin.
+// Review tab: a methodology-based pipeline for the current project.
+//   Protocol  – choose a methodology, then describe the goal in plain words (the AI fills
+//               the form) or fill the form by hand. The form depends on the methodology.
+//   Search    – logged searches; results go into the project's candidate pool.
+//   Screen    – the funnel: a System 1 model estimates for every paper how likely it is
+//               to be relevant; thresholds settle the clear cases in bulk, the AI reasons
+//               about the uncertain middle, you decide the rest. Included papers are
+//               added to the Zotero collection.
+//   Full text / quality / extraction / classification – as the methodology requires.
+//   Report    – PRISMA flow diagram from the logged searches and every decision.
+// Decisions are item tags plus the library ledger (lib/store.js), so they survive the plugin.
 
 App.panels.review = (() => {
   let ZR;
-  let step = "identify";
-  let currentID = null;
-  const suggestions = new Map(); // `${itemKey}|${stage}` -> {d, r, c, why}
+  let step = null;
+  let cands = [];
+  let currentKey = null;
+  let protocolMode = null; // "describe" | "form"; null = pick automatically
+  let draft = null; // protocol being edited: {id, methodology, protocol, full, recommended}
+  let lastSVG = "";
   const st = (m) => App.status("review", m);
+  const project = () => (App.project?.kind === "review" ? App.project : null);
+  const method = () => ZR.Methodologies.get(project()?.methodology);
+  const libraryID = () => App.target.libraryID;
+  const dstage = () => (step === "fulltext" ? "ft" : "ta"); // decision stage
+  const today = () => new Date().toISOString().slice(0, 10);
+  const pct = (p) => (p == null ? "–" : Math.round(p * 100) + "%");
+  const ENGINE_NAMES = { typesafe: "TypeSafe Jev", llm: "your AI provider", rules: "keyword rules" };
 
   function init() {
     ZR = App.ZR;
-    $("rv-create").addEventListener("click", createOrSave);
-    $("rv-edit").addEventListener("click", () => showSetup(true));
-    $("rv-cancel-edit").addEventListener("click", () => refresh());
-    $("rv-add-search").addEventListener("click", () => App.showTab("search"));
-    for (const b of $("review-steps").children) b.addEventListener("click", () => go(b.dataset.step));
+    $("rv-start-btn").addEventListener("click", startReview);
+    for (const b of $("rv-protocol-mode").children) b.addEventListener("click", () => setProtocolMode(b.dataset.mode));
+    $("rv-fill").addEventListener("click", fillWithAI);
+    $("rv-description").addEventListener("keydown", (e) => e.key === "Enter" && (e.ctrlKey || e.metaKey) && !App.busy && fillWithAI());
+    $("rv-save").addEventListener("click", saveProtocol);
+    $("rv-add-search").addEventListener("click", () => {
+      App.panels.search.loadProject();
+      App.showTab("search");
+    });
     $("queue-filter").addEventListener("change", () => renderScreen());
-    $("ai-suggest").addEventListener("click", aiSuggest);
+    $("queue-sort").addEventListener("change", () => renderScreen());
+    $("s1-rate").addEventListener("click", rateS1);
+    $("s1-low").addEventListener("change", saveThresholds);
+    $("s1-high").addEventListener("change", saveThresholds);
+    $("s1-exclude").addEventListener("click", (e) => armed(e.target, () => bulk("exclude")));
+    $("s1-include").addEventListener("click", (e) => armed(e.target, () => bulk("include")));
+    $("ai-uncertain").addEventListener("click", aiUncertain);
     $("ai-accept").addEventListener("click", aiAccept);
+    $("rv-table-ai").addEventListener("click", tableAI);
+    $("rv-table-csv").addEventListener("click", tableCSV);
     $("prisma-note").addEventListener("click", saveNote);
     $("prisma-svg").addEventListener("click", exportSVG);
     document.addEventListener("keydown", onKey);
   }
 
-  const collection = () => App.collection();
-  const stage = () => (step === "ft" ? "ft" : "ta");
-
   async function onShow() {
     await refresh();
   }
 
+  /** Forget per-project UI state (after switching or creating a project). */
+  function reset() {
+    step = null;
+    draft = null;
+    protocolMode = null;
+    currentKey = null;
+    cands = [];
+  }
+
   async function refresh() {
-    await App.refreshReview();
-    const col = collection();
-    $("review-setup").hidden = true;
-    $("review-main").hidden = true;
-    if (!col) {
-      $("review-setup").hidden = false;
-      $("review-setup").querySelector(".card").replaceChildren(
-        el("h2", { text: "Reviews live in a collection" }),
-        el("p", { class: "hint", text: "Select (or create) a collection in Zotero, then open Researcher again to start a PRISMA review for it." })
-      );
-      return;
-    }
-    if (!App.review) return showSetup(false);
-    $("review-main").hidden = false;
-    await updateSteps();
+    const p = project();
+    $("rv-start").hidden = !!p;
+    $("rv-main").hidden = !p;
+    if (!p) return renderStart();
+    if (draft && draft.id !== p.id) reset();
+    cands = await ZR.Projects.candidates(libraryID(), p);
+    if (!step || !method().stages.includes(step)) step = firstOpenStage();
+    renderFunnel();
     await go(step);
   }
 
-  function showSetup(editing) {
-    const r = App.review || ZR.Prisma.newReview();
-    $("review-setup").hidden = false;
-    $("review-main").hidden = true;
-    for (const t of document.querySelectorAll(".review-target")) t.textContent = `“${App.target.label.split(" › ").pop()}”`;
-    $("rv-question").value = r.question || "";
-    $("rv-include").value = r.include || "";
-    $("rv-exclude").value = r.exclude || "";
-    $("rv-reasons").value = (r.reasons || ZR.Prisma.DEFAULT_REASONS).join("\n");
-    $("rv-create").textContent = editing ? "Save changes" : "Start review";
-    $("rv-cancel-edit").hidden = !editing;
+  const protocolFilled = (pr) => !!(pr && (pr.questions?.length || pr.objective || pr.inclusion?.length));
+
+  function firstOpenStage() {
+    const p = project();
+    if (!protocolFilled(p.protocol)) return "protocol";
+    if (!cands.length) return "search";
+    return "screen";
   }
 
-  async function createOrSave() {
-    if (!App.target.editable) return st("This library is read-only.");
-    const review = App.review || ZR.Prisma.newReview();
-    review.question = $("rv-question").value.trim();
-    review.include = $("rv-include").value.trim();
-    review.exclude = $("rv-exclude").value.trim();
-    review.reasons = $("rv-reasons").value.split("\n").map((s) => s.trim()).filter(Boolean);
-    if (!review.reasons.length) review.reasons = ZR.Prisma.DEFAULT_REASONS.slice();
-    await ZR.Store.saveReview(App.target.libraryID, App.target.collectionKey, review);
-    await ZR.Store.flush(App.target.libraryID);
-    st("Review saved. Papers already in this collection are part of the screening list.");
-    await refresh();
-  }
-
-  async function updateSteps() {
-    const col = collection();
-    const items = ZR.Prisma.reviewItems(col).map(ZR.Prisma.itemState);
-    const decidedTA = items.filter((i) => i.ta).length;
-    const incl = items.filter((i) => i.ta === "include");
-    $("st-identify").textContent = `${(App.review.runs || []).length} searches`;
-    $("st-ta").textContent = `${decidedTA}/${items.length}`;
-    $("st-ft").textContent = `${incl.filter((i) => i.ft).length}/${incl.length}`;
-    $("st-prisma").textContent = `${incl.filter((i) => i.ft === "include").length} included`;
-  }
-
-  async function go(s) {
-    step = s;
-    for (const b of $("review-steps").children) b.classList.toggle("on", b.dataset.step === s);
-    $("step-identify").hidden = s !== "identify";
-    $("step-screen").hidden = s !== "ta" && s !== "ft";
-    $("step-prisma").hidden = s !== "prisma";
-    if (s === "identify") renderIdentify();
-    else if (s === "prisma") await renderPrisma();
-    else {
-      currentID = null;
-      await loadSuggestions();
-      renderScreen();
+  // ---------------------------------------------------------------- start ----
+  function renderStart() {
+    const q = App.project;
+    const col = App.target.collectionKey ? App.target.label.split(" › ").pop() : "";
+    if (q && q.kind === "quick") {
+      $("rv-start-title").textContent = `Turn “${q.name}” into a structured review`;
+      $("rv-start-btn").textContent = "Convert to a structured review";
+    } else {
+      $("rv-start-title").textContent = col ? `Start a structured review for “${col}”` : "Start a structured review";
+      $("rv-start-btn").textContent = "New review project…";
     }
   }
 
-  // ------------------------------------------------------------ identify ----
-  function renderIdentify() {
-    const r = App.review;
-    $("rv-question-view").textContent = r.question || "(no question written — click Edit setup)";
-    const runs = r.runs || [];
+  async function startReview() {
+    const q = App.project;
+    if (!(q && q.kind === "quick")) return App.newProject("review");
+    if (!App.target.editable) return st("This library is read-only.");
+    const s = q.search || {};
+    const protocol = { title: q.name, query: s.query, yearFrom: s.yearFrom, yearTo: s.yearTo, languages: s.languages, types: s.types };
+    App.project = await ZR.Projects.convert(libraryID(), q.id, "prisma2020", protocol);
+    if (s.request) App.project.description = s.request;
+    await App.loadProjects(App.project.id);
+    reset();
+    st(`“${q.name}” is now a structured review — its search settings and history are kept. Choose a methodology and describe what you want to achieve.`);
+    await refresh();
+  }
+
+  // --------------------------------------------------------------- funnel ----
+  function renderFunnel() {
+    const p = project();
+    const box = $("rv-funnel");
+    box.replaceChildren(el("span", { class: "funnel-name", title: method().reference, text: method().name }));
+    ZR.Projects.funnel(p, cands).forEach((s, i) => {
+      if (i) box.append(el("span", { class: "funnel-arrow", text: "›" }));
+      box.append(el("span", { class: "funnel-stage" }, [el("b", { text: s.n.toLocaleString() }), " " + s.label]));
+    });
+    const rated = cands.filter((c) => c.s1).length;
+    if (cands.length) box.append(el("span", { class: "hint funnel-s1", text: `System 1 rated ${rated}/${cands.length}` }));
+    renderSteps();
+  }
+
+  function stepInfo(s) {
+    const p = project();
+    const pop = cands.filter((c) => ZR.Projects.inStage(p, s, c));
+    switch (s) {
+      case "protocol":
+        return protocolFilled(p.protocol) ? "✓" : "to do";
+      case "search":
+        return String((p.runs || []).length);
+      case "screen":
+        return `${cands.filter((c) => c.ta).length}/${cands.length}`;
+      case "fulltext":
+        return `${pop.filter((c) => c.ft).length}/${pop.length}`;
+      case "quality":
+        return `${pop.filter((c) => c.qa?.some(Boolean)).length}/${pop.length}`;
+      case "extract":
+      case "classify":
+        return `${pop.filter((c) => c.extract && Object.values(c.extract).some(Boolean)).length}/${pop.length}`;
+      default:
+        return "";
+    }
+  }
+
+  function renderSteps() {
+    $("rv-steps").replaceChildren(
+      ...method().stages.map((s, i) =>
+        el("button", { "data-step": s, class: s === step ? "on" : "", title: ZR.Methodologies.STAGES[s].label, onclick: () => go(s) }, [el("span", { class: "num", text: String(i + 1) }), el("span", { class: "st-label", text: ZR.Methodologies.STAGES[s].short }), el("small", { text: stepInfo(s) })])
+      )
+    );
+  }
+
+  async function go(s) {
+    if (step === "protocol" && s !== "protocol" && protocolMode === "form") readForm(); // keep unsaved edits
+    step = s;
+    for (const b of $("rv-steps").children) b.classList.toggle("on", b.dataset.step === s);
+    $("rv-protocol").hidden = s !== "protocol";
+    $("rv-search").hidden = s !== "search";
+    $("rv-screen").hidden = s !== "screen" && s !== "fulltext";
+    $("rv-table").hidden = !["quality", "extract", "classify"].includes(s);
+    $("rv-report").hidden = s !== "report";
+    if (s === "protocol") renderProtocol();
+    else if (s === "search") renderSearch();
+    else if (s === "screen" || s === "fulltext") {
+      currentKey = null;
+      renderScreen();
+    } else if (s === "report") await renderReport();
+    else renderTable();
+  }
+
+  // ------------------------------------------------------------- protocol ----
+  function ensureDraft() {
+    const p = project();
+    if (!draft || draft.id !== p.id) {
+      draft = { id: p.id, methodology: p.methodology, protocol: JSON.parse(JSON.stringify(p.protocol || ZR.Methodologies.emptyProtocol(p.methodology))), full: null, recommended: null };
+      $("rv-description").value = p.description || "";
+      $("rv-fill-note").textContent = "";
+      $("rv-save-note").textContent = "";
+    }
+    return draft;
+  }
+
+  function renderProtocol() {
+    ensureDraft();
+    renderMethods();
+    setProtocolMode(protocolMode || (protocolFilled(draft.protocol) ? "form" : "describe"));
+  }
+
+  function setProtocolMode(mode) {
+    if (protocolMode === "form" && mode !== "form") readForm();
+    protocolMode = mode;
+    for (const b of $("rv-protocol-mode").children) b.classList.toggle("on", b.dataset.mode === mode);
+    $("rv-describe").hidden = mode !== "describe";
+    $("rv-form").hidden = mode !== "form";
+    $("rv-save").closest(".rv-save-row").hidden = mode !== "form";
+    if (mode === "form") renderForm();
+    else setTimeout(() => $("rv-description").focus(), 0);
+  }
+
+  function renderMethods() {
+    // Once a protocol exists, show only the chosen methodology (changing it stays one click away)
+    const collapsed = protocolFilled(project().protocol) && !draft.showAll;
+    const list = collapsed ? ZR.Methodologies.LIST.filter((m) => m.id === draft.methodology) : ZR.Methodologies.LIST;
+    $("rv-methods").replaceChildren(
+      ...list.map((m) =>
+        el("button", { class: "method" + (m.id === draft.methodology ? " on" : ""), "data-method": m.id, title: m.reference, onclick: () => chooseMethod(m.id) }, [
+          el("b", { text: m.name }),
+          el("span", { text: m.short }),
+          el("small", { text: m.stages.slice(1, -1).map((s) => ZR.Methodologies.STAGES[s].label).join(" → ") }),
+        ])
+      ),
+      collapsed ? el("button", { class: "link method-change", text: "Change methodology…", onclick: () => ((draft.showAll = true), renderMethods()) }) : null
+    );
+    $("rv-method-current").textContent = draft.methodology !== project().methodology ? "Changed — save the protocol to apply it." : "";
+  }
+
+  function chooseMethod(id) {
+    if (protocolMode === "form") readForm();
+    // Keep what was entered for fields the new methodology doesn't use, in case of switching back
+    const full = Object.assign({}, draft.full, draft.protocol);
+    // A framework left at the methodology's default follows the new methodology's default
+    if (full.framework === ZR.Methodologies.get(draft.methodology).framework) full.framework = ZR.Methodologies.get(id).framework;
+    draft.full = full;
+    draft.methodology = id;
+    draft.protocol = ZR.Methodologies.normalizeProtocol(id, draft.full);
+    if (draft.recommended?.methodology === id) draft.recommended = null;
+    renderMethods();
+    if (protocolMode === "form") renderForm();
+  }
+
+  function picks(id, items, chosen) {
+    return el(
+      "div",
+      { class: "picks", id },
+      items.map((it) =>
+        el("button", {
+          class: "pick",
+          "data-v": it.id,
+          "aria-pressed": String(chosen.includes(it.id)),
+          text: it.label,
+          onclick: (e) => e.target.setAttribute("aria-pressed", String(e.target.getAttribute("aria-pressed") !== "true")),
+        })
+      )
+    );
+  }
+
+  function renderForm() {
+    const M = ZR.Methodologies;
+    const m = M.get(draft.methodology);
+    const P = draft.protocol;
+    const box = $("rv-form");
+    box.replaceChildren();
+    const row = (id, label, hint, controls) => el("div", { class: "pf-row", "data-field": id }, [el("span", { class: "pf-label", text: label }), el("div", { class: "pf-controls" }, controls), hint ? el("span", { class: "hint pf-hint", text: hint }) : null]);
+    const textarea = (id, value, rows, cls = "") => {
+      const t = el("textarea", { id, rows: String(rows), class: cls, spellcheck: "true" });
+      t.value = value || "";
+      return t;
+    };
+    if (draft.recommended) {
+      const rec = M.get(draft.recommended.methodology);
+      box.append(
+        el("div", { class: "ai-box" }, [
+          el("span", {}, [el("b", { text: `The AI suggests: ${rec.name}` }), draft.recommended.why ? ` — ${draft.recommended.why}` : ""]),
+          el("span", { class: "spacer" }),
+          el("button", { text: "Switch and re-fill", onclick: () => (chooseMethod(rec.id), fillWithAI()) }),
+          el("button", { class: "link", text: "keep", onclick: () => ((draft.recommended = null), renderForm()) }),
+        ])
+      );
+    }
+    for (const f of m.fields) {
+      const F = M.FIELDS[f];
+      if (F.type === "text") box.append(row(f, F.label, F.hint, [el("input", { type: "text", id: `pf-${f}`, value: P[f] || "" })]));
+      else if (F.type === "textarea") box.append(row(f, F.label, F.hint, [textarea(`pf-${f}`, P[f], 2)]));
+      else if (F.type === "list") box.append(row(f, F.label, F.hint, [textarea(`pf-${f}`, (P[f] || []).join("\n"), Math.min(8, Math.max(2, (P[f] || []).length + 1)))]));
+      else if (F.type === "query") {
+        const fb = el("span", { class: "hint", id: "pf-query-fb" });
+        const t = textarea("pf-query", P.query, 2, "mono");
+        const check = () => {
+          const q = t.value.trim();
+          fb.className = "hint";
+          if (!q) return (fb.textContent = "Used as the default query in the Search tab.");
+          try {
+            fb.textContent = "✓ " + ZR.Query.toCanonical(ZR.Query.parse(q));
+            fb.classList.add("ok");
+          } catch (e) {
+            fb.textContent = "Query problem: " + e.message;
+            fb.classList.add("error");
+          }
+        };
+        t.addEventListener("input", check);
+        check();
+        box.append(row(f, F.label, F.hint, [t, fb]));
+      } else if (F.type === "years")
+        box.append(
+          row(f, F.label, "", [
+            el("input", { type: "number", id: "pf-yearFrom", min: "1900", max: "2100", placeholder: "from", value: P.yearFrom ?? "" }),
+            el("span", { text: "–" }),
+            el("input", { type: "number", id: "pf-yearTo", min: "1900", max: "2100", placeholder: "to", value: P.yearTo ?? "" }),
+          ])
+        );
+      else if (F.type === "languages") box.append(row(f, F.label, "None selected = any language", [picks("pf-languages", ZR.Records.LANGUAGES.map((l) => ({ id: l.code, label: l.name })), P.languages || [])]));
+      else if (F.type === "types") box.append(row(f, F.label, "None selected = any type", [picks("pf-types", ZR.Records.TYPE_FILTERS.map((t) => ({ id: t.id, label: t.label })), P.types || [])]));
+
+      // The question framework (PICO, PCC, …) right after the research questions
+      if (f === "questions") {
+        const sel = el(
+          "select",
+          { id: "pf-framework", onchange: () => (readForm(), renderForm()) },
+          m.frameworks.map((id) => el("option", { value: id, text: M.FRAMEWORKS[id].name, selected: id === P.framework }))
+        );
+        box.append(row("framework", "Question framework", "Breaks the question into parts that the screening models check", [sel]));
+        for (const x of M.FRAMEWORKS[P.framework]?.fields || []) {
+          box.append(row("fw-" + x.id, x.label, "", [el("input", { type: "text", id: `pf-fw-${x.id}`, "data-fw": x.id, value: P.frameworkFields?.[x.id] || "" })]));
+        }
+      }
+    }
+  }
+
+  /** Read the form back into the draft protocol. */
+  function readForm() {
+    if (!draft || !$("rv-form").children.length) return;
+    const M = ZR.Methodologies;
+    const P = draft.protocol;
+    const val = (id) => $(id)?.value ?? "";
+    for (const f of M.get(draft.methodology).fields) {
+      const t = M.FIELDS[f].type;
+      if (t === "years") {
+        P.yearFrom = parseInt(val("pf-yearFrom"), 10) || null;
+        P.yearTo = parseInt(val("pf-yearTo"), 10) || null;
+      } else if (!$(`pf-${f}`)) continue;
+      else if (t === "text" || t === "textarea" || t === "query") P[f] = val(`pf-${f}`).trim();
+      else if (t === "list")
+        P[f] = val(`pf-${f}`)
+          .split("\n")
+          .map((s) => s.trim())
+          .filter(Boolean);
+      else if (t === "languages" || t === "types") P[f] = [...$(`pf-${f}`).querySelectorAll('[aria-pressed="true"]')].map((b) => b.dataset.v);
+    }
+    const fw = {};
+    for (const i of $("rv-form").querySelectorAll("[data-fw]")) fw[i.dataset.fw] = i.value.trim();
+    P.frameworkFields = Object.assign({}, P.frameworkFields, fw);
+    if ($("pf-framework")) P.framework = $("pf-framework").value;
+  }
+
+  async function fillWithAI() {
+    ensureDraft();
+    const text = $("rv-description").value.trim();
+    if (!text) {
+      setProtocolMode("describe");
+      return st("Describe your review first: what you want to find out, why, and what counts.");
+    }
+    let profile;
+    try {
+      profile = App.profile();
+    } catch (e) {
+      return st(e.message);
+    }
+    App.setBusy("review", true);
+    $("rv-fill-note").textContent = "The AI is drafting the protocol…";
+    st(`The AI is drafting a ${ZR.Methodologies.get(draft.methodology).name} protocol…`);
+    try {
+      const p = project();
+      const out = await ZR.Assist.fillProtocol(profile, draft.methodology, text, { query: p.search?.query, titles: cands.map((c) => c.title) });
+      draft.protocol = out.protocol;
+      draft.full = null;
+      draft.recommended = out.recommended.methodology !== draft.methodology ? out.recommended : null;
+      $("rv-fill-note").textContent = "";
+      setProtocolMode("form");
+      $("rv-save-note").textContent = "Filled in by the AI — check every field, then save.";
+      st(out.rationale || "Protocol drafted. Review it, then save.");
+    } catch (e) {
+      $("rv-fill-note").textContent = "";
+      st("The AI could not fill in the form: " + e.message);
+    } finally {
+      App.setBusy("review", false);
+    }
+  }
+
+  async function saveProtocol() {
+    if (!App.target.editable) return st("This library is read-only.");
+    readForm();
+    const p = project();
+    const protocol = ZR.Methodologies.normalizeProtocol(draft.methodology, draft.protocol);
+    if (protocol.query) {
+      try {
+        ZR.Query.parse(protocol.query);
+      } catch (e) {
+        return st("Search query problem: " + e.message);
+      }
+    }
+    p.methodology = draft.methodology;
+    p.protocol = protocol;
+    p.description = $("rv-description").value.trim();
+    // The protocol's search settings become the project's search settings
+    p.search = Object.assign({}, p.search, { mode: "structured", query: protocol.query || p.search?.query || "", yearFrom: protocol.yearFrom, yearTo: protocol.yearTo, languages: protocol.languages, types: protocol.types });
+    App.project = await ZR.Projects.save(libraryID(), p);
+    draft = null;
+    App.renderProjects();
+    App.panels.search.loadProject();
+    await refresh();
+    $("rv-save-note").textContent = `Saved ${new Date().toLocaleTimeString()}.`;
+    st(cands.length ? "Protocol saved. Re-rate papers with System 1 if the criteria changed." : "Protocol saved. Next: find papers (step 2) — the search tab is pre-filled from the protocol.");
+  }
+
+  // --------------------------------------------------------------- search ----
+  function renderSearch() {
+    const runs = project().runs || [];
     const box = $("rv-runs");
     box.replaceChildren();
     if (!runs.length) {
-      box.append(el("p", { class: "hint", text: "No searches logged yet. Click “Search & add papers”: every search you add from will be recorded here for the PRISMA report." }));
+      box.append(el("p", { class: "hint", text: "No searches logged yet. The Search tab is pre-filled with the protocol's query and filters." }));
       return;
     }
     box.append(
       el("table", { class: "runs" }, [
-        el("tr", {}, ["When", "How", "Query", "Found", "Added"].map((t) => el("th", { text: t }))),
+        el("tr", {}, ["When", "How", "Query", "Found", "Into pool"].map((t) => el("th", { text: t }))),
         ...runs.map((x) =>
           el("tr", {}, [
             el("td", { text: x.at || "" }),
             el("td", { text: x.mode === "related" ? "citations" : x.mode }),
-            el("td", {}, el("code", { text: ZR.Util.truncate(x.query || "", 120) })),
+            el("td", { title: Object.entries(x.perSource || {}).map(([id, s]) => `${ZR.Sources.get(id)?.name || id}: ${s.error ? "⚠ " + s.error : s.count}`).join("\n") }, el("code", { text: ZR.Util.truncate(x.query || "", 140) })),
             el("td", { text: String(x.identified ?? "") }),
             el("td", { text: String(x.imported ?? "") }),
           ])
@@ -136,213 +439,249 @@ App.panels.review = (() => {
     );
   }
 
-  // ------------------------------------------------------------- screening ----
+  // ------------------------------------------------------------ screening ----
   function population() {
-    const items = ZR.Prisma.reviewItems(collection()).map(ZR.Prisma.itemState);
-    return stage() === "ft" ? items.filter((i) => i.ta === "include") : items;
+    const p = project();
+    return step === "fulltext" ? cands.filter((c) => ZR.Projects.inStage(p, "fulltext", c)) : cands;
   }
+
+  const suggestion = (c) => (c.llm && c.llm.stage === dstage() ? c.llm : null);
 
   function filtered() {
     const f = $("queue-filter").value;
-    const s = stage();
-    return population().filter((i) => {
-      const d = i[s];
-      if (f === "todo") return !d;
-      if (f === "all") return true;
-      return d === f;
-    });
+    const s = dstage();
+    const list = population().filter((c) => (f === "todo" ? !c[s] : f === "all" ? true : c[s] === f));
+    const sort = $("queue-sort").value;
+    if (sort === "title") return list.sort((a, b) => String(a.title).localeCompare(String(b.title)));
+    const v = (c) => (c.s1 ? c.s1.p : sort === "p" ? -1 : 2); // unrated papers last
+    return list.sort((a, b) => (sort === "p" ? v(b) - v(a) : v(a) - v(b)));
   }
 
-  async function loadSuggestions() {
-    for (const i of population()) {
-      const k = `${i.item.key}|${stage()}`;
-      if (!suggestions.has(k)) {
-        const sg = await ZR.Store.getSuggestion(App.target.libraryID, i.item.key, stage());
-        if (sg) suggestions.set(k, sg);
-      }
-    }
+  const thresholds = () => Object.assign(ZR.Projects.defaultFunnel(), project().funnel);
+  function uncertain() {
+    const s = dstage();
+    const { excludeBelow, includeAbove } = thresholds();
+    return population().filter((c) => !c[s] && (s === "ft" || !c.s1 || (c.s1.p >= excludeBelow && c.s1.p < includeAbove)));
   }
 
   function renderScreen() {
-    // "Maybe" only exists at title/abstract stage
-    $("queue-filter").querySelector('option[value="maybe"]').hidden = stage() === "ft";
+    const s = dstage();
+    $("queue-filter").querySelector('option[value="maybe"]').hidden = s === "ft";
     const list = filtered();
+    $("queue-count").textContent = `${list.length} paper(s)`;
+    if (!list.some((c) => c.key === currentKey)) currentKey = list[0]?.key ?? null;
     const box = $("queue");
     box.replaceChildren();
-    $("queue-count").textContent = `${list.length} paper(s)`;
-    if (!list.some((i) => i.item.id === currentID)) currentID = list[0]?.item.id ?? null;
-    for (const i of list) {
-      const sg = suggestions.get(`${i.item.key}|${stage()}`);
-      const d = i[stage()];
+    for (const c of list) {
+      const d = c[s];
+      const sg = suggestion(c);
       box.append(
-        el("div", { class: "q-item" + (i.item.id === currentID ? " current" : ""), onclick: () => ((currentID = i.item.id), renderScreen()) }, [
-          el("span", { class: `dot ${d || ""}${!d && sg ? " ai" : ""}`, title: d || (sg ? `AI suggests ${sg.d}` : "not decided") }),
-          el("span", { class: "q-t", text: i.item.getField("title") || "(untitled)" }),
+        el("div", { class: "q-item" + (c.key === currentKey ? " current" : ""), "data-key": c.key, onclick: () => ((currentKey = c.key), renderScreen()) }, [
+          el("span", { class: `dot ${d || ""}${!d && sg ? " ai" : ""}`, title: d ? `${d}${c.by === "s1" ? " (System 1)" : c.by === "llm" ? " (AI)" : ""}` : sg ? `AI suggests ${sg.d}` : "not decided" }),
+          el("span", { class: "q-t", text: c.title || "(untitled)" }),
+          c.s1 ? el("span", { class: "q-p " + band(c.s1.p), text: pct(c.s1.p), title: "System 1: probability of relevance" }) : null,
         ])
       );
     }
-    renderCard(list.find((i) => i.item.id === currentID));
-    $("ai-suggest").textContent = `✦ AI suggestions for ${list.filter((i) => !i[stage()]).length} undecided`;
-    updateSteps();
+    box.querySelector(".current")?.scrollIntoView({ block: "nearest" });
+    renderCard(list.find((c) => c.key === currentKey));
+    renderS1();
+    renderFunnel();
   }
 
-  function renderCard(state) {
-    const box = $("screen-card");
-    box.replaceChildren();
-    if (!state) {
-      const pop = population();
-      box.append(
-        el("div", { class: "empty-state" }, [
-          el("div", { class: "empty-title", text: pop.length ? "Nothing left in this list 🎉" : stage() === "ft" ? "No papers included yet" : "No papers to screen yet" }),
-          el("div", {
-            text: pop.length
-              ? stage() === "ta"
-                ? "Continue with step 3 to check the full texts of included papers."
-                : "Open step 4 for the PRISMA flow diagram."
-              : stage() === "ft"
-                ? "Include papers in step 2 first."
-                : "Add papers from the Search tab — they are queued here automatically.",
-          }),
-        ])
+  function band(p) {
+    const { excludeBelow, includeAbove } = thresholds();
+    return p < excludeBelow ? "lo" : p >= includeAbove ? "hi" : "md";
+  }
+
+  function renderS1() {
+    const s = dstage();
+    const ft = s === "ft";
+    const pop = population();
+    const todo = pop.filter((c) => !c[s]);
+    const rated = pop.filter((c) => c.s1);
+    const { excludeBelow, includeAbove } = thresholds();
+    const eng = ZR.System1.engine();
+    $("s1-engine").textContent = ft ? "" : `via ${ENGINE_NAMES[eng]}`;
+    $("s1-engine").title = eng === "rules" ? "No System 1 model or AI is set up: papers are rated by whether they match the protocol's query. Add a TypeSafe key in Settings for real probabilities." : "";
+    $("s1-panel").querySelector(".s1-head").hidden = ft;
+    $("s1-rate").hidden = ft;
+    const unrated = pop.filter((c) => !c.s1).length;
+    $("s1-rate").textContent = unrated ? `Rate ${unrated} paper(s)` : "Re-rate all papers";
+    $("s1-hist").hidden = ft || !rated.length;
+    $("s1-thresholds").hidden = ft || !rated.length;
+    if (!ft && rated.length) {
+      // Histogram of the undecided papers' probabilities, coloured by threshold band
+      const bins = new Array(10).fill(0);
+      for (const c of todo) if (c.s1) bins[Math.min(9, Math.floor(c.s1.p * 10))]++;
+      const max = Math.max(1, ...bins);
+      $("s1-hist").replaceChildren(
+        ...bins.map((n, i) =>
+          el("div", { class: "bin " + band((i + 0.5) / 10), title: `${i * 10}–${i * 10 + 10}%: ${n} undecided paper(s)` }, el("div", { class: "bar", style: `height:${Math.round((n / max) * 100)}%` }))
+        ),
+        el("div", { class: "axis" }, [el("span", { text: "0%" }), el("span", { text: "not relevant ← → relevant" }), el("span", { text: "100%" })])
       );
-      return;
+      if (document.activeElement !== $("s1-low")) $("s1-low").value = Math.round(excludeBelow * 100);
+      if (document.activeElement !== $("s1-high")) $("s1-high").value = Math.round(includeAbove * 100);
+      const nLow = todo.filter((c) => c.s1 && c.s1.p < excludeBelow).length;
+      const nHigh = todo.filter((c) => c.s1 && c.s1.p >= includeAbove).length;
+      if (!$("s1-exclude").classList.contains("armed")) $("s1-exclude").textContent = `Exclude ${nLow}`;
+      if (!$("s1-include").classList.contains("armed")) $("s1-include").textContent = `Include ${nHigh}`;
+      $("s1-exclude").disabled = App.busy || !nLow;
+      $("s1-include").disabled = App.busy || !nHigh;
     }
-    const item = state.item;
-    const s = stage();
-    const reasons = App.review.reasons || ZR.Prisma.DEFAULT_REASONS;
-    const doi = item.getField("DOI");
-    const sg = suggestions.get(`${item.key}|${s}`);
-    const current = state[s];
-    const reasonSel = el("select", { id: "reason-select", title: "Exclusion reason (keys 1–9)" }, reasons.map((r, i) => el("option", { value: r, text: `${i + 1}. ${r}`, selected: state.reason === r || (!state.reason && sg?.r === r) })));
-    const card = el("div", { class: "paper-card" }, [
-      el("h2", { text: item.getField("title") || "(untitled)" }),
-      el("div", { class: "meta", text: [item.getCreators().map((c) => c.lastName).slice(0, 4).join(", "), ZR.Util.yearOf(item.getField("date")), item.getField("publicationTitle") || item.getField("proceedingsTitle") || ""].filter(Boolean).join(" · ") }),
-      el("div", { class: "actions" }, [
-        doi ? el("button", { class: "link", text: "doi:" + doi, onclick: () => Zotero.launchURL("https://doi.org/" + doi) }) : null,
-        el("button", { class: "link", text: "Show in Zotero", onclick: () => Zotero.getMainWindow()?.ZoteroPane.selectItem(item.id) }),
-        s === "ft" ? pdfButton(state) : null,
-      ]),
-      sg
-        ? el("div", { class: "ai-box" }, [
-            el("span", {}, [el("b", { text: `AI suggests: ${sg.d}` }), sg.r ? ` — ${sg.r}` : "", sg.c != null ? ` (${Math.round(sg.c * 100)}% sure)` : ""]),
-            el("span", { class: "hint", text: sg.why || "" }),
-            el("span", { class: "spacer" }),
-            el("button", { text: "Accept", onclick: () => decide(state, sg.d, sg.r, "llm") }),
-          ])
-        : null,
-      el("div", { class: "abstract", text: item.getField("abstractNote") || "No abstract. Use “Fix metadata” in the Selected items tab, or open the paper." }),
-      el("div", { class: "decide" }, [
-        el("button", { class: "inc" + (current === "include" ? " on" : ""), onclick: () => decide(state, "include") }, ["Include", el("kbd", { text: "I" })]),
-        s === "ta" ? el("button", { class: "may" + (current === "maybe" ? " on" : ""), onclick: () => decide(state, "maybe") }, ["Maybe", el("kbd", { text: "M" })]) : null,
-        el("button", { class: "exc" + (current === "exclude" ? " on" : ""), onclick: () => decide(state, "exclude", reasonSel.value) }, ["Exclude", el("kbd", { text: "E" })]),
-        reasonSel,
-        el("span", { class: "spacer" }),
-        current ? el("button", { class: "link", text: "undo decision", onclick: () => decide(state, null) }) : null,
-        el("span", { class: "hint", text: "↑/↓ to move" }),
-      ]),
-    ]);
-    box.append(card);
+    const nUnc = uncertain().length;
+    $("ai-uncertain").textContent = ft ? `✦ AI: check ${nUnc} full text(s)` : `✦ Ask AI about ${nUnc} uncertain`;
+    $("ai-uncertain").title = ft ? "The AI reads the full texts (where Zotero has indexed them) and suggests a decision" : "The AI reasons about the papers between the thresholds (and unrated ones) and suggests a decision with a reason";
+    $("ai-uncertain").disabled = App.busy || !nUnc;
+    const nConf = todo.filter((c) => (suggestion(c)?.c ?? 0) >= 0.8).length;
+    $("ai-accept").textContent = `accept ${nConf} confident AI suggestion(s)`;
+    $("ai-accept").hidden = !nConf;
+    let pdfs = $("ft-pdfs");
+    if (!pdfs) {
+      pdfs = el("button", { id: "ft-pdfs", onclick: findPDFs });
+      $("s1-panel").append(pdfs);
+    }
+    const missing = pop.filter((c) => c.itemID && !c.hasPDF && !c.ft).length;
+    pdfs.hidden = !ft || !missing;
+    pdfs.textContent = `Find PDFs for ${missing} paper(s)`;
   }
 
-  function pdfButton(state) {
-    const att = state.item
-      .getAttachments()
-      .map((id) => Zotero.Items.get(id))
-      .find((a) => a?.isFileAttachment());
-    if (att) return el("button", { text: "Open PDF", onclick: () => Zotero.Reader.open(att.id) });
-    return el("button", {
-      text: "Find PDF",
-      onclick: async (e) => {
-        e.target.disabled = true;
-        st("Looking for a PDF…");
-        const ok = await ZR.Importer.attachFullText(state.item);
-        st(ok ? "PDF attached." : "No legally accessible PDF found — you can attach one by hand.");
-        renderScreen();
-      },
-    });
+  /** Two-click confirmation for bulk actions (no modal dialogs). */
+  const arming = new Map();
+  function armed(btn, fn) {
+    if (arming.has(btn)) {
+      clearTimeout(arming.get(btn));
+      arming.delete(btn);
+      btn.classList.remove("armed");
+      return fn();
+    }
+    btn.textContent = btn.id === "s1-exclude" ? `Click again to exclude ${btn.textContent.replace(/\D+/g, "")}` : `Click again to include ${btn.textContent.replace(/\D+/g, "")}`;
+    btn.classList.add("armed");
+    arming.set(
+      btn,
+      setTimeout(() => {
+        arming.delete(btn);
+        btn.classList.remove("armed");
+        renderS1();
+      }, 5000)
+    );
   }
 
-  async function decide(state, d, reason = "", by = "me") {
-    if (!App.target.editable) return st("This library is read-only.");
-    await ZR.Store.decide({
-      libraryID: App.target.libraryID,
-      item: state.item,
-      stage: stage(),
-      d,
-      r: d === "exclude" ? reason || $("reason-select")?.value || "" : "",
-      by,
-      collectionKey: App.target.collectionKey,
-    });
-    // Advance to the next undecided paper in the list
-    if (d) {
-      const list = filtered();
-      const idx = list.findIndex((i) => i.item.id === state.item.id);
-      const next = list.slice(idx + 1).find((i) => !i[stage()]) || list.find((i) => !i[stage()] && i.item.id !== state.item.id);
-      currentID = next ? next.item.id : state.item.id;
-    }
+  async function saveThresholds() {
+    const p = project();
+    let low = Math.max(0, Math.min(100, parseInt($("s1-low").value, 10) || 0)) / 100;
+    let high = Math.max(0, Math.min(100, parseInt($("s1-high").value, 10) || 100)) / 100;
+    if (low > high) [low, high] = [high, low];
+    p.funnel = { excludeBelow: low, includeAbove: high };
+    await ZR.Projects.save(libraryID(), p);
     renderScreen();
   }
 
-  function onKey(e) {
-    if (App.currentTab !== "review" || (step !== "ta" && step !== "ft")) return;
-    if (/^(INPUT|TEXTAREA)$/.test(e.target.tagName) || e.ctrlKey || e.metaKey || e.altKey) return;
-    const list = filtered();
-    const state = list.find((i) => i.item.id === currentID);
-    const key = e.key.toLowerCase();
-    if (key === "arrowdown" || key === "j" || key === "arrowup" || key === "k") {
-      const idx = list.findIndex((i) => i.item.id === currentID);
-      const next = list[Math.max(0, Math.min(list.length - 1, idx + (key === "arrowdown" || key === "j" ? 1 : -1)))];
-      if (next) {
-        currentID = next.item.id;
-        renderScreen();
-      }
-      e.preventDefault();
-      return;
+  async function rateS1() {
+    const p = project();
+    if (!protocolFilled(p.protocol)) return st("Write the protocol first (step 1): System 1 rates each paper against your research questions and criteria.");
+    const pop = population();
+    const unrated = pop.filter((c) => !c.s1);
+    const list = unrated.length ? unrated : pop;
+    if (!list.length) return st("The pool is empty — add papers in step 2 first.");
+    const eng = ZR.System1.engine();
+    App.setBusy("review", true);
+    let failed = 0;
+    let lastError = "";
+    try {
+      st(`System 1 (${ENGINE_NAMES[eng]}) is rating ${list.length} paper(s)…`);
+      const res = await ZR.System1.score(list, p.protocol, {
+        engine: eng,
+        onProgress: (d, n) => st(`System 1 (${ENGINE_NAMES[eng]}) rated ${d}/${n}…`),
+        onError: (c, e) => (failed++, (lastError = e.message)),
+      });
+      await ZR.Projects.setScores(libraryID(), p.id, "s1", res);
+      for (const c of list) if (res[c.key]) c.s1 = res[c.key];
+      const n = Object.keys(res).length;
+      st(`Rated ${n} paper(s) with ${ENGINE_NAMES[eng]}${failed ? ` — ${failed} failed: ${lastError}` : ""}. Papers are sorted by probability; set the thresholds to settle the clear cases.`);
+    } catch (e) {
+      st("Rating failed: " + e.message);
+    } finally {
+      App.setBusy("review", false);
+      renderScreen();
     }
-    if (!state) return;
-    if (/^[1-9]$/.test(key)) {
-      const sel = $("reason-select");
-      if (sel && sel.options[Number(key) - 1]) sel.selectedIndex = Number(key) - 1;
-      e.preventDefault();
-    } else if (key === "i") decide(state, "include");
-    else if (key === "m" && stage() === "ta") decide(state, "maybe");
-    else if (key === "e") decide(state, "exclude", $("reason-select")?.value);
   }
 
-  async function aiSuggest() {
+  async function bulk(kind) {
+    const p = project();
+    const { excludeBelow, includeAbove } = thresholds();
+    const todo = population().filter((c) => !c.ta && c.s1);
+    const list = kind === "exclude" ? todo.filter((c) => c.s1.p < excludeBelow) : todo.filter((c) => c.s1.p >= includeAbove);
+    if (!list.length) return;
+    if (!App.target.editable) return st("This library is read-only.");
+    App.setBusy("review", true);
+    let n = 0;
+    try {
+      for (const c of list) {
+        const r = kind === "exclude" ? (c.s1.suggest?.d === "exclude" && c.s1.suggest.r) || p.protocol.reasons?.[0] || "Off topic" : "";
+        await decide(c, kind, r, "s1", { advance: false, render: false });
+        if (++n % 5 === 0) st(`${kind === "exclude" ? "Excluding" : "Including"} ${n}/${list.length}…`);
+      }
+      st(`${kind === "exclude" ? "Excluded" : "Included"} ${n} paper(s) by System 1 threshold — marked “by System 1”; you can change any of them.${kind === "include" ? " They were added to the collection." : ""}`);
+    } catch (e) {
+      Zotero.logError(e);
+      st(`Stopped after ${n}: ${e.message}`);
+    } finally {
+      App.setBusy("review", false);
+      renderScreen();
+    }
+  }
+
+  async function fullText(c) {
+    if (!c.itemID) return "";
+    const item = Zotero.Items.get(c.itemID);
+    const att = item
+      ?.getAttachments()
+      .map((id) => Zotero.Items.get(id))
+      .find((a) => a?.isFileAttachment());
+    try {
+      return att ? (await att.attachmentText) || "" : "";
+    } catch (e) {
+      return ""; // not indexed yet
+    }
+  }
+
+  /** The protocol in the shape Assist.screenCriteria expects. */
+  function criteriaOf(protocol) {
+    const fw = ZR.Methodologies.FRAMEWORKS[protocol.framework];
+    const parts = (fw?.fields || []).filter((f) => protocol.frameworkFields?.[f.id]).map((f) => `${f.label}: ${protocol.frameworkFields[f.id]}`);
+    return {
+      question: [(protocol.questions || []).join(" "), protocol.objective, parts.join("; ")].filter(Boolean).join(" — "),
+      include: (protocol.inclusion || []).join("; "),
+      exclude: (protocol.exclusion || []).join("; "),
+      reasons: protocol.reasons,
+    };
+  }
+
+  async function aiUncertain() {
     let profile;
     try {
       profile = App.profile();
     } catch (e) {
       return st(e.message);
     }
-    const todo = filtered().filter((i) => !i[stage()]);
-    if (!todo.length) return st("Nothing undecided in this list.");
+    const p = project();
+    const s = dstage();
+    const todo = uncertain();
+    if (!todo.length) return st("No uncertain papers left in this step.");
     App.setBusy("review", true);
     try {
       const papers = [];
-      for (const i of todo) {
-        const item = i.item;
-        let fulltext = "";
-        if (stage() === "ft") {
-          const att = item.getAttachments().map((id) => Zotero.Items.get(id)).find((a) => a?.isFileAttachment());
-          try {
-            fulltext = att ? (await att.attachmentText) || "" : "";
-          } catch (e) {
-            /* not indexed yet */
-          }
-        }
-        papers.push({ title: item.getField("title"), year: ZR.Util.yearOf(item.getField("date")), venue: item.getField("publicationTitle"), abstract: item.getField("abstractNote"), fulltext });
-      }
-      const out = await ZR.Assist.screenCriteria(profile, App.review, papers, stage(), { onProgress: (d, n) => st(`AI is reading ${d}/${n}…`) });
-      let n = 0;
-      for (let k = 0; k < todo.length; k++) {
-        if (!out[k]) continue;
-        suggestions.set(`${todo[k].item.key}|${stage()}`, out[k]);
-        await ZR.Store.setSuggestion(App.target.libraryID, todo[k].item.key, stage(), out[k]);
-        n++;
-      }
-      st(`AI suggested decisions for ${n} of ${todo.length} papers — they are marked with a ring. Review them, or accept the confident ones.`);
+      for (const c of todo) papers.push({ title: c.title, year: c.year, venue: c.venue, abstract: c.abstract, fulltext: s === "ft" ? await fullText(c) : "" });
+      const out = await ZR.Assist.screenCriteria(profile, criteriaOf(p.protocol), papers, s, { onProgress: (d, n) => st(`The AI is reading ${d}/${n}…`) });
+      const map = {};
+      todo.forEach((c, k) => {
+        if (!out[k]) return;
+        c.llm = map[c.key] = Object.assign({ stage: s, at: today(), model: profile.model }, out[k]);
+      });
+      await ZR.Projects.setScores(libraryID(), p.id, "llm", map);
+      st(`The AI suggested decisions for ${Object.keys(map).length} of ${todo.length} paper(s) — marked with a ring. Check them, or accept the confident ones.`);
     } catch (e) {
       st("AI suggestions failed: " + e.message);
     } finally {
@@ -352,39 +691,421 @@ App.panels.review = (() => {
   }
 
   async function aiAccept() {
-    const todo = filtered().filter((i) => !i[stage()]);
+    const s = dstage();
+    const list = population().filter((c) => !c[s] && (suggestion(c)?.c ?? 0) >= 0.8);
+    App.setBusy("review", true);
     let n = 0;
-    for (const i of todo) {
-      const sg = suggestions.get(`${i.item.key}|${stage()}`);
-      if (!sg || (sg.c ?? 0) < 0.8) continue;
-      await ZR.Store.decide({ libraryID: App.target.libraryID, item: i.item, stage: stage(), d: sg.d, r: sg.r, by: "llm", collectionKey: App.target.collectionKey });
-      n++;
+    try {
+      for (const c of list) {
+        await decide(c, c.llm.d, c.llm.r, "llm", { advance: false, render: false });
+        n++;
+      }
+    } finally {
+      App.setBusy("review", false);
     }
-    st(n ? `Accepted ${n} confident AI suggestion(s). They are recorded as “by AI”.` : "No undecided suggestions with ≥ 80 % confidence.");
+    st(n ? `Accepted ${n} confident AI suggestion(s) — recorded as “by AI”.` : "No undecided suggestions with ≥ 80 % confidence.");
     renderScreen();
   }
 
-  // --------------------------------------------------------------- PRISMA ----
-  let lastSVG = "";
-  async function renderPrisma() {
-    const c = await ZR.Prisma.counts(App.target.libraryID, collection());
-    lastSVG = ZR.Prisma.svg(c, { title: `PRISMA 2020 — ${App.target.label.split(" › ").pop()}` });
+  async function findPDFs() {
+    const list = population().filter((c) => c.itemID && !c.hasPDF && !c.ft);
+    App.setBusy("review", true);
+    let found = 0;
+    try {
+      for (const [i, c] of list.entries()) {
+        st(`Looking for PDFs ${i + 1}/${list.length}…`);
+        if (await ZR.Importer.attachFullText(Zotero.Items.get(c.itemID))) {
+          c.hasPDF = true;
+          found++;
+        }
+      }
+      st(`Found ${found} of ${list.length} PDF(s). For the rest, attach the file by hand or exclude with “Full text not available”.`);
+    } finally {
+      App.setBusy("review", false);
+      renderScreen();
+    }
+  }
+
+  function renderCard(c) {
+    const box = $("screen-card");
+    box.replaceChildren();
+    const s = dstage();
+    if (!c) {
+      const pop = population();
+      box.append(
+        el("div", { class: "empty-state" }, [
+          el("div", { class: "empty-title", text: pop.length ? "Nothing left in this list 🎉" : s === "ft" ? "No papers passed screening yet" : "The pool is empty" }),
+          el("div", {
+            text: pop.length
+              ? "Pick another filter, or continue with the next step."
+              : s === "ft"
+                ? "Include papers in the screening step first."
+                : "Find papers in step 2 — search results are collected here for screening.",
+          }),
+        ])
+      );
+      return;
+    }
+    const p = project();
+    const reasons = (p.protocol.reasons?.length ? p.protocol.reasons : ZR.Methodologies.DEFAULT_REASONS).slice();
+    const sg = suggestion(c);
+    const s1r = c.s1?.suggest?.d === "exclude" ? c.s1.suggest.r : "";
+    const pre = c.reason || (sg?.d === "exclude" && sg.r) || s1r || "";
+    if (pre && !reasons.includes(pre)) reasons.push(pre);
+    const current = c[s];
+    const reasonSel = el("select", { id: "reason-select", title: "Exclusion reason (keys 1–9)" }, reasons.map((r, i) => el("option", { value: r, text: `${i + 1}. ${ZR.Util.truncate(r, 60)}`, title: r, selected: r === pre })));
+    const link = c.doi ? "https://doi.org/" + c.doi : c.record?.url || "";
+    box.append(
+      el("div", { class: "paper-card" }, [
+        el("h2", { text: c.title || "(untitled)" }),
+        el("div", { class: "meta", text: [c.authors, c.year, c.venue].filter(Boolean).join(" · ") }),
+        el("div", { class: "actions" }, [
+          link ? el("button", { class: "link", text: c.doi ? "doi:" + c.doi : "web page ↗", onclick: () => Zotero.launchURL(link) }) : null,
+          c.itemID
+            ? el("button", { class: "link", text: "Show in Zotero", onclick: () => App.ZR.UI.revealItem(c.itemID, { preferCollectionID: App.target.collectionID }) })
+            : el("span", { class: "tag", text: "in the pool — added to Zotero when included", title: "Pool papers stay outside your library until they pass screening" }),
+          s === "ft" && c.itemID ? pdfButton(c) : null,
+        ]),
+        s1Box(c, s),
+        sg
+          ? el("div", { class: "ai-box" }, [
+              el("span", {}, [el("b", { text: `AI suggests: ${sg.d}` }), sg.r ? ` — ${sg.r}` : "", sg.c != null ? ` (${Math.round(sg.c * 100)}% sure)` : ""]),
+              el("span", { class: "hint", text: sg.why || "" }),
+              el("span", { class: "spacer" }),
+              el("button", { text: "Accept", onclick: () => decide(c, sg.d, sg.r, "llm") }),
+            ])
+          : null,
+        el("div", { class: "abstract", text: c.abstract || "No abstract available. Open the paper, or use “Fix metadata” in the Selected items tab once it is in Zotero." }),
+        el("div", { class: "decide" }, [
+          el("button", { class: "inc" + (current === "include" ? " on" : ""), onclick: () => decide(c, "include") }, ["Include", el("kbd", { text: "I" })]),
+          s === "ta" ? el("button", { class: "may" + (current === "maybe" ? " on" : ""), onclick: () => decide(c, "maybe") }, ["Maybe", el("kbd", { text: "M" })]) : null,
+          el("button", { class: "exc" + (current === "exclude" ? " on" : ""), onclick: () => decide(c, "exclude", reasonSel.value) }, ["Exclude", el("kbd", { text: "E" })]),
+          reasonSel,
+          el("span", { class: "spacer" }),
+          current ? el("button", { class: "link", text: `undo${c.by === "s1" ? " (System 1)" : c.by === "llm" ? " (AI)" : ""}`, onclick: () => decide(c, null) }) : null,
+          el("span", { class: "hint", text: "↑/↓ move" }),
+        ]),
+      ])
+    );
+  }
+
+  function s1Box(c, s) {
+    if (!c.s1 || s === "ft") return null;
+    const r = c.s1;
+    return el("div", { class: "s1-box" }, [
+      el("div", { class: "s1-top" }, [
+        el("b", { text: `System 1: ${pct(r.p)} likely to pass` }),
+        el("span", { class: "hint", text: `${ENGINE_NAMES[r.engine] || r.engine}${r.model ? " · " + r.model : ""}${r.at ? " · " + r.at : ""}` }),
+        el("span", { class: "spacer" }),
+        r.suggest && !c[s] ? el("button", { text: `Accept: ${r.suggest.d}`, title: r.suggest.r || "", onclick: () => decide(c, r.suggest.d, r.suggest.r, "s1") }) : null,
+      ]),
+      el("div", { class: "pbar" }, el("div", { class: band(r.p), style: `width:${Math.round(r.p * 100)}%` })),
+      r.criteria?.length || r.relevance != null
+        ? el("div", { class: "s1-crit" }, [
+            r.relevance != null && r.criteria?.length ? critRow("topic", "Relevant to the review question", r.relevance) : null,
+            ...(r.criteria || []).map((k) => critRow(k.kind, k.text, k.p)),
+          ])
+        : null,
+      r.why ? el("div", { class: "hint", text: r.why }) : null,
+    ]);
+  }
+
+  function critRow(kind, text, p) {
+    const label = { topic: "topic", include: "meets", exclude: "excl." }[kind];
+    // for exclusion criteria a high probability is bad
+    const cls = p == null ? "" : kind === "exclude" ? (p >= 0.6 ? "lo" : p < 0.3 ? "hi" : "md") : p >= 0.6 ? "hi" : p < 0.3 ? "lo" : "md";
+    return el("div", { class: "crit" }, [el("span", { class: "crit-k", text: label }), el("span", { class: "crit-t", text }), el("span", { class: "crit-p " + cls, text: pct(p) })]);
+  }
+
+  function pdfButton(c) {
+    const item = Zotero.Items.get(c.itemID);
+    const att = item
+      .getAttachments()
+      .map((id) => Zotero.Items.get(id))
+      .find((a) => a?.isFileAttachment());
+    if (att) return el("button", { text: "Open PDF", onclick: () => Zotero.Reader.open(att.id) });
+    return el("button", {
+      text: "Find PDF",
+      onclick: async (e) => {
+        e.target.disabled = true;
+        st("Looking for a PDF…");
+        const ok = await ZR.Importer.attachFullText(item);
+        c.hasPDF = !!ok;
+        st(ok ? "PDF attached." : "No legally accessible PDF found — attach one by hand, or exclude with “Full text not available”.");
+        renderScreen();
+      },
+    });
+  }
+
+  /**
+   * Record a decision. Including a pool paper at title/abstract stage adds it to Zotero.
+   * @param {"include"|"exclude"|"maybe"|null} d
+   */
+  async function decide(c, d, reason = "", by = "me", { advance = true, render = true } = {}) {
+    if (!App.target.editable) return st("This library is read-only.");
+    const p = project();
+    const s = dstage();
+    let item = c.itemID ? Zotero.Items.get(c.itemID) : null;
+    if (!item && d === "include" && s === "ta") {
+      const tag = ZR.Prefs.get("tagImported", true) ? ZR.Prefs.get("importTag", "zr:imported") : "";
+      item = await ZR.Projects.importCandidate(libraryID(), p, c, tag ? [tag] : []);
+      c.hasPDF = ZR.Prisma.itemHasPDF(item);
+    }
+    const r = d === "exclude" ? reason || $("reason-select")?.value || "" : "";
+    await ZR.Store.decide({ libraryID: libraryID(), key: c.key, item, title: c.title, stage: s, d, r, by, collectionKey: p.collectionKey });
+    c[s] = d;
+    c.reason = r;
+    c.by = d ? by : "";
+    if (advance && d) {
+      const list = filtered();
+      const idx = list.findIndex((x) => x.key === c.key);
+      const next = list.slice(idx + 1).find((x) => !x[s]) || list.find((x) => !x[s] && x.key !== c.key);
+      currentKey = next ? next.key : c.key;
+    }
+    if (render) renderScreen();
+  }
+
+  function onKey(e) {
+    if (App.currentTab !== "review" || (step !== "screen" && step !== "fulltext") || !project()) return;
+    if (/^(INPUT|TEXTAREA|SELECT)$/.test(e.target.tagName) || e.ctrlKey || e.metaKey || e.altKey || !$("np-layer").hidden) return;
+    const list = filtered();
+    const c = list.find((x) => x.key === currentKey);
+    const key = e.key.toLowerCase();
+    if (key === "arrowdown" || key === "j" || key === "arrowup" || key === "k") {
+      const idx = list.findIndex((x) => x.key === currentKey);
+      const next = list[Math.max(0, Math.min(list.length - 1, idx + (key === "arrowdown" || key === "j" ? 1 : -1)))];
+      if (next) {
+        currentKey = next.key;
+        renderScreen();
+      }
+      e.preventDefault();
+      return;
+    }
+    if (!c) return;
+    if (/^[1-9]$/.test(key)) {
+      const sel = $("reason-select");
+      if (sel && sel.options[Number(key) - 1]) sel.selectedIndex = Number(key) - 1;
+      e.preventDefault();
+    } else if (key === "i") decide(c, "include");
+    else if (key === "m" && dstage() === "ta") decide(c, "maybe");
+    else if (key === "e") decide(c, "exclude", $("reason-select")?.value);
+  }
+
+  // ------------------------------------------ quality / extraction / classify ----
+  function facetOf(line) {
+    const i = line.indexOf(":");
+    if (i < 0) return { name: line.trim(), options: [] };
+    return { name: line.slice(0, i).trim(), options: line.slice(i + 1).split(/[,;]/).map((s) => s.trim()).filter(Boolean) };
+  }
+
+  function tableSpec() {
+    const P = project().protocol;
+    if (step === "quality") return { field: "qa", cols: P.quality || [], title: "Answer each checklist question for every included paper: yes / partly / no.", empty: "quality checklist" };
+    if (step === "extract") return { field: "extract", cols: P.extraction || [], title: "Record the data extraction fields for every included paper.", empty: "data extraction fields" };
+    const facets = (P.facets || []).map(facetOf);
+    return { field: "extract", cols: facets.map((f) => f.name), facets, title: "Classify every included paper along the facets of your map.", empty: "classification facets" };
+  }
+
+  const tableRows = () => cands.filter((c) => ZR.Projects.inStage(project(), step, c));
+
+  function renderTable() {
+    const spec = tableSpec();
+    const rows = tableRows();
+    const body = $("rv-table-body");
+    $("rv-table-title").textContent = spec.title;
+    body.replaceChildren();
+    $("rv-table-ai").disabled = App.busy || !spec.cols.length || !rows.length;
+    $("rv-table-csv").disabled = !rows.length;
+    if (!spec.cols.length) {
+      body.append(el("div", { class: "empty-state" }, [el("div", { class: "empty-title", text: `No ${spec.empty} in the protocol yet` }), el("div", {}, el("button", { class: "primary", text: "Edit the protocol", onclick: () => ((protocolMode = "form"), go("protocol")) }))]));
+      return;
+    }
+    if (!rows.length) {
+      body.append(el("div", { class: "empty-state" }, [el("div", { class: "empty-title", text: "No papers have reached this step yet" }), el("div", { text: "Papers appear here once they pass screening." })]));
+      return;
+    }
+    const cell = (c, i) => {
+      const col = spec.cols[i];
+      if (spec.field === "qa") {
+        const a = c.qa?.[i];
+        return el("td", { title: a?.why ? `${a.why}${a.by === "llm" ? " (AI)" : ""}` : "" }, el("select", { class: "qa " + (a?.a || ""), onchange: (e) => setCell(c, spec, i, e.target.value) }, ["", "yes", "partly", "no"].map((v) => el("option", { value: v, text: v || "–", selected: (a?.a || "") === v }))));
+      }
+      const v = c.extract?.[col] || "";
+      const options = spec.facets?.[i]?.options || [];
+      if (options.length) {
+        const opts = v && !options.includes(v) ? [...options, v] : options;
+        return el("td", {}, el("select", { onchange: (e) => setCell(c, spec, i, e.target.value) }, ["", ...opts].map((o) => el("option", { value: o, text: o || "–", selected: o === v }))));
+      }
+      const t = el("textarea", { rows: "2", onchange: (e) => setCell(c, spec, i, e.target.value.trim()) });
+      t.value = v;
+      return el("td", {}, t);
+    };
+    body.append(
+      el("table", { class: "grid" }, [
+        el("thead", {}, el("tr", {}, [el("th", { text: "Paper" }), ...spec.cols.map((x) => el("th", { text: x, title: x }))])),
+        el(
+          "tbody",
+          {},
+          rows.map((c) =>
+            el("tr", {}, [
+              el("td", { class: "g-paper" }, [
+                c.itemID ? el("a", { href: "#", text: c.title, onclick: (e) => (e.preventDefault(), App.ZR.UI.revealItem(c.itemID, { preferCollectionID: App.target.collectionID })) }) : el("span", { text: c.title }),
+                el("div", { class: "hint", text: [c.authors, c.year].filter(Boolean).join(" · ") }),
+              ]),
+              ...spec.cols.map((_, i) => cell(c, i)),
+            ])
+          )
+        ),
+      ])
+    );
+  }
+
+  let poolTimer = null;
+  function savePoolSoon() {
+    clearTimeout(poolTimer);
+    poolTimer = setTimeout(() => ZR.Projects.savePool(libraryID(), project().id).catch((e) => Zotero.logError(e)), 400);
+  }
+
+  async function setCell(c, spec, i, value, by = "me") {
+    const pool = await ZR.Projects.loadPool(libraryID(), project().id);
+    if (spec.field === "qa") {
+      const arr = (pool.qa[c.key] = pool.qa[c.key] || spec.cols.map(() => null));
+      arr[i] = value ? { a: value, why: typeof by === "object" ? by.why : "", by: typeof by === "object" ? "llm" : by } : null;
+      c.qa = arr;
+    } else {
+      const o = (pool.extract[c.key] = pool.extract[c.key] || {});
+      o[spec.cols[i]] = value;
+      c.extract = o;
+    }
+    savePoolSoon();
+    renderSteps();
+  }
+
+  async function paperFor(c) {
+    return { title: c.title, year: c.year, abstract: c.abstract, fulltext: await fullText(c) };
+  }
+
+  async function tableAI() {
+    let profile;
+    try {
+      profile = App.profile();
+    } catch (e) {
+      return st(e.message);
+    }
+    const spec = tableSpec();
+    const filled = (c) => (spec.field === "qa" ? spec.cols.every((_, i) => c.qa?.[i]) : spec.cols.every((x) => c.extract?.[x]));
+    const rows = tableRows().filter((c) => !filled(c));
+    if (!rows.length) return st("Every cell is filled already. Clear a cell to have the AI fill it again.");
+    App.setBusy("review", true);
+    let done = 0;
+    let failed = 0;
+    try {
+      await ZR.Util.mapLimit(rows, 3, async (c) => {
+        try {
+          const paper = await paperFor(c);
+          if (spec.field === "qa") {
+            const answers = await ZR.Assist.assessQuality(profile, spec.cols, paper);
+            for (const [i, a] of answers.entries()) if (a && !c.qa?.[i]) await setCell(c, spec, i, a.a, { why: a.why });
+          } else {
+            // Facets with categories become "Name (one of: a, b, c)" so the answer is a category
+            const asked = spec.cols.map((x, i) => (spec.facets?.[i]?.options.length ? `${x} (one of: ${spec.facets[i].options.join(", ")})` : x));
+            const out = await ZR.Assist.extractFields(profile, asked, paper);
+            for (const [i, q] of asked.entries()) if (out[q] && !c.extract?.[spec.cols[i]]) await setCell(c, spec, i, out[q]);
+          }
+        } catch (e) {
+          failed++;
+          ZR.Util.log("Table AI failed", c.title, e.message);
+        }
+        st(`The AI filled ${++done}/${rows.length} paper(s)…`);
+      });
+      st(`The AI filled ${done - failed} paper(s)${failed ? `, ${failed} failed` : ""}. It used the full text where Zotero has indexed it, otherwise the abstract — check the values.`);
+    } finally {
+      App.setBusy("review", false);
+      renderTable();
+    }
+  }
+
+  async function tableCSV() {
+    const spec = tableSpec();
+    const q = (v) => `"${String(v ?? "").replace(/"/g, '""')}"`;
+    const lines = [["Title", "Authors", "Year", "DOI", ...spec.cols].map(q).join(",")];
+    for (const c of tableRows()) {
+      const vals = spec.field === "qa" ? spec.cols.map((_, i) => c.qa?.[i]?.a || "") : spec.cols.map((x) => c.extract?.[x] || "");
+      lines.push([c.title, c.authors, c.year, c.doi, ...vals].map(q).join(","));
+    }
+    const name = `${project().name.replace(/[^\w-]+/g, "_")}-${step}.csv`;
+    const f = await App.saveFile("﻿" + lines.join("\r\n"), name, "CSV", "*.csv");
+    if (f) st("Saved " + f);
+  }
+
+  // --------------------------------------------------------------- report ----
+  function counts() {
+    const p = project();
+    const hasFT = method().stages.includes("fulltext");
+    // Without a full-text step, title/abstract inclusion is the final decision
+    const items = cands.map((c) => ({ ta: c.ta, ft: hasFT ? c.ft : c.ta === "include" ? "include" : null, reason: c.reason, hasPDF: hasFT ? c.hasPDF : true }));
+    return ZR.Prisma.countsFromData(p.runs || [], items, (id) => ZR.Sources.get(id)?.name || id);
+  }
+
+  async function renderReport() {
+    const c = counts();
+    lastSVG = ZR.Prisma.svg(c, { title: `${method().name} — ${project().name}` });
     const doc = new DOMParser().parseFromString(lastSVG, "image/svg+xml");
-    $("prisma-view").replaceChildren(document.importNode(doc.documentElement, true));
+    const view = $("prisma-view");
+    view.replaceChildren(document.importNode(doc.documentElement, true));
+    if (method().stages.includes("classify")) view.append(facetSummary());
     st(c.pendingTA || c.pendingFT ? `Still to do: ${c.pendingTA} title/abstract and ${c.pendingFT} full-text decision(s).` : "All papers screened.");
   }
 
+  function facetSummary() {
+    const facets = (project().protocol.facets || []).map(facetOf);
+    const rows = cands.filter((c) => ZR.Projects.inStage(project(), "classify", c));
+    const box = el("div", { class: "facet-summary" });
+    for (const f of facets) {
+      const n = {};
+      for (const c of rows) {
+        const v = c.extract?.[f.name] || "(not classified)";
+        n[v] = (n[v] || 0) + 1;
+      }
+      box.append(el("h3", { text: f.name }), el("table", { class: "runs" }, Object.entries(n).sort((a, b) => b[1] - a[1]).map(([k, v]) => el("tr", {}, [el("td", { text: k }), el("td", { text: String(v) })]))));
+    }
+    return box;
+  }
+
+  const esc = (s) => String(s ?? "").replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+
+  /** The protocol as note HTML — the documented method for the paper or thesis. */
+  function protocolHTML(p) {
+    const P = p.protocol;
+    const m = method();
+    const list = (a) => (a?.length ? `<ul>${a.map((x) => `<li>${esc(x)}</li>`).join("")}</ul>` : "<p>—</p>");
+    const fw = ZR.Methodologies.FRAMEWORKS[P.framework];
+    return (
+      `<h1>${esc(P.title || p.name)}</h1>` +
+      `<p><strong>Methodology:</strong> ${esc(m.name)} (${esc(m.reference)})</p>` +
+      (P.objective ? `<p><strong>Objective:</strong> ${esc(P.objective)}</p>` : "") +
+      `<h2>Research questions</h2>${list(P.questions)}` +
+      (fw?.fields.length ? `<h2>${esc(fw.name)}</h2><ul>${fw.fields.map((f) => `<li><strong>${esc(f.label)}:</strong> ${esc(P.frameworkFields?.[f.id] || "—")}</li>`).join("")}</ul>` : "") +
+      `<h2>Inclusion criteria</h2>${list(P.inclusion)}<h2>Exclusion criteria</h2>${list(P.exclusion)}` +
+      `<h2>Search</h2><p><code>${esc(P.query || "—")}</code></p><p>Years: ${P.yearFrom || "…"}–${P.yearTo || "…"}; languages: ${esc(P.languages.join(", ") || "any")}; types: ${esc(P.types.join(", ") || "any")}</p>` +
+      `<p><em>Screening support: System 1 relevance probabilities (${esc(ENGINE_NAMES[ZR.System1.engine()])}) with thresholds ${Math.round(thresholds().excludeBelow * 100)}% / ${Math.round(thresholds().includeAbove * 100)}%; decisions by System 1, the AI or the reviewer are recorded per paper.</em></p>`
+    );
+  }
+
   async function saveNote() {
-    const c = await ZR.Prisma.counts(App.target.libraryID, collection());
-    await ZR.Importer.createNote(ZR.Prisma.noteHTML(c, App.review, App.target.label), { libraryID: App.target.libraryID, collectionID: App.target.collectionID });
-    st("PRISMA summary saved as a note in the collection.");
+    if (!App.target.editable) return st("This library is read-only.");
+    const p = project();
+    const c = counts();
+    const legacy = Object.assign(criteriaOf(p.protocol), { runs: p.runs });
+    await ZR.Importer.createNote(protocolHTML(p) + ZR.Prisma.noteHTML(c, legacy, p.name), { libraryID: libraryID(), collectionID: App.target.collectionID });
+    st("Protocol and flow summary saved as a note in the collection.");
   }
 
   async function exportSVG() {
-    if (!lastSVG) await renderPrisma();
+    if (!lastSVG) await renderReport();
     const f = await App.saveFile(lastSVG, "prisma-flow.svg", "SVG image", "*.svg");
     if (f) st("Saved " + f);
   }
 
-  return { init, onShow, refresh };
+  return { init, onShow, refresh, reset, go, get step() { return step; }, get candidates() { return cands; } };
 })();

@@ -22,7 +22,8 @@ const App = (window.App = {
   ZR: null,
   args: null,
   target: null,
-  review: null, // PRISMA review config when the target collection is a review
+  project: null, // current project (lib/projects.js): remembers search settings, history and review
+  projects: [],
   busy: false,
   panels: {}, // name -> {init(), onShow()}
   currentTab: "search",
@@ -35,7 +36,7 @@ const App = (window.App = {
   setBusy(which, on) {
     App.busy = on;
     for (const b of document.querySelectorAll("button[data-busy]")) b.disabled = on;
-    for (const id of ["run", "import", "fix-meta", "fix-meta-ai", "find-pdfs", "find-related", "compare-run", "apply-all", "cite-scan", "cite-missing", "ai-suggest", "ai-accept", "rv-create"]) {
+    for (const id of ["run", "import", "fix-meta", "fix-meta-ai", "find-pdfs", "find-related", "compare-run", "apply-all", "cite-scan", "cite-missing", "ai-uncertain", "ai-accept", "s1-rate", "rv-fill", "rv-save", "rv-start-btn", "rv-table-ai", "np-create"]) {
       const b = $(id);
       if (b) b.disabled = on || (b.dataset.disabledReason ? true : false);
     }
@@ -82,11 +83,108 @@ const App = (window.App = {
     return App.target.collectionID ? Zotero.Collections.get(App.target.collectionID) : null;
   },
 
-  async refreshReview() {
-    App.review = App.target.collectionKey ? await App.ZR.Store.getReview(App.target.libraryID, App.target.collectionKey) : null;
-    $("review-pill").hidden = !App.review;
-    $("review-pill").textContent = "active";
-    App.panels.search.updateImportBar?.();
+  /** Where papers go. Changes when a project bound to another collection is chosen. */
+  setTarget(t) {
+    App.target = t;
+    $("target").replaceChildren("Adding to ", el("b", { text: t.label }));
+    $("target").classList.toggle("readonly", !t.editable);
+    $("target").title = t.editable ? "Where papers are added" : "This library or collection is read-only — adding papers is disabled";
+    const empty = $("empty-target");
+    if (empty) empty.textContent = t.label;
+  },
+
+  /** Load the library's projects and pick the one for the current collection. */
+  async loadProjects(preferID) {
+    App.projects = await App.ZR.Projects.list(App.target.libraryID);
+    let p = preferID ? App.projects.find((x) => x.id === preferID) : null;
+    if (!p && App.project) p = App.projects.find((x) => x.id === App.project.id);
+    if (!p && App.target.collectionKey) p = App.projects.find((x) => x.collectionKey === App.target.collectionKey);
+    App.project = p || null;
+    App.renderProjects();
+  },
+
+  renderProjects() {
+    const sel = $("project-select");
+    const opts = [el("option", { value: "", text: "No project", title: "Search without remembering settings in a project" })];
+    for (const p of App.projects) {
+      const m = p.kind === "review" ? App.ZR.Methodologies.get(p.methodology) : null;
+      opts.push(el("option", { value: p.id, text: `${p.kind === "review" ? "◆" : "○"} ${p.name}`, title: m ? `Structured review · ${m.name}` : "Quick search project" }));
+    }
+    opts.push(el("option", { value: "__new", text: "+ New project…" }));
+    sel.replaceChildren(...opts);
+    sel.value = App.project?.id || "";
+    const review = App.project?.kind === "review";
+    $("review-pill").hidden = !review;
+    $("review-pill").textContent = review ? App.ZR.Methodologies.get(App.project.methodology)?.id.replace("prisma2020", "PRISMA") || "on" : "";
+    App.panels.search?.updateImportBar?.();
+  },
+
+  async switchProject(id) {
+    if (id === "__new") {
+      $("project-select").value = App.project?.id || "";
+      return App.newProject();
+    }
+    const p = App.projects.find((x) => x.id === id) || null;
+    App.project = p;
+    if (p?.collectionKey && p.collectionKey !== App.target.collectionKey) {
+      const t = App.ZR.UI.targetFor(App.target.libraryID, p.collectionKey);
+      if (t) App.setTarget(t);
+      else App.status("search", `The collection of “${p.name}” no longer exists — papers go to ${App.target.label}.`);
+    }
+    App.renderProjects();
+    App.panels.review.reset();
+    App.panels.search.loadProject();
+    await App.panels[App.currentTab]?.onShow?.();
+  },
+
+  /** New-project dialog (in-window, no modal window). */
+  newProject(kind = "quick") {
+    const t = App.target;
+    const col = t.collectionKey ? t.label.split(" › ").pop() : "";
+    const taken = col && App.projects.find((p) => p.collectionKey === t.collectionKey);
+    $("np-name").value = col && !taken ? col : "";
+    for (const r of document.querySelectorAll('input[name="np-kind"]')) r.checked = r.value === kind;
+    const use = document.querySelector('input[name="np-col"][value="use"]');
+    use.disabled = !col || !!taken;
+    use.checked = !use.disabled;
+    document.querySelector('input[name="np-col"][value="new"]').checked = use.disabled;
+    $("np-use-label").textContent = !col ? "Use the current collection (none selected — you are in the library root)" : taken ? `Use “${col}” (already belongs to project “${taken.name}”)` : `Use the current collection “${col}”`;
+    $("np-layer").hidden = false;
+    setTimeout(() => $("np-name").focus(), 0);
+  },
+
+  async createProject() {
+    const ZR = App.ZR;
+    const name = $("np-name").value.trim();
+    if (!name) return $("np-name").focus();
+    const kind = document.querySelector('input[name="np-kind"]:checked').value;
+    const newCol = document.querySelector('input[name="np-col"]:checked').value === "new";
+    const library = Zotero.Libraries.get(App.target.libraryID);
+    if (!library.editable) return App.status("search", "This library is read-only.");
+    let collectionKey = App.target.collectionKey;
+    if (newCol) {
+      const col = new Zotero.Collection();
+      col.libraryID = App.target.libraryID;
+      col.name = name;
+      await col.saveTx();
+      collectionKey = col.key;
+    }
+    const p = await ZR.Projects.create(App.target.libraryID, {
+      name,
+      kind,
+      collectionKey,
+      methodology: "prisma2020",
+      // a new quick project starts from the current search settings
+      search: kind === "quick" ? App.panels.search.currentState() : {},
+    });
+    if (newCol) App.setTarget(ZR.UI.targetFor(App.target.libraryID, collectionKey));
+    $("np-layer").hidden = true;
+    await App.loadProjects(p.id);
+    App.panels.review.reset();
+    App.panels.search.loadProject();
+    if (kind === "review") return App.showTab("review");
+    App.status("search", `Project “${name}” created: its search settings and history are remembered.`);
+    await App.panels[App.currentTab]?.onShow?.();
   },
 
   async saveFile(content, defaultName, filterTitle, pattern) {
@@ -117,18 +215,18 @@ async function init() {
   App.args = raw?.wrappedJSObject || raw || { target: App.ZR.UI.getTarget(Zotero.getMainWindow()), itemIDs: [], tab: "search" };
   App.target = App.args.target;
 
-  const t = App.target;
-  $("target").replaceChildren("Adding to ", el("b", { text: t.label }));
-  if (!t.editable) {
-    $("target").classList.add("readonly");
-    $("target").title = "This library or collection is read-only — adding papers is disabled";
-  }
+  App.setTarget(App.target);
   $("sel-count").textContent = String(App.args.itemIDs.length);
   for (const b of document.querySelectorAll(".tab")) b.addEventListener("click", () => App.showTab(b.dataset.tab));
   $("open-prefs").addEventListener("click", () => App.ZR.UI.openPreferences());
   $("help").addEventListener("click", () => Tour.start());
+  $("project-select").addEventListener("change", (e) => App.switchProject(e.target.value).catch((err) => (Zotero.logError(err), App.status("search", err.message))));
+  $("np-cancel").addEventListener("click", () => ($("np-layer").hidden = true));
+  $("np-create").addEventListener("click", () => App.createProject().catch((err) => (Zotero.logError(err), App.status("search", "Could not create the project: " + err.message))));
+  $("np-name").addEventListener("keydown", (e) => e.key === "Enter" && $("np-create").click());
+  document.addEventListener("keydown", (e) => e.key === "Escape" && !$("np-layer").hidden && ($("np-layer").hidden = true));
 
-  await App.refreshReview();
+  await App.loadProjects();
   for (const p of Object.values(App.panels)) await p.init?.();
 
   // Pick up settings changes (new AI profile, research areas, keys) when the window regains focus.
@@ -177,13 +275,12 @@ App.panels.search = (() => {
     );
   }
 
-  function init() {
-    ZR = App.ZR;
-    const s = ZR.Prefs.getJSON("dialogState", {});
+  /** Put saved search settings (last dialog state, or a project's) into the form. */
+  function applyState(s) {
     const lastMode = s.mode || ZR.Prefs.get("defaultMode", "structured");
     setMode(lastMode === "structured" ? "structured" : "llm");
-    for (const b of $("mode-seg").children) b.addEventListener("click", () => setMode(b.dataset.mode));
     $("query").value = s.query || "";
+    lastCompiled = null;
     $("request").value = s.request || "";
     $("year-from").value = s.yearFrom || "";
     $("year-to").value = s.yearTo || "";
@@ -193,12 +290,10 @@ App.panels.search = (() => {
     $("strict").checked = !!s.strict;
     $("skip-existing").checked = s.skipExisting ?? true;
     $("hide-excluded").checked = !!s.hideExcluded;
-    $("attach-pdfs").checked = ZR.Prefs.get("attachPDFs", true);
-    $("protocol").checked = ZR.Prefs.get("searchProtocolNote", true);
-    $("tag").value = ZR.Prefs.get("tagImported", true) ? ZR.Prefs.get("importTag", "zr:imported") : "";
     $("screen").checked = s.screen ?? true;
-    $("min-score").value = ZR.Prefs.get("llmScreeningMinScore", 6);
     $("auto-import").checked = s.mode === "yolo";
+    pickedLangs.clear();
+    pickedTypes.clear();
     for (const l of s.languages || []) pickedLangs.add(l);
     for (const t of s.types || []) pickedTypes.add(t);
     renderPicks("lang-picks", ZR.Records.LANGUAGES.map((l) => ({ id: l.code, label: l.name })), pickedLangs);
@@ -207,12 +302,39 @@ App.panels.search = (() => {
     $("has-abstract").checked = !!s.hasAbstract;
     $("has-doi").checked = !!s.hasDOI;
     $("res-sort").value = s.sort || "relevance";
+    renderSources(s.sources);
+    setView(s.kwView || kwView || "builder");
+    $("run").textContent = getMode() === "llm" && $("auto-import").checked ? "Search & add" : "Search";
+    validateQuery();
+    updateChips();
+  }
+
+  /** Search settings of the current project on top of the last dialog state. */
+  function stateForProject() {
+    const s = ZR.Prefs.getJSON("dialogState", {});
+    const ps = App.project?.search;
+    return ps && Object.keys(ps).length ? Object.assign({}, s, ps) : s;
+  }
+
+  /** Called when the project changes: load its search settings. */
+  function loadProject() {
+    if (!ZR) return;
+    applyState(stateForProject());
+    updateImportBar();
+  }
+
+  function init() {
+    ZR = App.ZR;
+    for (const b of $("mode-seg").children) b.addEventListener("click", () => setMode(b.dataset.mode));
+    $("attach-pdfs").checked = ZR.Prefs.get("attachPDFs", true);
+    $("protocol").checked = ZR.Prefs.get("searchProtocolNote", true);
+    $("tag").value = ZR.Prefs.get("tagImported", true) ? ZR.Prefs.get("importTag", "zr:imported") : "";
+    $("min-score").value = ZR.Prefs.get("llmScreeningMinScore", 6);
     $("res-sort").addEventListener("change", () => (renderResults(), ZR.Prefs.setJSON("dialogState", Object.assign(ZR.Prefs.getJSON("dialogState", {}), { sort: $("res-sort").value }))));
     $("empty-target").textContent = App.target.label;
     App.fillProfileSelect($("llm-profile"));
-    renderSources(s.sources);
     for (const b of $("kw-view").children) b.addEventListener("click", () => setView(b.dataset.view));
-    setView(s.kwView || "builder");
+    applyState(stateForProject());
 
     $("query").addEventListener("input", validateQuery);
     $("query").addEventListener("keydown", (e) => e.key === "Enter" && !App.busy && run());
@@ -480,8 +602,20 @@ App.panels.search = (() => {
     };
   }
 
+  /** Current search settings (what a project remembers). */
+  function currentState() {
+    return stateOf(readOptions());
+  }
+
+  /** Remember the settings of a search: globally, and on the current project. */
   function saveState(o) {
-    ZR.Prefs.setJSON("dialogState", {
+    const s = stateOf(o);
+    ZR.Prefs.setJSON("dialogState", s);
+    if (App.project) ZR.Projects.rememberSearch(App.target.libraryID, App.project.id, s).catch((e) => Zotero.logError(e));
+  }
+
+  function stateOf(o) {
+    return {
       mode: o.mode,
       query: $("query").value.trim(),
       request: o.request,
@@ -502,7 +636,7 @@ App.panels.search = (() => {
       hasAbstract: o.hasAbstract,
       hasDOI: o.hasDOI,
       sort: $("res-sort").value,
-    });
+    };
   }
 
   async function run() {
@@ -528,6 +662,8 @@ App.panels.search = (() => {
     $("plan-box").hidden = true;
     try {
       lastRun = await ZR.Search.run(o, st);
+      // A review screens everything it finds (that is what the flow diagram counts)
+      if (App.project?.kind === "review") for (const r of lastRun.records) r.selected = true;
       if (lastRun.plan) showPlan(lastRun.plan);
       renderResults();
       const rm = Object.values(lastRun.removedByFilters || {}).reduce((a, b) => a + b, 0);
@@ -611,7 +747,7 @@ App.panels.search = (() => {
   }
 
   async function mark(r, value) {
-    const reasons = App.review?.reasons || ZR.Prisma.DEFAULT_REASONS;
+    const reasons = App.project?.protocol?.reasons?.length ? App.project.protocol.reasons : ZR.Prisma.DEFAULT_REASONS;
     const map = { relevant: ["include", ""], off: ["exclude", reasons[0]], weak: ["exclude", reasons.find((x) => /weak/i.test(x)) || "Weak / low quality"] };
     const [d, reason] = map[value] || [null, ""];
     await ZR.Store.decide({
@@ -715,12 +851,18 @@ App.panels.search = (() => {
   }
 
   function updateImportBar() {
+    if (!ZR) return;
     const n = lastRun ? lastRun.records.filter((r) => r.selected).length : 0;
     $("import-bar").hidden = !lastRun;
     $("results-count").textContent = lastRun ? `${lastRun.records.length} papers · ${n} selected` : "";
     const where = `“${App.target.label.split(" › ").pop()}”`;
-    $("import").textContent = App.review ? `Add ${n} to review for screening` : `Add ${n} to ${where}`;
-    $("import-summary").textContent = App.review ? "This collection is a PRISMA review: added papers are queued for screening and the search is logged." : $("attach-pdfs").checked ? "PDFs are downloaded where legally available." : "";
+    const review = App.project?.kind === "review";
+    $("import").textContent = review ? `Add ${n} to the screening pool` : `Add ${n} to ${where}`;
+    $("import-summary").textContent = review
+      ? `“${App.project.name}” is a structured review: papers go into its screening pool (not your library yet) and the search is logged.`
+      : $("attach-pdfs").checked
+        ? "PDFs are downloaded where legally available."
+        : "";
     $("import").dataset.disabledReason = !n || !App.target.editable ? "1" : "";
     $("import").disabled = App.busy || !n || !App.target.editable;
   }
@@ -732,15 +874,32 @@ App.panels.search = (() => {
     if (!recs.length) return st(auto ? "Automatic mode: nothing scored high enough — nothing was added." : "Nothing selected.");
     App.setBusy("search", true);
     try {
+      const libraryID = App.target.libraryID;
+      if (App.project?.kind === "review") {
+        // Review: into the candidate pool; papers reach Zotero when they pass screening
+        const { added, known } = await ZR.Projects.addToPool(libraryID, App.project.id, recs);
+        const run = ZR.Prisma.runRecord(Object.assign({}, lastRun, { imported: added, inLibraryCount: 0, deduped: Math.max(0, (lastRun.deduped ?? lastRun.records.length) - known) }));
+        await ZR.Projects.addRun(libraryID, App.project.id, run);
+        for (const r of recs) r.selected = false;
+        renderResults();
+        st(`${auto ? "Automatic mode: " : ""}Added ${added} paper(s) to the screening pool of “${App.project.name}”${known ? `, ${known} were already in it` : ""}. Screen them in the Review tab.`);
+        App.panels.review.reset();
+        return;
+      }
+      // Quick search: a collection remembers its searches in a project (created on first use)
+      if (!App.project && App.target.collectionKey) {
+        const name = App.target.label.split(" › ").pop();
+        App.project = await ZR.Projects.create(libraryID, { name, kind: "quick", collectionKey: App.target.collectionKey, search: currentState() });
+        await App.loadProjects(App.project.id);
+      }
       const tag = $("tag").value.trim();
       const stats = await ZR.Search.importRecords(
         lastRun,
         recs,
         {
-          libraryID: App.target.libraryID,
+          libraryID,
           collectionID: App.target.collectionID,
           collectionKey: App.target.collectionKey,
-          review: !!App.review,
           attachPDFs: $("attach-pdfs").checked,
           fulltextOnly: $("fulltext-only").checked,
           tags: tag ? [tag] : [],
@@ -748,6 +907,7 @@ App.panels.search = (() => {
         },
         st
       );
+      if (App.project) await ZR.Projects.addRun(libraryID, App.project.id, ZR.Prisma.runRecord(lastRun));
       for (const r of recs) r.selected = false;
       renderResults();
       st(
@@ -756,9 +916,8 @@ App.panels.search = (() => {
           (stats.withPDF ? `, ${stats.withPDF} with PDF` : "") +
           (stats.droppedNoPDF ? `, ${stats.droppedNoPDF} skipped (no PDF available)` : "") +
           (stats.failed ? `, ${stats.failed} failed (see Help → Debug Output)` : "") +
-          (App.review ? " — ready to screen in the Review tab." : "")
+          (App.project ? ` · logged in project “${App.project.name}”` : "")
       );
-      App.panels.review.refresh?.();
     } catch (e) {
       Zotero.logError(e);
       st("Adding failed: " + e.message);
@@ -768,5 +927,5 @@ App.panels.search = (() => {
     }
   }
 
-  return { init, renderSources, runRelated, showRecords, updateImportBar, setMode, setView, useQueryText, onShow: updateImportBar };
+  return { init, renderSources, runRelated, showRecords, updateImportBar, setMode, setView, useQueryText, loadProject, currentState, onShow: updateImportBar };
 })();

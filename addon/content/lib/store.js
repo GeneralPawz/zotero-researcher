@@ -36,7 +36,7 @@ ZR.Store = (() => {
 
   // ------------------------------------------------------------ pure helpers ----
   function emptyLedger() {
-    return { v: 1, decisions: {}, reviews: {}, llm: {}, cites: {} };
+    return { v: 1, decisions: {}, projects: {}, reviews: {}, llm: {}, cites: {} };
   }
 
   /** Stable identity of a paper across sources and sessions. */
@@ -100,7 +100,7 @@ ZR.Store = (() => {
     const s = prior.ft || prior.ta;
     if (!s) return "";
     const label = { include: "Included", exclude: "Excluded", maybe: "Marked maybe" }[s.d] || s.d;
-    return `${label}${prior.ft ? " (full text)" : ""}${s.at ? " " + s.at : ""}${s.r ? " — " + s.r : ""}${s.by === "llm" ? " · by AI" : ""}`;
+    return `${label}${prior.ft ? " (full text)" : ""}${s.at ? " " + s.at : ""}${s.r ? " — " + s.r : ""}${s.by === "llm" ? " · by AI" : s.by === "s1" ? " · by System 1" : ""}`;
   }
 
   // ---------------------------------------------------------- ledger storage ----
@@ -356,6 +356,7 @@ ZR.Store = (() => {
     describe,
     load,
     flush,
+    scheduleSave,
     flushAll,
     decisionFromItem,
     decide,
