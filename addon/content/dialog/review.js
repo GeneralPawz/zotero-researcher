@@ -1432,11 +1432,46 @@ App.panels.review = (() => {
 
   // PDFs of included papers are fetched one after another in the background
   let pdfChain = Promise.resolve();
+  // PDFs of papers included at screening download one after another in the background,
+  // as a job you can watch, pause and stop; a download that hangs is given up after 2 minutes.
+  let bgJob = null;
+  const PDF_TIMEOUT = 120000;
+  const inTime = (p, ms) => Promise.race([p, new Promise((_, reject) => setTimeout(() => reject(new Error(`no PDF within ${ms / 1000} s`)), ms))]);
   function fetchPDFLater(c, item) {
-    pdfChain = pdfChain
-      .then(() => (ZR.Activity.stopping ? false : ZR.Importer.attachFullText(item, c.record)))
-      .then((ok) => ok && (c.hasPDF = true))
-      .catch((e) => ZR.Util.log("Background PDF failed", e.message));
+    if (!bgJob || !["running", "paused", "queued", "stopping"].includes(bgJob.state)) bgJob = ZR.Jobs.start({ kind: "pdf", label: "PDFs of included papers (background)", total: 0 });
+    const job = bgJob;
+    job.progress({ total: job.total + 1 });
+    pdfChain = pdfChain.then(async () => {
+      try {
+        if (!(await job.gate(ZR.Util.truncate(c.title, 80)))) return; // stopped: the rest is left for Find PDFs
+        if (await inTime(ZR.Importer.attachFullText(item, c.record), PDF_TIMEOUT)) {
+          c.hasPDF = true;
+          job.found++;
+          laterRender();
+        }
+      } catch (e) {
+        job.failed++;
+        ZR.Util.log("Background PDF failed", c.title, e.message);
+      } finally {
+        job.progress({ done: job.done + 1 });
+        if (job.done >= job.total) job.finish(`${job.found} of ${job.total} found`);
+      }
+    });
+  }
+
+  /** Before a PDF step: wait for the background downloads, and say so (they are a job in the footer). */
+  async function waitForBackgroundPDFs() {
+    const job = bgJob && ["running", "paused", "queued", "stopping"].includes(bgJob.state) ? bgJob : null;
+    if (job) {
+      const show = () => st(`Waiting for the background PDF downloads: ${job.done} of ${job.total} done, ${job.found} found. Pause or stop them under “${job.label}” in the footer.`);
+      show();
+      const off = ZR.Jobs.subscribe(show);
+      try {
+        await pdfChain;
+      } finally {
+        off();
+      }
+    } else await pdfChain;
   }
   /** Whether a paper has its PDF right now (changes while PDFs are found). */
   const pdfNow = (c) => {
@@ -1508,8 +1543,7 @@ App.panels.review = (() => {
 
   async function findPDFs() {
     App.setBusy("review", true);
-    st("Waiting for PDFs still downloading…");
-    await pdfChain;
+    await waitForBackgroundPDFs();
     const list = population().filter((c) => c.itemID && !c.hasPDF && !c.ft);
     const job = ZR.Jobs.start({ kind: "pdf", label: "PDFs from open-access sources", total: list.length });
     let found = 0;
@@ -1639,7 +1673,7 @@ App.panels.review = (() => {
    * @returns {Promise<{strategy, found, tried, failed}[]>}
    */
   async function huntPDFs(strategyIDs, { onLine = () => {} } = {}) {
-    await pdfChain;
+    await waitForBackgroundPDFs();
     const out = [];
     const labels = new Map(ZR.PDFHunt.strategies().map((s) => [s.id, s.label]));
     const kindOf = (sid) => (sid.startsWith("crawler:") ? "crawler" : sid.startsWith("ai:") ? "ai" : "pdf");

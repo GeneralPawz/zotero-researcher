@@ -1429,6 +1429,13 @@ ZR.SelfTest = (() => {
             if (a?.isPDFAttachment()) await a.eraseTx();
           }
         }
+        // including a pool paper with “Download PDFs” on starts a background download job
+        const proj = rw.App.project;
+        const hadPDFs = proj.search?.attachPDFs;
+        proj.search = Object.assign({}, proj.search, { attachPDFs: true });
+        const poolPaper = R.api.candidates().find((c) => !c.itemID && !c.ta);
+        if (poolPaper) await R.api.decideByKey(poolPaper.key, "ta", "include", "", "me");
+        proj.search.attachPDFs = hadPDFs;
         await R.refresh();
         await R.go("fulltext");
         d.getElementById("queue-filter").value = "all";
@@ -1466,7 +1473,10 @@ ZR.SelfTest = (() => {
         await R.refresh();
         const res = { greyed: greyed.length, victims: victims.length, queued, pill, pausedState, stillPaused, crawler: { state: crawler.state, done: crawler.done, total: crawler.total }, oa: oa && { state: oa.state, found: oa.found, total: oa.total }, greyedAfter: greyedAfter.length, crawlerLog };
         res.nullShown = nullShown;
-        const ok = !nullShown && greyed.length >= victims.length && /Open-access/.test(queued) && pausedState === "paused" && stillPaused && crawler.state === "stopped" && crawler.done < crawler.total && oa && ["done", "skipped"].includes(oa.state) && crawlerLog.length > 0 && (!oa.found || greyedAfter.length < greyed.length);
+        const bg = ZR.Jobs.list().find((j) => /background/.test(j.label));
+        if (poolPaper) await R.api.decideByKey(poolPaper.key, "ta", null, "", "me");
+        res.background = bg && { state: bg.state, done: bg.done, total: bg.total, found: bg.found };
+        const ok = (!poolPaper || (!!bg && bg.total > 0)) && !nullShown && greyed.length >= victims.length && /Open-access/.test(queued) && pausedState === "paused" && stillPaused && crawler.state === "stopped" && crawler.done < crawler.total && oa && ["done", "skipped"].includes(oa.state) && crawlerLog.length > 0 && (!oa.found || greyedAfter.length < greyed.length);
         if (!ok) throw new Error(JSON.stringify(res));
         return res;
       });
@@ -1742,6 +1752,7 @@ ZR.SelfTest = (() => {
             continue;
           }
           const pickBtn = prefer.map((id) => btns.find((b) => b.dataset.choice === id)).find(Boolean);
+          if (/Who reads the full texts/.test(d.querySelector("#ap-prompt").textContent)) prompts.push("full-text model: " + [...d.querySelectorAll("#ap-prompt select")[0].options].map((o) => o.textContent).slice(0, 2).join(" | "));
           if (pickBtn) {
             prompts.push(`${d.querySelector("#ap-prompt .ap-ask-line")?.textContent.slice(0, 70)} → ${pickBtn.dataset.choice}`);
             if (prompts.length === 4) await shot(aw, "13b-autopilot-conversation.png");
@@ -1838,6 +1849,7 @@ ZR.SelfTest = (() => {
           errors: log.filter((t) => /went wrong/.test(t)),
         };
         aw.close();
+        if (!res.prompts.some((x) => /full-text model: Same as the autopilot/.test(x))) chat.problems.push("full-text model question");
         if (!res.finished || res.errors.length || !res.runs || res.screened !== res.pool || !res.thresholdsChanged || chat.problems.length) throw new Error(JSON.stringify(res));
         return res;
       });

@@ -75,7 +75,7 @@ const Autopilot = (window.Autopilot = (() => {
   };
   const ftModel = () => {
     const s = state();
-    return profileFor(s?.ftProfileID || s?.profileID, s?.ftProfileID ? s.ftModel : s?.model) || harness();
+    return profileFor(s?.ftProfileID || s?.profileID, s?.ftProfileID ? s.ftModel : s?.model, s?.ftProfileID ? s.ftEffort : s?.effort) || harness();
   };
   const modelName = (p) => `${p.name}${p.model ? " · " + p.model : ""}${p.effort ? " · " + p.effort : ""}`;
   const stageLabel = (s) => ZR().Methodologies.STAGES[s]?.label || s;
@@ -440,7 +440,7 @@ const Autopilot = (window.Autopilot = (() => {
       const box = $("ap-prompt");
       const done = (c) => {
         const values = {};
-        for (const [id, f] of Object.entries(fields)) values[id] = f.type === "checkbox" ? f.checked : f.value;
+        for (const [id, f] of Object.entries(fields)) values[id] = f.custom ? f.custom.value() : f.type === "checkbox" ? f.checked : f.value;
         box.replaceChildren();
         pendingAsk = null;
         say(c.label, "you");
@@ -453,7 +453,11 @@ const Autopilot = (window.Autopilot = (() => {
             .split("\n")
             .map((line) => richText(line, "ap-ask-line")),
           ...blocks.map(renderBlock),
-          ...inputs.map((f) => {
+          ...inputs.flatMap((f) => {
+            if (f.type === "custom") {
+              fields[f.id] = { custom: f };
+              return f.nodes;
+            }
             let input;
             if (f.type === "select") input = el("select", { "data-input": f.id }, f.options.map((o) => el("option", { value: o.value, text: o.label, selected: o.value === f.value })));
             else if (f.type === "textarea") {
@@ -488,6 +492,42 @@ const Autopilot = (window.Autopilot = (() => {
     }
   }
 
+  /**
+   * Provider, model and reasoning effort as one field. same: the label of a first choice
+   * "same as the autopilot" (then model and effort are hidden).
+   * @returns {Promise<{nodes: Element[], value: () => {same, profileID, model, effort}}>}
+   */
+  async function modelPicker({ label, hint = "", ids = {}, profileID = "", model = "", effort = "", same = "" } = {}) {
+    const profiles = profileOptions();
+    const profileSel = el("select", { id: ids.profile || null }, [...(same ? [el("option", { value: "", text: `Same as the autopilot: ${same}` })] : []), ...profiles.map((o) => el("option", { value: o.value, text: o.label }))]);
+    profileSel.value = same && !profileID ? "" : profileID || profiles[0]?.value || "";
+    const modelSel = el("select", { id: ids.model || null });
+    const effortSel = el("select", { id: ids.effort || null });
+    const modelRow = el("label", { class: "ap-field ap-sub" }, [el("span", { text: "Model" }), modelSel]);
+    const effortRow = el("label", { class: "ap-field ap-sub" }, [el("span", { text: "Reasoning effort" }), effortSel, el("span", { class: "hint", text: "Lower answers faster and more to the point; higher thinks longer." })]);
+    const initial = profileSel.value === profileID;
+    const fillEfforts = async () => {
+      const base = App.profiles().find((x) => x.id === profileSel.value);
+      const e = base ? await ZR().LLM.effortLevels(Object.assign({}, base, modelSel.value ? { model: modelSel.value } : {})) : { levels: [] };
+      const was = effortSel.value || (initial && profileSel.value === profileID ? effort : "") || "";
+      const setUp = base?.effort || e.def;
+      effortSel.replaceChildren(el("option", { value: "", text: setUp ? `as set up (${setUp})` : "as set up (the provider's default)" }), ...e.levels.map((l) => el("option", { value: l, text: l + (e.hints?.[l] ? " · " + e.hints[l] : "") })));
+      effortSel.value = e.levels.includes(was) ? was : "";
+      effortRow.hidden = !profileSel.value || !e.levels.length;
+    };
+    const fillModels = async () => {
+      modelRow.hidden = !profileSel.value;
+      modelSel.replaceChildren(...(profileSel.value ? await modelOptions(profileSel.value) : []).map((o) => el("option", { value: o.value, text: o.label })));
+      if (initial && profileSel.value === profileID && model) modelSel.value = model;
+      await fillEfforts();
+    };
+    profileSel.addEventListener("change", fillModels);
+    modelSel.addEventListener("change", fillEfforts);
+    await fillModels();
+    const nodes = [el("label", { class: "ap-field" }, [el("span", { text: label }), profileSel, hint ? el("span", { class: "hint", text: hint }) : null]), modelRow, effortRow];
+    return { nodes, value: () => ({ same: !profileSel.value, profileID: profileSel.value, model: profileSel.value ? modelSel.value : "", effort: profileSel.value ? effortSel.value : "" }) };
+  }
+
   async function renderSetup({ stage = null } = {}) {
     const profiles = profileOptions();
     const box = $("ap-prompt");
@@ -501,36 +541,14 @@ const Autopilot = (window.Autopilot = (() => {
     const protocolReady = !!(p.protocol?.questions?.length || p.protocol?.inclusion?.length);
     const stages = API().method().stages;
     const current = stage && stages.includes(stage) ? stage : R().step && stages.includes(R().step) ? R().step : protocolReady ? (p.runs?.length ? "screen" : "search") : "protocol";
-    const profileSel = el("select", { id: "ap-profile" }, profiles.map((o) => el("option", { value: o.value, text: o.label, selected: o.value === s.profileID })));
-    const modelSel = el("select", { id: "ap-model-select" });
-    const effortSel = el("select", { id: "ap-effort" });
-    const effortRow = el("label", { class: "ap-field" }, [el("span", { text: "Reasoning effort" }), effortSel, el("span", { class: "hint", text: "Lower answers faster and more to the point; higher thinks longer before each step." })]);
-    const fillEfforts = async () => {
-      const base = App.profiles().find((x) => x.id === profileSel.value);
-      const e = base ? await ZR().LLM.effortLevels(Object.assign({}, base, modelSel.value ? { model: modelSel.value } : {})) : { levels: [] };
-      const was = effortSel.value || (profileSel.value === s.profileID ? s.effort : "") || "";
-      const setUp = base?.effort || e.def;
-      effortSel.replaceChildren(el("option", { value: "", text: setUp ? `as set up (${setUp})` : "as set up (the provider's default)" }), ...e.levels.map((l) => el("option", { value: l, text: l + (e.hints?.[l] ? " · " + e.hints[l] : "") })));
-      effortSel.value = e.levels.includes(was) ? was : "";
-      effortRow.hidden = !e.levels.length;
-    };
-    const fillModels = async () => {
-      modelSel.replaceChildren(...(await modelOptions(profileSel.value)).map((o) => el("option", { value: o.value, text: o.label })));
-      if (profileSel.value === s.profileID && s.model) modelSel.value = s.model;
-      await fillEfforts();
-    };
-    profileSel.addEventListener("change", fillModels);
-    modelSel.addEventListener("change", fillEfforts);
-    await fillModels();
+    const pick = await modelPicker({ label: "Autopilot model", hint: "Plans, checks and decides at every step.", ids: { profile: "ap-profile", model: "ap-model-select", effort: "ap-effort" }, profileID: s.profileID || "", model: s.model || "", effort: s.effort || "" });
     const question = el("textarea", { id: "ap-question", rows: "4", placeholder: "Your research question in your own words: what you want to find out and why." });
     question.value = s.question || p.description || (p.protocol?.questions || []).join("\n");
     const startAt = el("select", { id: "ap-start" }, stages.map((x) => el("option", { value: x, text: `Start at: ${stageNum(x)}. ${stageLabel(x)}`, selected: x === current })));
     box.replaceChildren(
       el("div", { class: "ap-ask" }, [
         el("div", { class: "ap-ask-line", text: "An AI of your choice runs the review with you: it sets up the protocol, plans the search, checks the screening, reads the full texts and fills in the tables, and asks you at every decision." }),
-        el("label", { class: "ap-field" }, [el("span", { text: "Harness model" }), profileSel]),
-        el("label", { class: "ap-field" }, [el("span", { text: "Model" }), modelSel]),
-        effortRow,
+        ...pick.nodes,
         el("label", { class: "ap-field" }, [el("span", { text: "Research question" }), question]),
         el("label", { class: "ap-field" }, [el("span", { text: "Where to start" }), startAt]),
         el("div", { class: "actions" }, [
@@ -540,7 +558,8 @@ const Autopilot = (window.Autopilot = (() => {
             text: "Start the autopilot",
             onclick: () => {
               if (!question.value.trim()) return question.focus();
-              start({ profileID: profileSel.value, model: modelSel.value, effort: effortSel.value, question: question.value.trim(), stage: startAt.value });
+              const v = pick.value();
+              start({ profileID: v.profileID, model: v.model, effort: v.effort, question: question.value.trim(), stage: startAt.value });
             },
           }),
         ]),
@@ -953,15 +972,19 @@ const Autopilot = (window.Autopilot = (() => {
   // --- 4 full text
   async function doFullText() {
     await R().go("fulltext");
-    const profiles = profileOptions();
-    const a = await ask("Which model should read and annotate the full texts?", [
-      { id: "harness", label: `Use ${modelName(harness())}`, primary: true },
-      { id: "choose", label: "Use the one selected below" },
-      { id: "pause", label: "Pause" },
-    ], { inputs: [{ id: "profile", type: "select", label: "AI provider", options: profiles, value: state().profileID }] });
+    const s0 = state();
+    const pick = await modelPicker({ label: "Model for the full texts", same: modelName(harness()), profileID: s0.ftProfileID || "", model: s0.ftProfileID ? s0.ftModel || "" : "", effort: s0.ftProfileID ? s0.ftEffort || "" : "" });
+    const a = await ask(
+      `**Who reads the full texts?** A model opens each PDF and marks passages for and against inclusion as Zotero annotations, and later fills in the tables. The autopilot (**${modelName(harness())}**) keeps planning and deciding. Keep the same model, or choose a faster or cheaper one for the reading.`,
+      [
+        { id: "go", label: "Continue", primary: true },
+        { id: "pause", label: "Pause" },
+      ],
+      { inputs: [{ id: "ft", type: "custom", nodes: pick.nodes, value: pick.value }] }
+    );
     if (a.choice === "pause") return "pause";
-    if (a.choice === "choose") await saveState({ ftProfileID: a.values.profile, ftModel: "" });
-    else await saveState({ ftProfileID: null });
+    const ft = a.values.ft;
+    await saveState(ft.same ? { ftProfileID: null, ftModel: "", ftEffort: "" } : { ftProfileID: ft.profileID, ftModel: ft.model, ftEffort: ft.effort });
     await say("Looking for PDFs…", "info");
     await API().findPDFs();
     if ((await missingPDFStep()) === "pause") return "pause";
