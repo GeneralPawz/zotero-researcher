@@ -170,6 +170,24 @@ ZR.LLM = (() => {
   function chat(profile, messages, opts = {}) {
     opts = Object.assign({}, opts, { system: opts.system ? opts.system + "\n\n" + STYLE : STYLE });
     if (!ZR.Activity || !profile) return chatRaw(profile, messages, opts);
+    return measured(profile, messages, opts);
+  }
+
+  /** Every call: time and tokens, for the autopilot's session analytics. */
+  async function measured(profile, messages, opts) {
+    const t0 = Date.now();
+    let ok = false;
+    try {
+      const reply = await tracked(profile, messages, opts);
+      ok = true;
+      return reply;
+    } finally {
+      const u = opts._usage || {};
+      ZR.Usage?.record({ label: profile.name || profile.provider, provider: profile.provider, model: u.model || profile.model || "", effort: profile.effort || "", ms: Date.now() - t0, ok, input: u.input || 0, cached: u.cached || 0, output: u.output || 0, reasoning: u.reasoning || 0, cost: u.cost || 0, what: U.truncate(String(messages[messages.length - 1]?.content || "").replace(/\s+/g, " "), 80) });
+    }
+  }
+
+  function tracked(profile, messages, opts) {
     const last = messages[messages.length - 1]?.content || "";
     return ZR.Activity.track(
       "ai",
@@ -194,7 +212,7 @@ ZR.LLM = (() => {
   async function chatRaw(profile, messages, opts = {}) {
     const { provider, baseURL, apiKey } = resolve(profile);
     // Local CLI (Claude Code / Codex): the user's subscription, no API key
-    if (provider.protocol === "cli") return ZR.CLI.chat(profile, messages, { system: opts.system, timeout: opts.timeout || 240000, web: !!opts.web, images: opts.images });
+    if (provider.protocol === "cli") return ZR.CLI.chat(profile, messages, { system: opts.system, timeout: opts.timeout || 240000, web: !!opts.web, images: opts.images, onUsage: (u) => (opts._usage = u) });
     const maxTokens = opts.maxTokens || 4096;
     const temperature = opts.temperature ?? (profile.temperature !== "" && profile.temperature != null ? Number(profile.temperature) : undefined);
     const timeout = opts.timeout || 180000;
@@ -202,13 +220,18 @@ ZR.LLM = (() => {
     if (provider.protocol === "anthropic") {
       const body = { model: profile.model, max_tokens: maxTokens, messages: withImages(messages, opts.images, "anthropic") };
       if (opts.system) body.system = opts.system;
-      if (temperature !== undefined && !Number.isNaN(temperature)) body.temperature = temperature;
+      const budget = ANTHROPIC_THINKING[profile.effort];
+      if (budget) {
+        body.thinking = { type: "enabled", budget_tokens: budget }; // the answer comes after the thinking
+        body.max_tokens = Math.max(maxTokens, budget + 2048);
+      } else if (temperature !== undefined && !Number.isNaN(temperature)) body.temperature = temperature;
       const res = await ZR.http("POST", `${baseURL}/messages`, {
         headers: { "x-api-key": apiKey, "anthropic-version": "2023-06-01" },
         body,
         timeout,
       });
       const data = res.json();
+      opts._usage = ZR.Usage?.parse.anthropic(data.usage, data.model || profile.model);
       const text = (data.content || []).filter((b) => b.type === "text").map((b) => b.text).join("");
       if (!text) throw new Error("Empty response from Anthropic" + (data.stop_reason ? ` (${data.stop_reason})` : ""));
       return text;
@@ -221,10 +244,13 @@ ZR.LLM = (() => {
     if (provider.newParams) body.max_completion_tokens = maxTokens;
     else body.max_tokens = maxTokens;
     if (temperature !== undefined && !Number.isNaN(temperature)) body.temperature = temperature;
+    if (profile.effort && provider.id === "openai") body.reasoning_effort = profile.effort;
+    if (profile.effort && provider.id === "openrouter") body.reasoning = { effort: profile.effort };
     const headers = Object.assign({}, provider.extraHeaders || {});
     if (apiKey) headers.Authorization = `Bearer ${apiKey}`;
     const res = await ZR.http("POST", `${baseURL}/chat/completions`, { headers, body, timeout });
     const data = res.json();
+    opts._usage = ZR.Usage?.parse.openai(data.usage, data.model || profile.model);
     const choice = data.choices && data.choices[0];
     const content = choice?.message?.content;
     const text = Array.isArray(content) ? content.map((c) => c.text || "").join("") : content;
@@ -265,6 +291,35 @@ ZR.LLM = (() => {
    *                with {resolve: true} each alias is asked once which model it runs.
    * @returns {Promise<{id: string, name: string, detail: string, isDefault?: boolean}[]>}
    */
+  const CLAUDE_EFFORTS = ["low", "medium", "high", "xhigh", "max"];
+  const API_EFFORTS = ["low", "medium", "high"];
+  const ANTHROPIC_THINKING = { low: 2048, medium: 8192, high: 24576 };
+
+  /**
+   * How much a model thinks before it answers: {levels, def, from, hints}. Empty levels:
+   * the provider has no such setting. Codex reports the levels of each model; lower is
+   * faster and more to the point.
+   */
+  async function effortLevels(profile, models = null) {
+    const p = profile.provider;
+    if (p === "codex-cli") {
+      let list = models;
+      if (!list) {
+        try {
+          list = await ZR.CLI.models(profile);
+        } catch (e) {
+          list = [];
+        }
+      }
+      const m = list.find((x) => x.id === profile.model) || list.find((x) => x.isDefault) || list[0];
+      return { levels: m?.efforts?.length ? m.efforts : ["low", "medium", "high", "xhigh"], def: m?.defaultEffort || "", from: m?.effortFrom || "Codex", hints: m?.effortHints || {} };
+    }
+    if (p === "claude-cli") return { levels: CLAUDE_EFFORTS, def: "", from: "Claude Code", hints: {} };
+    if (p === "anthropic") return { levels: ["off", ...Object.keys(ANTHROPIC_THINKING)], def: "off", from: "the API", hints: { off: "no extended thinking" } };
+    if (p === "openai" || p === "openrouter") return { levels: API_EFFORTS, def: "", from: "the model", hints: {} };
+    return { levels: [], def: "", from: "", hints: {} };
+  }
+
   async function listModels(profile, { resolve = false } = {}) {
     const provider = getProvider(profile.provider);
     if (provider.protocol === "cli") return ZR.CLI.models(profile, { resolve });
@@ -322,5 +377,5 @@ ZR.LLM = (() => {
     return { ok: /ok/i.test(reply), reply: reply.slice(0, 200), ms: Date.now() - t0 };
   }
 
-  return { PROVIDERS, getProvider, chat, chatJSON, listModels, test };
+  return { PROVIDERS, getProvider, chat, chatJSON, listModels, effortLevels, test };
 })();

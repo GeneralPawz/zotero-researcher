@@ -12,14 +12,10 @@ ZR.Autopilot = (() => {
   // ------------------------------------------------------------------ setup ----
   /** Draft the protocol for the best-fitting methodology. */
   async function chooseMethodology(profile, question, context = {}) {
-    let out = await ZR.Assist.fillProtocol(profile, "prisma2020", question, context);
-    let methodology = "prisma2020";
-    const rec = out.recommended?.methodology;
-    if (rec && rec !== methodology && ZR.Methodologies.get(rec)) {
-      methodology = rec;
-      out = Object.assign(await ZR.Assist.fillProtocol(profile, rec, question, context), { recommended: out.recommended });
-    }
-    return { methodology, protocol: out.protocol, why: out.recommended?.why || "", rationale: out.rationale || "" };
+    // a short answer first, then the form is filled once (not once for PRISMA and again for the methodology that fits)
+    const rec = await ZR.Assist.recommendMethodology(profile, question);
+    const out = await ZR.Assist.fillProtocol(profile, rec.methodology, question, context);
+    return { methodology: rec.methodology, protocol: out.protocol, why: rec.why || out.recommended?.why || "", rationale: out.rationale || "" };
   }
 
   /** Which databases to search and how many results per source. */

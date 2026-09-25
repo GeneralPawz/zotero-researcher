@@ -148,8 +148,7 @@ var ZRDropdown = (() => {
         if (!select.zrContextMenu) return;
         e.preventDefault();
         e.stopPropagation();
-        close();
-        select.zrContextMenu(opt.value, e);
+        select.zrContextMenu(opt.value, e); // the list stays open next to the menu
       });
       menu.append(item);
       items.push({ el: item, i });

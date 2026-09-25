@@ -113,6 +113,15 @@ ZR.Assist = (() => {
     return out;
   }
 
+  /** Which methodology fits the question: a short answer, before the form is filled once. */
+  async function recommendMethodology(profile, description) {
+    const M = ZR.Methodologies;
+    const list = M.LIST.map((m) => `- ${m.id}: ${m.name}. ${m.short}`).join("\n");
+    const user = `Which review methodology fits this research question best?\n\nQuestion:\n"""${description}"""\n\nMethodologies:\n${list}\n\nReply with JSON only: {"methodology": "<id>", "why": "<one or two sentences in the language of the question>"}`;
+    const out = await ZR.LLM.chatJSON(profile, [{ role: "user", content: user }], { system: "You are a review methodologist.", maxTokens: 400 });
+    return { methodology: M.get(out?.methodology) ? out.methodology : "prisma2020", why: String(out?.why || "") };
+  }
+
   /**
    * Turn a plain-language description into a review protocol for a methodology.
    * Returns {protocol (normalized), recommended: {methodology, why}, rationale}.
@@ -277,5 +286,5 @@ Reply with JSON only:
       });
   }
 
-  return { planQuery, screen, screenCriteria, fillProtocol, annotateFullText, extractFields, assessQuality, nameClusters, compare, extractMetadata, pickCandidate, sanitizeHTML, QUERY_SYNTAX };
+  return { planQuery, screen, screenCriteria, fillProtocol, recommendMethodology, annotateFullText, extractFields, assessQuality, nameClusters, compare, extractMetadata, pickCandidate, sanitizeHTML, QUERY_SYNTAX };
 })();

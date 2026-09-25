@@ -142,6 +142,7 @@ ZR.SelfTest = (() => {
       if (url === "https://api.typesafe.ai/v1/systemone") return mockTypeSafe(o, tsCalls);
       if (url.startsWith("https://api.firecrawl.dev/")) {
         mockLLM.crawlerCalls = (mockLLM.crawlerCalls || 0) + 1;
+        if (mockLLM.crawlerDelay) await new Promise((r) => setTimeout(r, mockLLM.crawlerDelay));
         const json = { success: true, data: [] };
         return { status: 200, text: JSON.stringify(json), json: () => json };
       }
@@ -153,7 +154,8 @@ ZR.SelfTest = (() => {
       calls.push(prompt.slice(0, 50));
       const n = (prompt.match(/^\[\d+\]/gm) || []).length;
       let content;
-      if (prompt.includes("Design a style for flow diagrams")) content = JSON.stringify({ name: "Journal of Mock Engineering", font: "serif", fontSize: 11, radius: 0, bands: false, arrow: "open", boxStroke: "#000000", line: "#000000", text: "#000000", showTitle: false });
+      if (prompt.includes("Which review methodology fits")) content = JSON.stringify({ methodology: "kitchenham", why: "A software-engineering style question about tools and data exchange." });
+      else if (prompt.includes("Design a style for flow diagrams")) content = JSON.stringify({ name: "Journal of Mock Engineering", font: "serif", fontSize: 11, radius: 0, bands: false, arrow: "open", boxStroke: "#000000", line: "#000000", text: "#000000", showTitle: false });
       else if (prompt.includes('{"sources"')) content = JSON.stringify({ sources: ["crossref", "doaj", "arxiv"], limit: 5, why: "Multidisciplinary coverage of BIM research." });
       else if (prompt.includes('"verdict": "ok"|"adjust"|"hopeless"')) {
         // first check: too strict → propose a change; second: fine
@@ -213,7 +215,7 @@ ZR.SelfTest = (() => {
       else if (prompt.includes("Item data:")) content = JSON.stringify({ itemType: "journalArticle", title: "Deep learning", authors: [{ firstName: "Yann", lastName: "LeCun" }], date: "2015", DOI: null, venue: "Nature" });
       else if (prompt.includes("SAME work")) content = JSON.stringify({ index: 0, confidence: 0.9, reason: "same title and authors" });
       else content = "OK";
-      const json = { choices: [{ message: { content } }] };
+      const json = { choices: [{ message: { content } }], usage: { prompt_tokens: 1200 + prompt.length, prompt_tokens_details: { cached_tokens: 800 }, completion_tokens: Math.ceil(String(content).length / 4) } };
       return { status: 200, text: JSON.stringify(json), json: () => json };
     };
   }
@@ -690,13 +692,17 @@ ZR.SelfTest = (() => {
       await shot(pw, "06c-ai-editor-cli.png");
       await pick(d.getElementById("zr-llm-provider"), "Codex CLI");
       const codexModels = await waitFor(() => [...d.querySelectorAll("#zr-llm-editor .zr-model-row .zr-model-id")].map((r) => r.textContent).filter((t) => /gpt/i.test(t)).length && [...d.querySelectorAll("#zr-llm-editor .zr-model-row .zr-model-id")].map((r) => r.textContent), 15000).catch(() => []);
+      const astra = [...d.querySelectorAll("#zr-llm-editor .zr-model-row")].find((r) => /gpt/i.test(r.querySelector(".zr-model-id")?.textContent || ""));
+      astra?.click();
+      const codexEfforts = codexModels.length ? await waitFor(() => [...d.querySelectorAll("#zr-llm-effort option")].map((o) => o.value).filter(Boolean).length && [...d.querySelectorAll("#zr-llm-effort option")].map((o) => o.value).filter(Boolean), 8000).catch(() => []) : [];
       await shot(pw, "06d-ai-editor-codex.png");
+      if (codexModels.length && !codexEfforts.length) throw new Error("no reasoning levels for Codex: " + JSON.stringify(codexModels.slice(0, 3)));
       if (keyFieldShown || overflowing.length || claudeModels.length < 4) throw new Error(JSON.stringify({ keyFieldShown, overflowing, claudeModels }));
       d.getElementById("zr-llm-provider").zrDropdownButton.click();
       await U.sleep(200);
       await shot(pw, "06b-preferences-dropdown.png");
       d.querySelector(".zr-dd-menu .zr-dd-item")?.click();
-      const res = { checklist: d.querySelectorAll("#zr-checklist .zr-check-row").length, areas: d.querySelectorAll("#zr-areas .zr-area").length, databasesShown: rowsDefault, pubmedListed, aiEditor: !!d.querySelector("#zr-llm-editor .zr-editor"), providerMenuVisible: prov.visible, baseAfterPick, cliProgram: program, cliHidesKey: keyRowHidden, claudeModels, codexModels, system1: d.querySelectorAll("#zr-s1 select, #zr-s1 input").length };
+      const res = { codexEfforts, checklist: d.querySelectorAll("#zr-checklist .zr-check-row").length, areas: d.querySelectorAll("#zr-areas .zr-area").length, databasesShown: rowsDefault, pubmedListed, aiEditor: !!d.querySelector("#zr-llm-editor .zr-editor"), providerMenuVisible: prov.visible, baseAfterPick, cliProgram: program, cliHidesKey: keyRowHidden, claudeModels, codexModels, system1: d.querySelectorAll("#zr-s1 select, #zr-s1 input").length };
       if (pubmedListed) throw new Error("PubMed listed although medicine is off");
       return res;
       } finally {
@@ -1239,10 +1245,13 @@ ZR.SelfTest = (() => {
         await goStep("screen", (x) => x.querySelector("#queue-filter"));
         d.getElementById("queue-filter").value = "all";
         d.getElementById("queue-filter").dispatchEvent(new rw.Event("change"));
-        const hues = await waitFor(() => {
-          const set = new Set([...d.querySelectorAll("#screen-card .kw, #screen-card .kw-chip")].map((k) => k.style.getPropertyValue("--kw-h")).filter(Boolean));
-          return set.size >= 2 && [...set];
-        }, 5000).catch(() => []);
+        const huesNow = () => [...new Set([...d.querySelectorAll("#screen-card .kw, #screen-card .kw-chip")].map((k) => k.style.getPropertyValue("--kw-h")).filter(Boolean))];
+        let hues = [];
+        for (const item of [...d.querySelectorAll("#queue .q-item")].slice(0, 15)) {
+          d.querySelector(`#queue .q-item[data-key="${item.dataset.key}"]`)?.click();
+          await U.sleep(80);
+          if ((hues = huesNow()).length >= 2) break;
+        }
         const res = { labelsBefore, outcomes, searchResults, summary: summary.slice(0, 160), notAddedRows, shownResults, fateTags, readOnlyImportHidden, askText: askText.slice(0, 80), refinementParent: p.runs[1]?.parent === p.runs[0]?.id, labelsAfter, hues };
         if (!outcomes.some((o) => /^Excluded/.test(o)) || !outcomes.some((o) => /^(Passed|Included)/.test(o)) || !shownResults || !readOnlyImportHidden || !res.refinementParent || labelsAfter.join() !== "#1,↳ #1.1" || hues.length < 2) throw new Error(JSON.stringify(res));
         return res;
@@ -1403,6 +1412,104 @@ ZR.SelfTest = (() => {
         return res;
       });
 
+      await step("full text: papers without PDF greyed out until found; a job per crawler with pause, resume, stop; crawler calls in the Log", async () => {
+        const d = rv();
+        const R = rw.App.panels.review;
+        await goStep("fulltext", (x) => x.querySelector("#queue .q-item"));
+        // papers waiting for a PDF: three without a full-text decision (restored at the end);
+        // one of them keeps a link the search found, so an open-access strategy can find it again
+        const pop = R.api.population().filter((c) => c.itemID);
+        const withLink = pop.filter((c) => c.record?.pdfURLs?.length || /arxiv/i.test(c.record?.sources?.join(" ") || ""));
+        const victims = [...new Set([...withLink.slice(0, 1), ...pop])].slice(0, 3);
+        const ftBefore = victims.map((c) => ({ key: c.key, d: c.ft, r: c.reason, by: c.ftInfo?.by || "me" }));
+        for (const c of victims) {
+          if (c.ft) await R.api.decideByKey(c.key, "ft", null, "", "me");
+          for (const id of Zotero.Items.get(c.itemID).getAttachments()) {
+            const a = Zotero.Items.get(id);
+            if (a?.isPDFAttachment()) await a.eraseTx();
+          }
+        }
+        await R.refresh();
+        await R.go("fulltext");
+        d.getElementById("queue-filter").value = "all";
+        d.getElementById("queue-filter").dispatchEvent(new rw.Event("change"));
+        await waitFor(() => d.querySelectorAll("#queue .q-item.no-pdf").length >= victims.length, 5000);
+        const greyed = [...d.querySelectorAll("#queue .q-item.no-pdf")].map((x) => x.dataset.key);
+        // a slow crawler: pause it, resume it, stop it; then the open-access sources run
+        mockLLM.crawlerDelay = 1500;
+        const hunting = R.api.huntPDFs(["crawler:firecrawl", "oa"]);
+        const crawler = await waitFor(() => ZR.Jobs.running().find((j) => j.kind === "crawler" && j.state === "running"), 8000);
+        const queued = ZR.Jobs.running().find((j) => j.state === "queued")?.label || "";
+        await waitFor(() => d.querySelector(`#rv-jobs .job-pill[data-job="${crawler.id}"]`), 3000);
+        const pill = d.querySelector(`#rv-jobs .job-pill[data-job="${crawler.id}"]`).textContent;
+        ZR.Jobs.pause(crawler.id);
+        pill && d.querySelector(`#rv-jobs .job-pill[data-job="${crawler.id}"]`).click();
+        await waitFor(() => d.getElementById("jobs-pop"), 3000);
+        await U.sleep(2200);
+        const doneWhilePaused = crawler.done;
+        const pausedState = crawler.state;
+        await U.sleep(1600);
+        const stillPaused = crawler.done === doneWhilePaused && crawler.state === "paused";
+        await shot(rw, "11f-jobs.png");
+        d.querySelector(`#jobs-pop .job-row[data-job="${crawler.id}"] .ap-icon[title="Resume"]`)?.click();
+        await waitFor(() => crawler.state === "running", 3000);
+        d.querySelector(`#jobs-pop .job-row[data-job="${crawler.id}"] .ap-icon.danger`).click();
+        await hunting;
+        mockLLM.crawlerDelay = 0;
+        const oa = ZR.Jobs.list().find((j) => j.label.startsWith("Open-access") && j.started >= crawler.started);
+        await waitFor(() => d.querySelectorAll("#queue .q-item.no-pdf").length < greyed.length, 8000).catch(() => null);
+        const greyedAfter = [...d.querySelectorAll("#queue .q-item.no-pdf")].map((x) => x.dataset.key);
+        const crawlerLog = ZR.Activity.list().filter((e) => e.kind === "crawler").map((e) => e.label.slice(0, 60));
+        d.getElementById("jobs-pop")?.remove();
+        const nullShown = /\bnull\b/.test(d.getElementById("rv-jobs").textContent);
+        for (const b of ftBefore) if (b.d) await R.api.decideByKey(b.key, "ft", b.d, b.r, b.by);
+        await R.refresh();
+        const res = { greyed: greyed.length, victims: victims.length, queued, pill, pausedState, stillPaused, crawler: { state: crawler.state, done: crawler.done, total: crawler.total }, oa: oa && { state: oa.state, found: oa.found, total: oa.total }, greyedAfter: greyedAfter.length, crawlerLog };
+        res.nullShown = nullShown;
+        const ok = !nullShown && greyed.length >= victims.length && /Open-access/.test(queued) && pausedState === "paused" && stillPaused && crawler.state === "stopped" && crawler.done < crawler.total && oa && ["done", "skipped"].includes(oa.state) && crawlerLog.length > 0 && (!oa.found || greyedAfter.length < greyed.length);
+        if (!ok) throw new Error(JSON.stringify(res));
+        return res;
+      });
+
+      await step("searches that stopped early: “In pool” turns yellow, details per database, the rest is fetched from where it stopped", async () => {
+        const d = rv();
+        const R = rw.App.panels.review;
+        await rw.App.switchProject(reviewProject.id);
+        rw.App.showTab("review");
+        await waitFor(() => d.getElementById("rv-funnel")?.textContent, 5000);
+        // the review's first search asked for 5 per database, so most databases have more
+        const yellow = await waitFor(() => d.getElementById("rv-incomplete"), 5000);
+        const colour = rw.getComputedStyle(yellow).backgroundColor;
+        const plain = rw.getComputedStyle(d.querySelector("#rv-funnel .funnel-stage:not(.incomplete)")).backgroundColor;
+        yellow.click();
+        const layer = await waitFor(() => d.getElementById("inc-layer"), 3000);
+        const rows = [...layer.querySelectorAll("tr[data-source]")].map((r) => ({ source: r.dataset.source, run: r.dataset.run, text: r.textContent.replace(/\s+/g, " ").slice(0, 110) }));
+        await shot(rw, "12h-incomplete.png");
+        layer.remove();
+        // fetch 5 more of one database: the search goes on from result 6, nothing twice
+        const pick = R.api.incomplete().find((x) => x.pos && x.reason === "limit" && x.source !== "crossref") || R.api.incomplete().find((x) => x.pos);
+        const before = (await ZR.Projects.get(libraryID, reviewProject.id)).runs.length;
+        const res0 = await R.api.fetchRest(pick.runID, [pick.source], { limit: 5 });
+        const p = await ZR.Projects.get(libraryID, reviewProject.id);
+        const cont = p.runs.at(-1);
+        const orig = p.runs.find((r) => r.id === pick.runID);
+        const res = {
+          colour,
+          rows,
+          picked: { source: pick.source, fetched: pick.fetched, total: pick.total, pos: pick.pos },
+          newRun: { continues: cont.continues, count: cont.perSource?.[pick.source]?.count, pos: cont.perSource?.[pick.source]?.pos || null, identified: cont.identified },
+          originalDone: orig.perSource[pick.source].done === cont.id,
+          runsAdded: p.runs.length - before,
+          addedToPool: res0?.pool?.added,
+          label: [...d.querySelectorAll("#rv-runs td")].map((t) => t.textContent).find((t) => /^rest of/.test(t)) || "",
+        };
+        await R.go("search");
+        res.label = [...d.querySelectorAll("#rv-runs td")].map((t) => t.textContent).find((t) => /^rest of/.test(t)) || "";
+        const posOK = !res.newRun.pos || (res.newRun.pos.offset ?? 0) === (pick.pos.offset ?? 0) + res.newRun.count || !!res.newRun.pos.branches;
+        if (!rows.length || colour === plain || res.newRun.continues !== pick.runID || !res.originalDone || res.runsAdded !== 1 || !res.newRun.count || !posOK || !/^rest of #1/.test(res.label)) throw new Error(JSON.stringify(res));
+        return res;
+      });
+
       await step("autopilot: Stop now cancels a running AI call at once; Resume restarts the step", async () => {
         const col = new Zotero.Collection({ name: "zr-stop", libraryID });
         await col.saveTx();
@@ -1546,11 +1653,15 @@ ZR.SelfTest = (() => {
         const entry = await waitFor(() => d.querySelector(`.zr-dd-menu .zr-dd-item[data-value="${proj.id}"]`), 3000);
         entry.dispatchEvent(new lw2.MouseEvent("contextmenu", { bubbles: true, cancelable: true, clientX: r.left + 20, clientY: r.bottom + 40 }));
         const del = await waitFor(() => d.getElementById("ctx-delete-project"), 3000);
-        const deleteItem = { onButton, text: del.textContent, red: lw2.getComputedStyle(del).color === lw2.getComputedStyle(d.documentElement).getPropertyValue("--bad").trim() || /\b(210|240), (59|107)/.test(lw2.getComputedStyle(del).color), icon: !!del.querySelector("svg"), menuClosed: !d.querySelector(".zr-dd-menu") };
+        const deleteItem = { onButton, text: del.textContent, red: /\b(210|240), (59|107)/.test(lw2.getComputedStyle(del).color), icon: !!del.querySelector("svg"), listOpen: !!d.querySelector(".zr-dd-menu"), newProject: !!d.getElementById("ctx-new-project") };
         await shot(lw2, "14d-delete-menu.png");
         del.click();
         const ask = await waitFor(() => d.getElementById("ask-layer"), 5000);
         const askText = ask.textContent.slice(0, 90);
+        const redButton = ask.querySelector('[data-choice="delete"]');
+        lw2.InspectorUtils?.addPseudoClassLock(redButton, ":hover");
+        deleteItem.hoverBackground = lw2.getComputedStyle(redButton).backgroundColor;
+        lw2.InspectorUtils?.removePseudoClassLock(redButton, ":hover");
         ask.querySelector('[data-choice="delete"]').click();
         await waitFor(async () => !(await ZR.Projects.get(libraryID, proj.id)), 5000);
         const poolFile = PathUtils.join(Zotero.DataDirectory.dir, "zotero-researcher", "projects", `L${libraryID}-${proj.id}.json`);
@@ -1582,7 +1693,7 @@ ZR.SelfTest = (() => {
           collapsed,
         };
         lw2.close();
-        if (headerDiff > 2 || (footerDiff != null && footerDiff > 2) || apDiff > 1 || gapToFooter < 4 || collapsedWidth > 60 || expandedWidth < 300 || (bgs.length && bgs[0] === bgs[1]) || !res.deleted || !res.poolFileGone || !res.collectionKept || res.selectOptions || res.deleteOption || targetLineShown || !/Adds papers to/.test(projectInfo) || !/zr-stop/.test(projectInfo) || !deleteItem.red || !deleteItem.icon || !deleteItem.menuClosed || Math.abs(footerToEdge) > 1 || colours.footer !== colours.header || colours.apHead !== colours.header || colours.subheader !== colours.header || colours.protocolCard !== colours.header || colours.footer === colours.page || icons.some((i) => i.svg < 20 || i.border !== "0px" || i.text) || subtitle || !/Harness/.test(info) || !infoClosed || collapsed.playShown || collapsed.historyShown || Math.abs(collapsed.toggleMoved) > 1 || !collapsed.line.startsWith("1px") || !collapsed.lineEndsWithSubheader || Math.abs(collapsed.logOffCentre) > 2 || collapsed.lines.subheader === collapsed.lines.text || (collapsed.lines.zotero !== "(none measured)" && collapsed.lines.subheader !== collapsed.lines.zotero) || collapsed.subheaderButton || (filterColours.length && (new Set(filterColours.slice(1, 4)).size !== 3 || filterColours.at(-1) !== "1px"))) throw new Error(JSON.stringify(res));
+        if (headerDiff > 2 || (footerDiff != null && footerDiff > 2) || apDiff > 1 || gapToFooter < 4 || collapsedWidth > 60 || expandedWidth < 300 || (bgs.length && bgs[0] === bgs[1]) || !res.deleted || !res.poolFileGone || !res.collectionKept || res.selectOptions || res.deleteOption || targetLineShown || !/Adds papers to/.test(projectInfo) || !/zr-stop/.test(projectInfo) || !deleteItem.red || !deleteItem.icon || !deleteItem.listOpen || !deleteItem.newProject || !/\b(210|240), (59|107)/.test(deleteItem.hoverBackground || "") || Math.abs(footerToEdge) > 1 || colours.footer !== colours.header || colours.apHead !== colours.header || colours.subheader !== colours.header || colours.protocolCard !== colours.header || colours.footer === colours.page || icons.some((i) => i.svg < 20 || i.border !== "0px" || i.text) || subtitle || !/Harness/.test(info) || !infoClosed || collapsed.playShown || collapsed.historyShown || Math.abs(collapsed.toggleMoved) > 1 || !collapsed.line.startsWith("1px") || !collapsed.lineEndsWithSubheader || Math.abs(collapsed.logOffCentre) > 2 || collapsed.lines.subheader === collapsed.lines.text || (collapsed.lines.zotero !== "(none measured)" && collapsed.lines.subheader !== collapsed.lines.zotero) || collapsed.subheaderButton || (filterColours.length && (new Set(filterColours.slice(1, 4)).size !== 3 || filterColours.at(-1) !== "1px"))) throw new Error(JSON.stringify(res));
         return res;
       });
 
@@ -1690,6 +1801,15 @@ ZR.SelfTest = (() => {
         await shot(aw, "13h-earlier-session.png");
         d.getElementById("ap-back").click();
         await waitFor(() => !d.querySelector("#ap-log .ap-archived"), 3000);
+        // analytics of the earlier (full) session: tokens and time per model and step
+        d.getElementById("ap-history").click();
+        (await waitFor(() => d.querySelector('#ap-pop .ap-sess-info[data-analytics^="s"]'), 3000)).click();
+        const an = await waitFor(() => d.getElementById("ap-analytics-layer"), 5000);
+        const tables = an.querySelectorAll(".ap-an-table");
+        chat.analytics = { facts: an.querySelector(".ap-facts").textContent.replace(/\s+/g, " ").slice(0, 200), models: tables[0] ? tables[0].querySelectorAll("tr").length - 1 : 0, steps: tables[1] ? tables[1].querySelectorAll("tr").length - 1 : 0 };
+        await shot(aw, "13i-analytics.png");
+        an.remove();
+        if (!chat.analytics.models || chat.analytics.steps < 3 || !/Tokens in/.test(chat.analytics.facts)) chat.problems.push("analytics");
         if (chat.dividers.length < 5) chat.problems.push("dividers");
         if (!chat.queryBlocks || !chat.coloured.includes("qk-op")) chat.problems.push("query block");
         if (chat.facts < 3 || chat.splits < 2) chat.problems.push("blocks");

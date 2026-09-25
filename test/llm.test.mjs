@@ -186,3 +186,33 @@ test("multi-turn chats are flattened into one CLI prompt", () => {
   const t = ZR.CLI.transcript([{ role: "user", content: "A" }, { role: "assistant", content: "B" }, { role: "user", content: "C" }], "", false);
   assert.equal(t, "User:\nA\n\nAssistant:\nB\n\nUser:\nC\n\nAssistant:");
 });
+
+test("reasoning effort: the levels each provider offers, and how requests carry it", async () => {
+  const bodies = [];
+  const http = mockHTTP((url, m, o) => {
+    bodies.push(o.body);
+    return url.includes("anthropic") ? { content: [{ type: "thinking", thinking: "…" }, { type: "text", text: "ok" }] } : { choices: [{ message: { content: "ok" } }] };
+  });
+  const ZR = load({ http });
+  const L = ZR.LLM;
+  eq((await L.effortLevels({ provider: "claude-cli" })).levels, ["low", "medium", "high", "xhigh", "max"]);
+  eq((await L.effortLevels({ provider: "anthropic" })).levels, ["off", "low", "medium", "high"]);
+  eq((await L.effortLevels({ provider: "openai" })).levels, ["low", "medium", "high"]);
+  eq((await L.effortLevels({ provider: "mistral" })).levels, [], "no such setting");
+  ZR.CLI.models = async () => [{ id: "gpt-6-astra", isDefault: true, efforts: ["low", "medium", "high", "xhigh", "max", "ultra"], defaultEffort: "medium", effortFrom: "your Codex settings", effortHints: {} }];
+  const codex = await L.effortLevels({ provider: "codex-cli", model: "gpt-6-astra" });
+  eq(codex.levels, ["low", "medium", "high", "xhigh", "max", "ultra"]);
+  assert.equal(codex.def, "medium");
+  assert.equal(await L.chat({ id: "a", name: "A", provider: "anthropic", model: "claude-opus-5-5", apiKey: "k", effort: "medium", temperature: 0.2 }, [{ role: "user", content: "x" }], { maxTokens: 1000 }), "ok", "only the text blocks, not the thinking");
+  eq(bodies[0].thinking, { type: "enabled", budget_tokens: 8192 });
+  assert.ok(bodies[0].max_tokens > 8192, "room for the answer after the thinking");
+  assert.equal(bodies[0].temperature, undefined, "thinking runs without a temperature");
+  await L.chat({ id: "a", name: "A", provider: "anthropic", model: "claude-opus-5-5", apiKey: "k", effort: "off" }, [{ role: "user", content: "x" }]);
+  assert.equal(bodies[1].thinking, undefined);
+  await L.chat({ id: "o", name: "O", provider: "openai", model: "gpt-6-astra", apiKey: "k", effort: "low" }, [{ role: "user", content: "x" }]);
+  assert.equal(bodies[2].reasoning_effort, "low");
+  await L.chat({ id: "r", name: "R", provider: "openrouter", model: "openai/gpt-6-astra", apiKey: "k", effort: "high" }, [{ role: "user", content: "x" }]);
+  eq(bodies[3].reasoning, { effort: "high" });
+  await L.chat({ id: "g", name: "G", provider: "groq", model: "llama", apiKey: "k", effort: "high" }, [{ role: "user", content: "x" }]);
+  assert.equal(bodies[4].reasoning_effort, undefined, "not sent where the provider has no such setting");
+});

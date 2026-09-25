@@ -159,10 +159,11 @@ const App = (window.App = {
     sel.replaceChildren(...opts);
     // right-click on a project (the button or an entry of its menu)
     sel.zrContextMenu = (id, e) => {
-      if (id === "__new") return;
+      if (id === "__new") return PaperView.openMenu(e.clientX, e.clientY, [{ id: "ctx-new-project", icon: "add", label: "New project…", run: () => (ZRDropdown.close(), App.newProject()) }]);
       const p = App.projects.find((x) => x.id === id) || null;
-      const items = [{ id: "ctx-project-info", icon: "info", label: p ? "Info" : "Where papers are added", run: () => App.projectInfo(p, e.clientX, e.clientY) }];
-      if (p) items.push("-", { id: "ctx-delete-project", icon: "trash", danger: true, label: `Delete “${p.name}”…`, run: () => App.deleteProject(p.id) });
+      const items = [{ id: "ctx-project-info", icon: "info", label: p ? "Info" : "Where papers are added", run: () => (ZRDropdown.close(), App.projectInfo(p, e.clientX, e.clientY)) }];
+      items.push({ id: "ctx-new-project", icon: "add", label: "New project…", run: () => (ZRDropdown.close(), App.newProject()) });
+      if (p) items.push("-", { id: "ctx-delete-project", icon: "trash", danger: true, label: `Delete “${p.name}”…`, run: () => (ZRDropdown.close(), App.deleteProject(p.id)) });
       PaperView.openMenu(e.clientX, e.clientY, items);
     };
     sel.value = App.project?.id || "";
@@ -574,6 +575,7 @@ const App = (window.App = {
       ["ai", "AI"],
       ["web", "Web"],
       ["cli", "CLI"],
+      ["crawler", "Crawlers"],
       ["local", "Local"],
     ];
     const seg = el(
@@ -768,6 +770,8 @@ App.panels.search = (() => {
     $("year-from").value = s.yearFrom || "";
     $("year-to").value = s.yearTo || "";
     $("limit").value = s.limit || ZR.Prefs.get("maxPerSource", 25);
+    $("no-limit").checked = s.limit === 0;
+    $("limit").disabled = s.limit === 0;
     $("fulltext-only").checked = s.fulltextOnly ?? ZR.Prefs.get("fulltextOnly", false);
     $("oa-only").checked = !!s.oaOnly;
     $("strict").checked = !!s.strict;
@@ -845,10 +849,11 @@ App.panels.search = (() => {
     $("res-all").addEventListener("click", () => selectAll(true));
     $("res-none").addEventListener("click", () => selectAll(false));
     $("res-filter").addEventListener("input", renderResults);
-    for (const id of ["year-from", "year-to", "limit", "fulltext-only", "oa-only", "strict", "skip-existing", "hide-excluded", "attach-pdfs", "screen", "auto-import", "min-cites", "has-abstract", "has-doi"]) {
+    for (const id of ["year-from", "year-to", "limit", "no-limit", "fulltext-only", "oa-only", "strict", "skip-existing", "hide-excluded", "attach-pdfs", "screen", "auto-import", "min-cites", "has-abstract", "has-doi"]) {
       $(id).addEventListener("change", updateChips);
     }
     $("fulltext-only").addEventListener("change", () => $("fulltext-only").checked && ($("attach-pdfs").checked = true));
+    $("no-limit").addEventListener("change", () => (($("limit").disabled = $("no-limit").checked), updateChips()));
     $("auto-import").addEventListener("change", () => ($("run").textContent = $("auto-import").checked && getMode() === "llm" ? "Search & add" : "Search"));
     validateQuery();
     updateChips();
@@ -920,7 +925,7 @@ App.panels.search = (() => {
     const yf = $("year-from").value;
     const yt = $("year-to").value;
     parts.push(yf || yt ? `${yf || "…"}-${yt || "…"}` : "any year");
-    parts.push(`${$("limit").value || 25} per source`);
+    parts.push($("no-limit").checked ? "no limit" : `${$("limit").value || 25} per source`);
     if (pickedLangs.size) parts.push([...pickedLangs].map((l) => l.toUpperCase()).join("/"));
     if (pickedTypes.size) parts.push(pickedTypes.size === 1 ? ZR.Records.TYPE_FILTERS.find((t) => pickedTypes.has(t.id)).label.toLowerCase() : `${pickedTypes.size} types`);
     if (parseInt($("min-cites").value, 10) > 0) parts.push(`≥${parseInt($("min-cites").value, 10)} citations`);
@@ -998,7 +1003,7 @@ App.panels.search = (() => {
       query: llm ? "" : $("query").value.trim(),
       request: $("request").value.trim(),
       sources: selectedSources(),
-      limit: Math.max(1, Math.min(500, int("limit") || 25)),
+      limit: $("no-limit").checked ? 0 : Math.max(1, Math.min(500, int("limit") || 25)), // 0: no limit
       yearFrom: int("year-from"),
       yearTo: int("year-to"),
       oaOnly: $("oa-only").checked,
@@ -1291,16 +1296,22 @@ App.panels.search = (() => {
    * settings, everything found goes into the pool and the search is logged.
    * @returns {{run, pool: {added, known, notAdded, runID}}}
    */
-  async function searchIntoPool(settings, { parent = null } = {}) {
+  /**
+   * resume {sourceID: position} and continues (a run ID): fetch the rest of an earlier
+   * search from where each database stopped, without asking for what came before.
+   */
+  async function searchIntoPool(settings, { parent = null, resume = null, continues = null } = {}) {
     if (viewing) closeRunView();
     applyState(Object.assign({}, ZR.Prefs.getJSON("dialogState", {}), settings));
     const o = Object.assign(readOptions(), { libraryID: App.target.libraryID });
-    saveState(o);
+    if (resume) Object.assign(o, { resume, sources: Object.keys(resume), limit: settings.limit ?? 0 });
+    else saveState(o);
     App.setBusy("search", true);
     try {
       lastRun = await ZR.Search.run(o, st);
       lastRun.id = "r" + Date.now().toString(36);
       lastRun.parent = parent;
+      lastRun.continues = continues;
       lastRun.settings = stateOf(o);
       for (const r of lastRun.records) r.selected = true;
       renderResults();
@@ -1314,6 +1325,8 @@ App.panels.search = (() => {
     } finally {
       App.reviewFlow = flow;
     }
+    // the databases of the earlier search are handled by this one now (it may itself stop early)
+    if (continues && App.project) App.project = (await ZR.Projects.markSources(App.target.libraryID, App.project.id, continues, Object.keys(resume || {}), { done: lastRun.id })) || App.project;
     return { run: lastRun, pool: lastPoolImport };
   }
   let lastPoolImport = null;

@@ -24,7 +24,7 @@ ZR.Search = (() => {
     if (o.strict) parts.push("strict boolean match on title/abstract/keywords");
     if (o.skipExisting) parts.push("skip items already in library");
     if (o.screen) parts.push(`LLM screening ≥ ${o.minScore}`);
-    parts.push(`≤ ${o.limit} per source`);
+    parts.push(o.limit > 0 ? `≤ ${o.limit} per source` : "no limit per source (all results each database returns)");
     return parts.join("; ");
   }
 
@@ -127,16 +127,23 @@ ZR.Search = (() => {
           key: ZR.Sources.keyFor(id),
           secret: (sid) => ZR.Sources.secretFor(id, sid),
           email,
-        }), o.sourceTimeout || SOURCE_TIMEOUT);
+          onPage: (n, total) => status(`${src.name}: ${n.toLocaleString()}${total ? " of " + total.toLocaleString() : ""} result(s)…`),
+          resume: o.resume?.[id] || null, // continue where an earlier search stopped
+        }), o.limit > 0 ? o.sourceTimeout || SOURCE_TIMEOUT : 0); // without a limit a database may take a while
         stat.ms = Date.now() - t0;
         stat.count = out.records.length;
         stat.total = out.total;
         stat.query = out.query;
-        status(`${src.name}: ${out.records.length} result(s)`);
+        // where the database's API stopped handing out results, or a stop / error on a later page
+        if (out.capped) stat.note = `the ${src.name} API returns at most ${out.capped.toLocaleString()} of ${out.total.toLocaleString()} results`;
+        else if (out.note) stat.note = out.note;
+        Object.assign(stat, completeness(out, o, stat));
+        status(`${src.name}: ${out.records.length} result(s)${stat.note ? " (" + stat.note + ")" : ""}`);
         return out.records;
       } catch (e) {
         stat.ms = Date.now() - t0;
         stat.error = e.message || String(e);
+        Object.assign(stat, { reason: "error", pos: o.resume?.[id] || { offset: 0 } }, retryHint(stat.error));
         U.log(`Source ${id} failed`, stat.error);
         status(`${src.name}: ${stat.error}`);
         return [];
@@ -190,9 +197,39 @@ ZR.Search = (() => {
     return runInfo;
   }
 
+  /**
+   * Did a database deliver every hit? reason: limit (yours) | cap (its API's maximum) |
+   * error | stopped; pos: where to continue (null: nothing to continue).
+   */
+  function completeness(out, o, stat) {
+    if (!out.pos && !out.capped) return {};
+    if (out.capped) return { reason: "cap", pos: null, retryHint: `not by trying again: the API never hands out more than ${out.capped.toLocaleString()}. Narrow the query (e.g. by years) to get the rest.` };
+    if (out.error) return Object.assign({ reason: "error", pos: out.pos }, retryHint(out.error.message || String(out.error)));
+    if (out.note === "stopped") return { reason: "stopped", pos: out.pos, retryHint: "any time" };
+    if (o.limit > 0 && (out.total || 0) > (stat.count || 0)) return { reason: "limit", pos: out.pos, retryHint: "any time" };
+    return {};
+  }
+
+  /** When it makes sense to try a failed database again. */
+  function retryHint(msg) {
+    const m = String(msg);
+    const now = Date.now();
+    if (/\b429\b|rate limit|quota|too many/i.test(m)) {
+      if (/daily|per day|quota/i.test(m)) {
+        const d = new Date(now);
+        d.setUTCHours(24, 5, 0, 0);
+        return { retryAt: d.toISOString(), retryHint: "after the daily quota resets (midnight UTC)" };
+      }
+      return { retryAt: new Date(now + 60 * 60000).toISOString(), retryHint: "in about an hour (rate limit)" };
+    }
+    if (/\b40[13]\b|key|entitlement|unauthori/i.test(m)) return { retryAt: null, retryHint: "after checking the API key in Settings" };
+    return { retryAt: new Date(now + 5 * 60000).toISOString(), retryHint: "in a few minutes (the database did not answer)" };
+  }
+
   // One slow or hanging database must not hold up the whole search.
   const SOURCE_TIMEOUT = 45000;
   function withDeadline(promise, ms) {
+    if (!ms) return promise;
     let timer;
     const deadline = new Promise((_, reject) => {
       timer = setTimeout(() => reject(new Error(`no answer within ${Math.round(ms / 1000)} s: skipped`)), ms);
@@ -280,5 +317,5 @@ ZR.Search = (() => {
     return records;
   }
 
-  return { run, importRecords, related, describeFilters, sortRecords, applyFilters, SORTS };
+  return { completeness, retryHint, run, importRecords, related, describeFilters, sortRecords, applyFilters, SORTS };
 })();

@@ -56,8 +56,15 @@ ZR.PDFHunt = (() => {
     return { title: item.getField("title"), creators, year: U.yearOf(item.getField("date")), doi: item.getField("DOI"), venue: item.getField("publicationTitle") || item.getField("proceedingsTitle") || "" };
   }
 
-  /** Candidate PDF links from a crawler API. */
-  async function crawlerURLs(id, paper) {
+  /** Candidate PDF links from a crawler API (an entry of its own in the Log). */
+  function crawlerURLs(id, paper) {
+    const name = CRAWLERS.find((c) => c.id === id)?.name || id;
+    const run = () => crawlerRequest(id, paper);
+    if (!ZR.Activity?.track) return run();
+    return ZR.Activity.track("crawler", `${name}: ${U.truncate(paper.title, 70)}`, `Looking for a PDF of “${paper.title}”${paper.doi ? " (doi:" + paper.doi + ")" : ""}`, run, (urls) => `${urls.length} link(s)${urls.length ? "\n" + urls.slice(0, 8).join("\n") : ""}`);
+  }
+
+  async function crawlerRequest(id, paper) {
     const key = crawlerKey(id);
     if (!key) throw new Error(`No key for ${id}. Add it in Settings → Web search & crawlers`);
     const q = `"${paper.title}" pdf`;
@@ -151,19 +158,26 @@ ZR.PDFHunt = (() => {
    * Run one strategy for papers without PDF.
    * @param {Zotero.Item[]} items
    * @param {string} strategy  "oa" | "ai:<profileID>" | "crawler:<id>"
-   * @returns {Promise<{tried, found, failed: string[], results: {itemID, url}[]}>}
+   * @param {{onProgress?, onFound?, records?, job?}} opts  job (ZR.Jobs): pause / stop and live counts
+   * @returns {Promise<{tried, found, failed: string[], results: {itemID, url}[], stopped?: boolean}>}
    */
-  async function run(items, strategy, { onProgress = () => {}, records = new Map() } = {}) {
+  async function run(items, strategy, { onProgress = () => {}, onFound = () => {}, records = new Map(), job = null } = {}) {
     const todo = items.filter((i) => !hasPDF(i));
-    const res = { tried: todo.length, found: 0, failed: [], results: [] };
+    const res = { tried: 0, found: 0, failed: [], results: [] };
+    job?.progress({ total: todo.length });
     for (const [n, item] of todo.entries()) {
-      if (ZR.Activity?.stopping) break;
+      if (job ? !(await job.gate(U.truncate(item.getField("title"), 80))) : ZR.Activity?.stopping) {
+        res.stopped = true;
+        break;
+      }
+      res.tried++;
       onProgress(n + 1, todo.length, item);
       try {
         if (strategy === "oa") {
           if (await ZR.Importer.attachFullText(item, records.get(item.id) || null)) {
             res.found++;
             res.results.push({ itemID: item.id, url: "open access" });
+            onFound(item.id);
           }
           continue;
         }
@@ -178,10 +192,13 @@ ZR.PDFHunt = (() => {
         if (hit) {
           res.found++;
           res.results.push({ itemID: item.id, url: hit.url });
+          onFound(item.id);
         }
       } catch (e) {
-        if (e?.stopped) break;
+        if (e?.stopped || job?.state === "stopping") break;
         res.failed.push(`${U.truncate(item.getField("title"), 50)}: ${e.message}`);
+      } finally {
+        job?.progress({ done: res.tried, found: res.found, failed: res.failed.length });
       }
     }
     return res;
