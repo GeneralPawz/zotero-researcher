@@ -22,7 +22,89 @@ ZR.UI = (() => {
     });
     registerItemPaneSection();
     registerMenus();
+    registerReader();
     announceUpdate();
+  }
+
+  // --- PDF reader ----------------------------------------------------------------
+  // A "Review" button in the reader toolbar (AI annotations for the paper's review,
+  // jump to the review) and verdict entries in the annotation context menu. Zotero
+  // removes both when the plugin shuts down (they are registered with the plugin ID).
+  function registerReader() {
+    if (!Zotero.Reader?.registerEventListener) return;
+    Zotero.Reader.registerEventListener(
+      "renderToolbar",
+      (event) => {
+        const { reader, doc, append } = event;
+        const btn = doc.createElement("button");
+        btn.id = "zr-reader-btn";
+        btn.className = "toolbar-button";
+        btn.title = "Zotero Researcher — annotate this paper for your review";
+        btn.textContent = "✦ Review";
+        btn.style.cssText = "width: auto; padding: 0 8px; font-size: 12px; white-space: nowrap;";
+        btn.addEventListener("click", (e) => readerMenu(reader, e).catch((err) => Zotero.logError(err)));
+        append(btn);
+      },
+      ZR.id
+    );
+    Zotero.Reader.registerEventListener(
+      "createAnnotationContextMenu",
+      (event) => {
+        const { reader, params, append } = event;
+        const libraryID = reader._item?.libraryID;
+        const set = (kind) => Promise.all(params.ids.map((key) => ZR.FullText.setKind(key, libraryID, kind))).catch((e) => Zotero.logError(e));
+        append({ label: "Review: speaks for inclusion", onCommand: () => set("include") });
+        append({ label: "Review: maybe", onCommand: () => set("maybe") });
+        append({ label: "Review: speaks against inclusion", onCommand: () => set("exclude") });
+        append({ label: "Review: remove verdict", onCommand: () => set(null) });
+      },
+      ZR.id
+    );
+  }
+
+  async function readerMenu(reader, e) {
+    const win = Zotero.getMainWindow();
+    const doc = win.document;
+    const attachment = reader._item;
+    const paper = attachment?.parentItem || attachment;
+    const projects = paper ? await ZR.FullText.projectsFor(paper) : [];
+    const popup = doc.createXULElement("menupopup");
+    popup.id = "zr-reader-menu";
+    const item = (label, fn, disabled = false) => {
+      const mi = doc.createXULElement("menuitem");
+      mi.setAttribute("label", label);
+      if (disabled) mi.setAttribute("disabled", "true");
+      if (fn) mi.addEventListener("command", () => fn().catch?.((err) => Zotero.logError(err)));
+      popup.append(mi);
+    };
+    if (!projects.length) item("This paper is not part of a structured review", null, true);
+    for (const p of projects) {
+      item(`✦ Annotate with AI for “${p.name}”`, () => annotateFromReader(paper, p));
+      item(`Show in the review “${p.name}” (full text)`, async () => openDialog(win, { tab: "review", projectID: p.id, step: "fulltext", focusItemID: paper.id }));
+    }
+    popup.append(doc.createXULElement("menuseparator"));
+    item("Tag annotations include / maybe / exclude to use them in the review", null, true);
+    doc.getElementById("mainPopupSet").append(popup);
+    popup.addEventListener("popuphidden", () => popup.remove());
+    popup.openPopupAtScreen(e.screenX, e.screenY + 12, true);
+  }
+
+  async function annotateFromReader(paper, project) {
+    const profile = ZR.Prefs.getActiveLLMProfile();
+    const pw = new Zotero.ProgressWindow({ closeOnClick: true });
+    pw.changeHeadline("Zotero Researcher");
+    const line = new pw.ItemProgress(ICON, "Reading the paper…");
+    pw.show();
+    try {
+      if (!profile) throw new Error("No AI set up — add one in Settings → Zotero Researcher");
+      const r = await ZR.FullText.annotateWithAI({ item: paper, protocol: project.protocol, profile, max: ZR.Prefs.get("annoMax", 10), onStatus: (m) => line.setText(m) });
+      line.setText(`Added ${r.created} annotation(s)${r.notFound.length ? ` (${r.notFound.length} quote(s) not found in the PDF)` : ""}`);
+      line.setProgress(100);
+    } catch (err) {
+      line.setError();
+      line.setText("Annotating failed: " + err.message);
+    }
+    pw.startCloseTimer(6000);
   }
 
   /** After an update the old Settings pane is gone, so the new version confirms it. */
@@ -186,6 +268,9 @@ ZR.UI = (() => {
       tab: opts.tab || (items.length >= 2 ? "selected" : "find"),
       autoRun: opts.autoRun || null,
       tour: !!opts.tour,
+      projectID: opts.projectID || null,
+      step: opts.step || null,
+      focusItemID: opts.focusItemID || null,
     };
     args.wrappedJSObject = args;
     return win.openDialog("chrome://zotero-researcher/content/dialog/research.xhtml", "", "chrome,centerscreen,resizable,dialog=no,width=1100,height=780", args);

@@ -24,6 +24,7 @@ const LIB_FILES = [
   "lib/system1.js",
   "lib/prisma.js",
   "lib/projects.js",
+  "lib/fulltext.js",
   "lib/citations.js",
   "lib/importer.js",
   "lib/search.js",

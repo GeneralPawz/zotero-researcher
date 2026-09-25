@@ -513,3 +513,28 @@ button.toggle[aria-pressed="true"] { border-color: var(--accent); background: va
 @keyframes zr-pulse { 50% { opacity: 0.2; } }
 .log-detail { margin: 0; padding: 8px 12px 10px 124px; white-space: pre-wrap; word-break: break-word; font-size: 11px; background: var(--bg-2); border-bottom: 1px solid var(--line); max-height: 260px; overflow: auto; }
 .log-empty { padding: 16px; }
+
+/* ---------- full-text annotations (step 4) ---------- */
+.anno-box { border: 1px solid var(--line); border-radius: 10px; padding: 8px 12px; margin: 12px 0 0; display: flex; flex-direction: column; gap: 6px; background: var(--bg-2); max-width: 900px; }
+.anno-head { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.anno-sum { display: inline-flex; gap: 10px; font-size: 12px; font-weight: 600; }
+.k-include { color: var(--good); }
+.k-maybe { color: var(--mid); }
+.k-exclude { color: var(--bad); }
+.anno-list { display: flex; flex-direction: column; gap: 3px; max-height: 46vh; overflow: auto; }
+.anno-row { display: grid; grid-template-columns: 24px minmax(0, 1fr) auto auto; gap: 8px; align-items: start; padding: 6px 8px; border-radius: 7px; cursor: pointer; border: 1px solid transparent; background: var(--bg); }
+.anno-row:hover { border-color: var(--fg-3); }
+.anno-row.k-include { background: var(--good-soft); color: inherit; }
+.anno-row.k-maybe { background: var(--mid-soft); color: inherit; }
+.anno-row.k-exclude { background: var(--bad-soft); color: inherit; }
+.anno-who { font-size: 15px; line-height: 1.2; text-align: center; }
+.anno-text { font-size: 12.5px; line-height: 1.45; }
+.anno-comment { font-size: 12px; color: var(--fg-2); margin-top: 2px; font-style: italic; }
+.anno-page { font-size: 11px; color: var(--fg-3); white-space: nowrap; padding-top: 2px; }
+.anno-kind { display: inline-flex; gap: 2px; }
+.kind-btn { width: 24px; height: 22px; padding: 0; font-weight: 700; font-size: 12px; border-radius: 5px; color: var(--fg-3); }
+.kind-btn.include:hover, .kind-btn.include.on { color: #fff; background: var(--good); border-color: var(--good); }
+.kind-btn.maybe:hover, .kind-btn.maybe.on { color: #fff; background: var(--mid); border-color: var(--mid); }
+.kind-btn.exclude:hover, .kind-btn.exclude.on { color: #fff; background: var(--bad); border-color: var(--bad); }
+.anno-help { margin-top: 2px; }
+.q-anno { display: inline-flex; gap: 4px; font-size: 11px; font-weight: 700; flex: none; }

@@ -319,6 +319,12 @@ async function init() {
     App.panels.search.renderSources?.();
   });
 
+  // Opened from the PDF reader: go to the paper in its review
+  if (App.args.projectID && App.projects.some((p) => p.id === App.args.projectID)) {
+    await App.switchProject(App.args.projectID);
+    if (App.args.step) App.panels.review.setStep(App.args.step);
+    if (App.args.focusItemID) App.panels.review.focusItem(App.args.focusItemID);
+  }
   const tab = { find: "search", selected: "items", compare: "items" }[App.args.tab] || App.args.tab || "search";
   App.showTab(tab);
   if (App.args.tab === "compare") App.panels.items.openCompare();

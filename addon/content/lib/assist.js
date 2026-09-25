@@ -153,6 +153,36 @@ Reply with JSON only:
     return { protocol, recommended: { methodology: rec, why: String(out.recommendationWhy || "") }, rationale: String(out.rationale || "") };
   }
 
+  /**
+   * Annotate a paper's full text for a review: verbatim passages that speak for or
+   * against inclusion. Returns {annotations: [{quote, kind, comment}], summary}.
+   */
+  async function annotateFullText(profile, protocol, paper, { max = 10 } = {}) {
+    const system =
+      "You annotate the full text of a research paper for a systematic literature review. " +
+      "Pick the passages a careful reviewer would mark as evidence for the eligibility decision: what the paper studies, its method, data and findings as they relate to the criteria. " +
+      "Every quote must be copied EXACTLY from the text — same words, same order, one to three sentences, no ellipses, no paraphrase. " +
+      "kind is include (evidence the paper meets the criteria), exclude (evidence it does not), or maybe (relevant but inconclusive). The comment names the criterion and says why, in at most 25 words, in the language of the review.";
+    const criteria = [
+      protocol.questions?.length ? "Research questions:\n" + protocol.questions.map((q) => "- " + q).join("\n") : "",
+      protocol.objective ? "Objective: " + protocol.objective : "",
+      protocol.inclusion?.length ? "Inclusion criteria:\n" + protocol.inclusion.map((q) => "- " + q).join("\n") : "",
+      protocol.exclusion?.length ? "Exclusion criteria:\n" + protocol.exclusion.map((q) => "- " + q).join("\n") : "",
+    ]
+      .filter(Boolean)
+      .join("\n\n");
+    const user = `${criteria}\n\nPaper: ${paper.title}\n\nText:\n"""\n${paper.text}\n"""\n\nReply with JSON only: {"annotations": [{"quote": "<exact text>", "kind": "include"|"maybe"|"exclude", "comment": "<why>"}, …], "summary": "<one sentence: does the full text meet the criteria?>"} with at most ${max} annotations, most important first.`;
+    const out = await ZR.LLM.chatJSON(profile, [{ role: "user", content: user }], { system, maxTokens: 6000, timeout: 300000 });
+    const list = Array.isArray(out?.annotations) ? out.annotations : Array.isArray(out) ? out : [];
+    return {
+      annotations: list
+        .filter((a) => a && typeof a.quote === "string" && a.quote.trim().length >= 8)
+        .slice(0, max)
+        .map((a) => ({ quote: a.quote.trim(), kind: ["include", "maybe", "exclude"].includes(a.kind) ? a.kind : "maybe", comment: U.truncate(String(a.comment || ""), 300) })),
+      summary: String(out?.summary || ""),
+    };
+  }
+
   /** Fill data-extraction fields for one paper from its abstract / full text. */
   async function extractFields(profile, fields, paper) {
     const system = "You extract data for a literature review. Use only the given text; write 'not reported' when the text does not say. Keep each value short (a phrase or one sentence).";
@@ -246,5 +276,5 @@ Reply with JSON only:
       });
   }
 
-  return { planQuery, screen, screenCriteria, fillProtocol, extractFields, assessQuality, nameClusters, compare, extractMetadata, pickCandidate, sanitizeHTML, QUERY_SYNTAX };
+  return { planQuery, screen, screenCriteria, fillProtocol, annotateFullText, extractFields, assessQuality, nameClusters, compare, extractMetadata, pickCandidate, sanitizeHTML, QUERY_SYNTAX };
 })();

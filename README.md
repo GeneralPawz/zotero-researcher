@@ -120,7 +120,20 @@ Pick a project from the menu to switch to it (and to its collection), or create 
    - **Years and languages** from the protocol are checked from the metadata in code, not asked to the model.
 
    Papers are added to the Zotero collection **when you include them**.
-4. **Check full texts.** Only included papers appear, with *Open PDF*, *Find PDF* and *Find PDFs for all*. The AI can read the indexed full text.
+4. **Check full texts.** Only papers that passed screening appear. The card works like the screening card: decision and reason at the top, the same abstract view. *Find PDF* and *Find PDFs for all* fetch missing PDFs.
+   - **Full-text annotations:**
+     - *Annotate with AI* reads the PDF and writes **real Zotero annotations**. Each is a highlight on a verbatim passage, with a short comment and a tag: `include`, `maybe` or `exclude`, coloured green, yellow or red.
+     - They carry their own author name, "Bot" by default, set in Settings → *Reading papers*.
+     - *AI: annotate the full texts* does this for every paper that has a PDF.
+   - **Your own annotations** count too: tag them `include`, `maybe` or `exclude` (case doesn't matter). In the reader you can instead right-click an annotation → *Review: …*.
+   - **The list on the card** shows every annotation of the PDF:
+     - 🤖 marks the AI's annotations, 👤 marks yours.
+     - Each row is tinted by its verdict and shows a count of what speaks for and against.
+     - Click a row to open the PDF at that place.
+     - The ✓ ? ✗ buttons set the verdict, which also sets the tag and colour in Zotero.
+     - Changes made in the PDF show up right away. The queue shows each paper's counts (✓2 ?1 ✗1).
+   - **In the PDF reader**, the toolbar has a **✦ Review** button. It annotates the paper with AI for its review, or opens the paper in the review's full-text step.
+   - Positions come from Zotero's own text extraction, so a highlight covers exactly the quoted text. Quotes the AI did not copy verbatim are skipped and reported.
 5. **Assess quality / extract data / classify.** A table of the included papers against the protocol's checklist, fields or facets. You fill it by hand or with *Fill with AI* (full text where indexed, otherwise the abstract), then export it as CSV.
 6. **Report.** The PRISMA flow diagram is computed from the logged searches and every decision. Mapping studies also get facet counts. *Save as note* writes the protocol plus the flow summary into the collection, ready for the method section. The diagram can also be exported as SVG.
 
@@ -263,7 +276,7 @@ Layout:
 `npm run e2e` works like this:
 1. It builds the XPI and installs it into a **throwaway profile and data directory**.
 2. It starts a separate Zotero (`-no-remote`).
-3. The in-app self-test (`content/lib/selftest.js`) drives the real UI: 40 steps covering the toolbar, multi-select, item pane, context menu, welcome pointer, tour, research areas, live searches, PDFs, metadata fixing, judging and decision memory, Settings, the AI flows (against a mock AI endpoint, with live databases), projects (automatic quick projects, new review projects, conversion, persistence), the structured review (methodology-dependent forms, AI-filled protocol, candidate pool, System 1 rating against a mock TypeSafe endpoint with threshold decisions, AI on the uncertain papers, keyboard screening, the screening card (highlights with notes into Zotero, search terms, sentence paragraphs), the activity log, full text, AI-filled quality and extraction tables, flow diagram and protocol note), the local model (Settings check, ranking by the protocol, duplicate exclusion, learning from keyboard decisions and re-ranking, topic clusters as a facet, passage retrieval, similar papers in the library and the citation graph), citation linking on real papers (ResNet → GoogLeNet, Attention → ResNet), and disable/re-enable with the decisions surviving.
+3. The in-app self-test (`content/lib/selftest.js`) drives the real UI: 41 steps covering the toolbar, multi-select, item pane, context menu, welcome pointer, tour, research areas, live searches, PDFs, metadata fixing, judging and decision memory, Settings, the AI flows (against a mock AI endpoint, with live databases), projects (automatic quick projects, new review projects, conversion, persistence), the structured review (methodology-dependent forms, AI-filled protocol, candidate pool, System 1 rating against a mock TypeSafe endpoint with threshold decisions, AI on the uncertain papers, keyboard screening, the screening card (highlights with notes into Zotero, search terms, sentence paragraphs), the activity log, full-text annotations (AI highlights in a generated PDF, a tagged human annotation syncing back, verdicts written back to Zotero, the reader's Review button), full text, AI-filled quality and extraction tables, flow diagram and protocol note), the local model (Settings check, ranking by the protocol, duplicate exclusion, learning from keyboard decisions and re-ranking, topic clusters as a facet, passage retrieval, similar papers in the library and the citation graph), citation linking on real papers (ResNet → GoogLeNet, Attention → ResNet), and disable/re-enable with the decisions surviving.
 4. It writes `report.json` and screenshots, then quits.
 
 Your normal profile and library are never touched. Use `--keep-open` to keep the test instance open, and `--clean` to delete the temp folder after a passing run.
