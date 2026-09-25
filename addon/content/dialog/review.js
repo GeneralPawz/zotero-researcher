@@ -1,4 +1,4 @@
-/* global Zotero, App, $, el, document, DOMParser */
+/* global Zotero, App, $, el, document, window, DOMParser, PaperView */
 "use strict";
 
 // Review tab: a methodology-based pipeline for the current project.
@@ -487,6 +487,14 @@ App.panels.review = (() => {
     $("queue-filter").querySelector('option[value="maybe"]').hidden = s === "ft";
     const list = filtered();
     $("queue-count").textContent = `${list.length} paper(s)`;
+    if (pendingFocus) {
+      const hit = population().find((c) => c.itemID === pendingFocus);
+      if (hit) {
+        currentKey = hit.key;
+        if (!list.includes(hit)) list.unshift(hit);
+      }
+      pendingFocus = null;
+    }
     if (!list.some((c) => c.key === currentKey)) currentKey = list[0]?.key ?? null;
     const box = $("queue");
     box.replaceChildren();
@@ -498,7 +506,7 @@ App.panels.review = (() => {
           el("span", { class: `dot ${d || ""}${!d && sg ? " ai" : ""}`, title: d ? `${d}${c.by === "s1" ? " (System 1)" : c.by === "llm" ? " (AI)" : ""}` : sg ? `AI suggests ${sg.d}` : "not decided" }),
           el("span", { class: "q-t", text: c.title || "(untitled)" }),
           c.dup && !d && s === "ta" ? el("span", { class: "q-dup", text: "⧉", title: "Possible duplicate" }) : null,
-          c.s1 ? el("span", { class: "q-p " + band(c.s1.p), text: pct(c.s1.p), title: "System 1: probability of relevance" }) : null,
+          s === "ft" ? annoCounts(c) : c.s1 ? el("span", { class: "q-p " + band(c.s1.p), text: pct(c.s1.p), title: "System 1: probability of relevance" }) : null,
         ])
       );
     }
@@ -506,6 +514,19 @@ App.panels.review = (() => {
     renderCard(list.find((c) => c.key === currentKey));
     renderS1();
     renderFunnel();
+  }
+
+  /** ✓2 ?1 ✗1 — the verdicts of a paper's full-text annotations, for the queue. */
+  function annoCounts(c) {
+    if (!c.itemID) return null;
+    const list = ZR.FullText.annotationsOf(Zotero.Items.get(c.itemID));
+    if (!list.length) return null;
+    const n = (k) => list.filter((a) => a.kind === k).length;
+    return el("span", { class: "q-anno", title: `${list.length} annotation(s): ${n("include")} for, ${n("maybe")} maybe, ${n("exclude")} against` }, [
+      n("include") ? el("span", { class: "k-include", text: "✓" + n("include") }) : null,
+      n("maybe") ? el("span", { class: "k-maybe", text: "?" + n("maybe") }) : null,
+      n("exclude") ? el("span", { class: "k-exclude", text: "✗" + n("exclude") }) : null,
+    ]);
   }
 
   function band(p) {
@@ -564,6 +585,14 @@ App.panels.review = (() => {
     const missing = pop.filter((c) => c.itemID && !c.hasPDF && !c.ft).length;
     pdfs.hidden = !ft || !missing;
     pdfs.textContent = `Find PDFs for ${missing} paper(s)`;
+    let annoAll = $("ft-annotate");
+    if (!annoAll) {
+      annoAll = el("button", { id: "ft-annotate", "data-busy": "1", onclick: annotateAll, title: "The AI annotates every full text that has a PDF and no AI annotations yet" });
+      $("s1-panel").append(annoAll);
+    }
+    const unannotated = ft ? pop.filter((c) => c.itemID && c.hasPDF && !c.ft).length : 0;
+    annoAll.hidden = !ft || !unannotated;
+    annoAll.textContent = "✦ AI: annotate the full texts";
 
     // Local model: duplicates and what it has learned from your decisions
     const local = ZR.Embed.isAvailable();
@@ -946,7 +975,7 @@ App.panels.review = (() => {
           c.itemID
             ? el("button", { class: "link", text: "Show in Zotero", onclick: () => App.ZR.UI.revealItem(c.itemID, { preferCollectionID: App.target.collectionID }) })
             : el("span", { class: "tag", text: "in the pool — added to Zotero when included", title: "Pool papers stay outside your library until they pass screening" }),
-          s === "ft" && c.itemID ? pdfButton(c) : null,
+          s === "ft" && c.itemID && !ZR.FullText.pdfOf(Zotero.Items.get(c.itemID)) ? pdfButton(c) : null,
           el("span", { class: "spacer" }),
           el("button", {
             class: "toggle",
@@ -965,6 +994,7 @@ App.panels.review = (() => {
           current ? el("button", { class: "link", text: `undo${c.by === "s1" ? " (System 1)" : c.by === "llm" ? " (AI)" : ""}`, onclick: () => decide(c, null) }) : null,
           el("span", { class: "hint", text: "↑/↓ move" }),
         ]),
+        annotationsPanel(c),
         dupBox(c, s),
         s1Box(c, s),
         sg
@@ -980,6 +1010,151 @@ App.panels.review = (() => {
         highlightList(c),
       ])
     );
+  }
+
+  // ------------------------------------------------ full-text annotations (step 4) ----
+  const KIND_LABEL = { include: "for inclusion", maybe: "maybe", exclude: "against" };
+
+  /** Annotations in the PDF (the AI's and yours), with their verdict tags. */
+  function annotationsPanel(c) {
+    if (dstage() !== "ft") return null;
+    const item = c.itemID && Zotero.Items.get(c.itemID);
+    const att = item && ZR.FullText.pdfOf(item);
+    const head = (extra) => el("div", { class: "anno-head" }, [el("b", { text: "Full-text annotations" }), ...extra]);
+    if (!att) return el("div", { class: "anno-box" }, [head([]), el("div", { class: "hint", text: "No PDF attached yet — use Find PDF above, or attach the file in Zotero." })]);
+    const list = ZR.FullText.annotationsOf(item);
+    const n = (k) => list.filter((a) => a.kind === k).length;
+    const untagged = list.filter((a) => !a.kind).length;
+    const summary = list.length
+      ? el("span", { class: "anno-sum" }, [
+          el("span", { class: "k-include", text: `${n("include")} for` }),
+          el("span", { class: "k-maybe", text: `${n("maybe")} maybe` }),
+          el("span", { class: "k-exclude", text: `${n("exclude")} against` }),
+          untagged ? el("span", { class: "hint", text: `${untagged} without verdict` }) : null,
+        ])
+      : null;
+    return el("div", { class: "anno-box" }, [
+      head([
+        summary,
+        el("span", { class: "spacer" }),
+        el("button", { class: "anno-ai", "data-busy": "1", text: "✦ Annotate with AI", title: `The AI marks passages for and against inclusion as real Zotero annotations (author “${ZR.FullText.botName()}”)`, onclick: () => annotateAI(c) }),
+        el("button", { text: "Open PDF", onclick: () => Zotero.Reader.open(att.id) }),
+      ]),
+      list.length
+        ? el(
+            "div",
+            { class: "anno-list" },
+            list.map((a) =>
+              el("div", { class: `anno-row k-${a.kind || "none"}`, "data-key": a.key, title: "Click to show it in the PDF", onclick: () => ZR.FullText.open(a) }, [
+                el("span", { class: "anno-who", title: a.isBot ? `${a.author} — written by the AI` : `${a.author || "You"}`, text: a.isBot ? "🤖" : "👤" }),
+                el("div", { class: "anno-main" }, [
+                  el("div", { class: "anno-text", text: a.text ? `“${ZR.Util.truncate(a.text, 300)}”` : "(note without text)" }),
+                  a.comment ? el("div", { class: "anno-comment", text: a.comment }) : null,
+                ]),
+                el("span", { class: "anno-page", text: a.page ? "p. " + a.page : "" }),
+                el(
+                  "div",
+                  { class: "anno-kind", onclick: (e) => e.stopPropagation() },
+                  ["include", "maybe", "exclude"].map((k) =>
+                    el("button", {
+                      class: `kind-btn ${k}${a.kind === k ? " on" : ""}`,
+                      title: a.kind === k ? "Remove the verdict" : `Mark as ${KIND_LABEL[k]} — sets the tag and the colour in Zotero`,
+                      text: k === "include" ? "✓" : k === "maybe" ? "?" : "✗",
+                      onclick: () => setAnnotationKind(a, a.kind === k ? null : k),
+                    })
+                  )
+                ),
+              ])
+            )
+          )
+        : el("div", { class: "hint", text: "No annotations yet. Let the AI annotate the PDF, or annotate it yourself in Zotero." }),
+      el("div", {
+        class: "hint anno-help",
+        text: "Your own annotations count too: tag them include, maybe or exclude (in the reader: right-click an annotation → Review). Changes in the PDF appear here right away.",
+      }),
+    ]);
+  }
+
+  async function setAnnotationKind(a, kind) {
+    if (!App.target.editable) return st("This library is read-only.");
+    try {
+      await ZR.FullText.setKind(a.key, libraryID(), kind);
+    } catch (e) {
+      st("Could not change the annotation: " + e.message);
+    }
+    renderScreen();
+  }
+
+  async function annotateAI(c, { quiet = false } = {}) {
+    let profile;
+    try {
+      profile = App.profile();
+    } catch (e) {
+      return st(e.message);
+    }
+    if (!App.target.editable) return st("This library is read-only.");
+    const item = Zotero.Items.get(c.itemID);
+    if (!quiet) App.setBusy("review", true);
+    try {
+      const r = await ZR.FullText.annotateWithAI({ item, protocol: project().protocol, profile, max: ZR.Prefs.get("annoMax", 10), onStatus: (m) => st(`${ZR.Util.truncate(c.title, 50)}: ${m}`) });
+      const msg = `The AI added ${r.created} annotation(s) to “${ZR.Util.truncate(c.title, 60)}”${r.notFound.length ? ` — ${r.notFound.length} quote(s) were not found verbatim in the PDF and skipped` : ""}.${r.summary ? " " + r.summary : ""}`;
+      if (!quiet) st(msg);
+      return r;
+    } catch (e) {
+      if (!quiet) st("Annotating failed: " + e.message);
+      throw e;
+    } finally {
+      if (!quiet) {
+        App.setBusy("review", false);
+        renderScreen();
+      }
+    }
+  }
+
+  /** All full texts with a PDF and no AI annotations yet. */
+  async function annotateAll() {
+    const todo = population().filter((c) => c.itemID && ZR.FullText.pdfOf(Zotero.Items.get(c.itemID)) && !ZR.FullText.annotationsOf(Zotero.Items.get(c.itemID)).some((a) => a.isBot));
+    if (!todo.length) return st("Every full text with a PDF has AI annotations already.");
+    App.setBusy("review", true);
+    let made = 0;
+    let failed = 0;
+    try {
+      for (const [i, c] of todo.entries()) {
+        st(`Annotating ${i + 1}/${todo.length}: ${ZR.Util.truncate(c.title, 60)}…`);
+        try {
+          made += (await annotateAI(c, { quiet: true })).created;
+        } catch (e) {
+          failed++;
+          ZR.Util.log("Annotating failed", c.title, e.message);
+        }
+      }
+      st(`The AI added ${made} annotation(s) to ${todo.length - failed} full text(s)${failed ? `; ${failed} failed (see Log)` : ""}.`);
+    } finally {
+      App.setBusy("review", false);
+      renderScreen();
+    }
+  }
+
+  // Annotations edited in the PDF (by you or on another device) show up right away
+  let annoTimer = null;
+  const notifierID = Zotero.Notifier.registerObserver(
+    {
+      notify(event, type, ids) {
+        if (step !== "fulltext" || App.currentTab !== "review") return;
+        if (!ids.some((id) => Zotero.Items.get(id)?.isAnnotation?.() || event === "delete")) return;
+        clearTimeout(annoTimer);
+        annoTimer = setTimeout(() => renderScreen(), 400);
+      },
+    },
+    ["item"],
+    "zotero-researcher-review"
+  );
+  window.addEventListener("unload", () => Zotero.Notifier.unregisterObserver(notifierID));
+
+  /** Open a paper at a step (from the reader's Review menu). */
+  let pendingFocus = null;
+  function focusItem(itemID) {
+    pendingFocus = itemID;
   }
 
   // ---------------------------------------------------------- reading the abstract ----
@@ -1495,5 +1670,5 @@ App.panels.review = (() => {
   /** Open this step the next time the tab is shown. */
   const setStep = (s) => (step = s);
 
-  return { init, onShow, refresh, reset, go, setStep, get step() { return step; }, get candidates() { return cands; } };
+  return { init, onShow, refresh, reset, go, setStep, focusItem, get step() { return step; }, get candidates() { return cands; } };
 })();

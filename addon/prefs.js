@@ -29,3 +29,5 @@ pref("extensions.zotero-researcher.embedModel", "nomic-embed-text");
 pref("extensions.zotero-researcher.s1Blend", true);
 pref("extensions.zotero-researcher.abstractSentences", false);
 pref("extensions.zotero-researcher.showQueryTerms", true);
+pref("extensions.zotero-researcher.botName", "Bot");
+pref("extensions.zotero-researcher.annoMax", 10);

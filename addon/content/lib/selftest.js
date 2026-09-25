@@ -1,4 +1,4 @@
-/* global ZR, Zotero, IOUtils, PathUtils, ChromeUtils */
+/* global ZR, Zotero, IOUtils, PathUtils, ChromeUtils, Services */
 // In-app end-to-end self-test. Inert unless the pref
 //   extensions.zotero-researcher.selftest = "<output directory>"
 // is set (only done by scripts/e2e.mjs in a throwaway profile). Writes report.json and
@@ -140,7 +140,19 @@ ZR.SelfTest = (() => {
       calls.push(prompt.slice(0, 50));
       const n = (prompt.match(/^\[\d+\]/gm) || []).length;
       let content;
-      if (prompt.includes('"recommendedMethodology"'))
+      if (prompt.includes('{"annotations"')) {
+        const text = (prompt.split('Text:\n"""\n')[1] || "").split('\n"""')[0];
+        const sentences = text.split(/(?<=\.)\s+/).map((x) => x.trim()).filter((x) => x.length > 40 && /[.]$/.test(x));
+        const pick = (re) => sentences.find((x) => re.test(x));
+        content = JSON.stringify({
+          annotations: [
+            { quote: pick(/modular JSON/), kind: "include", comment: "Reports a concrete change to the IFC 5 schema." },
+            { quote: pick(/no releases/), kind: "maybe", comment: "Suggests development may have slowed." },
+            { quote: pick(/opinion piece/), kind: "exclude", comment: "Not empirical research." },
+          ].filter((a) => a.quote),
+          summary: "Partly meets the criteria.",
+        });
+      } else if (prompt.includes('"recommendedMethodology"'))
         content = JSON.stringify({
           title: "IFC-based BIM data exchange: a systematic review",
           objective: "Establish how IFC is used for data exchange between BIM tools",
@@ -175,6 +187,54 @@ ZR.SelfTest = (() => {
       const json = { choices: [{ message: { content } }] };
       return { status: 200, text: JSON.stringify(json), json: () => json };
     };
+  }
+
+  /** A minimal text PDF (Helvetica, one line per string) for the full-text tests. */
+  function simplePDF(pages) {
+    const esc = (s) => s.replace(/\\/g, "\\\\").replace(/\(/g, "\\(").replace(/\)/g, "\\)");
+    const objects = [];
+    const kids = [];
+    objects[1] = "<< /Type /Catalog /Pages 2 0 R >>";
+    objects[3] = "<< /Type /Font /Subtype /Type1 /BaseFont /Helvetica /Encoding /WinAnsiEncoding >>";
+    let n = 4;
+    for (const lines of pages) {
+      const stream = "BT /F1 11 Tf 16 TL 60 740 Td " + lines.map((l) => `(${esc(l)}) Tj T* T*`).join(" ") + " ET";
+      objects[n] = `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 612 792] /Resources << /Font << /F1 3 0 R >> >> /Contents ${n + 1} 0 R >>`;
+      objects[n + 1] = `<< /Length ${stream.length} >>\nstream\n${stream}\nendstream`;
+      kids.push(`${n} 0 R`);
+      n += 2;
+    }
+    objects[2] = `<< /Type /Pages /Kids [${kids.join(" ")}] /Count ${pages.length} >>`;
+    let out = "%PDF-1.4\n";
+    const offsets = [];
+    for (let i = 1; i < n; i++) {
+      offsets[i] = out.length;
+      out += `${i} 0 obj\n${objects[i]}\nendobj\n`;
+    }
+    const xref = out.length;
+    out += `xref\n0 ${n}\n0000000000 65535 f \n` + offsets.slice(1).map((o) => String(o).padStart(10, "0") + " 00000 n \n").join("");
+    out += `trailer\n<< /Size ${n} /Root 1 0 R >>\nstartxref\n${xref}\n%%EOF\n`;
+    return out;
+  }
+
+  /**
+   * Open Settings on the plugin's pane. The window takes focus when it opens, so a stray
+   * keystroke from another app can land in its search box — clear it and navigate back.
+   */
+  async function openPrefs() {
+    const pw = Zotero.Utilities.Internal.openPreferences("zotero-researcher-prefs");
+    await waitFor(() => pw.document?.readyState === "complete" && pw.Zotero_Preferences, 30000);
+    try {
+      const P = pw.Zotero_Preferences;
+      if (P.searchField?.value) {
+        P.searchField.value = "";
+        await P._search("");
+      }
+      await P.navigateToPane("zotero-researcher-prefs");
+    } catch (e) {
+      /* older Zotero: keep what opened */
+    }
+    return pw;
   }
 
   /** Choose an option through the in-document dropdown, the way a user clicks it. */
@@ -574,7 +634,8 @@ ZR.SelfTest = (() => {
     });
 
     await step("preferences: checklist, research areas, AI and databases render", async () => {
-      const pw = Zotero.Utilities.Internal.openPreferences("zotero-researcher-prefs");
+      const pw = await openPrefs();
+      try {
       await waitFor(() => pw.document?.querySelector("#zr-src-table table tr:nth-child(3)") && pw.document.querySelectorAll("#zr-areas .zr-area").length, 30000);
       await U.sleep(500);
       const d = pw.document;
@@ -607,9 +668,11 @@ ZR.SelfTest = (() => {
       await shot(pw, "06b-preferences-dropdown.png");
       d.querySelector(".zr-dd-menu .zr-dd-item")?.click();
       const res = { checklist: d.querySelectorAll("#zr-checklist .zr-check-row").length, areas: d.querySelectorAll("#zr-areas .zr-area").length, databasesShown: rowsDefault, pubmedListed, aiEditor: !!d.querySelector("#zr-llm-editor .zr-editor"), providerMenuVisible: prov.visible, baseAfterPick, cliProgram: program, cliHidesKey: keyRowHidden, claudeModels, codexModels, system1: d.querySelectorAll("#zr-s1 select, #zr-s1 input").length };
-      pw.close();
       if (pubmedListed) throw new Error("PubMed listed although medicine is off");
       return res;
+      } finally {
+        pw.close();
+      }
     });
 
     // ------------------------------------------------ AI + review (mock LLM)
@@ -970,6 +1033,80 @@ ZR.SelfTest = (() => {
         return res;
       });
 
+      await step("full text: the AI annotates the PDF (real Zotero annotations), your tagged annotations sync back", async () => {
+        const d = rv();
+        // A paper with a two-page PDF that has a real text layer
+        const paper = new Zotero.Item("journalArticle");
+        paper.libraryID = libraryID;
+        paper.setField("title", "IFC 5 development: an annotated test paper");
+        paper.setField("abstractNote", "We examine whether the development of IFC 5 has progressed. The schema moved to a modular JSON-based format. Some parts of the work have stalled.");
+        paper.addToCollection(reviewCol.id);
+        await paper.saveTx();
+        const pdfPath = PathUtils.join(outDir, "annotation-test.pdf");
+        await IOUtils.writeUTF8(
+          pdfPath,
+          simplePDF([
+            [
+              "IFC 5 development: an annotated test paper",
+              "This study reviews the development of IFC 5 between 2022 and 2025.",
+              "The new schema replaces the monolithic model with modular JSON components.",
+              "Three software vendors implemented prototype exporters for the new format.",
+            ],
+            [
+              "The working group reported no releases during the last six months.",
+              "This paper is an opinion piece and does not present empirical data.",
+              "Further evaluation of data exchange quality remains necessary.",
+            ],
+          ])
+        );
+        const att = await Zotero.Attachments.importFromFile({ file: pdfPath, parentItemID: paper.id });
+        await ZR.Store.decide({ libraryID, item: paper, stage: "ta", d: "include", by: "me", collectionKey: reviewCol.key });
+        await rw.App.panels.review.refresh();
+        await goStep("fulltext", (x) => x.querySelector("#screen-card .paper-card, #screen-card .empty-state"));
+        const cand = rw.App.panels.review.candidates.find((c) => c.itemID === paper.id);
+        d.querySelector(`#queue .q-item[data-key="${cand.key}"]`).click();
+        await waitFor(() => d.querySelector("#screen-card .anno-box .anno-ai"), 5000);
+        const order = [...d.querySelector("#screen-card .paper-card").children].map((n) => n.className.split(" ")[0]);
+        rw.App.status("review", "");
+        d.querySelector("#screen-card .anno-ai").click();
+        await waitFor(() => /The AI added \d+ annotation|Annotating failed/.test(rvStatus()), 120000);
+        const status = rvStatus();
+        const bot = att.getAnnotations();
+        const botView = bot.map((a) => ({ author: a.annotationAuthorName, tags: a.getTags().map((t) => t.tag), color: a.annotationColor, page: a.annotationPageLabel, rects: JSON.parse(a.annotationPosition).rects.length, text: a.annotationText.slice(0, 40) }));
+        // Your own annotation, tagged in Zotero: shows up with the human marker
+        const doc = await ZR.FullText.documentOf(att);
+        await ZR.FullText.saveAnnotation(att, doc, { quote: "Further evaluation of data exchange quality remains necessary.", kind: null, comment: "my own note", author: "" });
+        const human = att.getAnnotations().find((a) => !a.annotationAuthorName);
+        human.addTag("Exclude");
+        await human.saveTx();
+        await waitFor(() => d.querySelectorAll("#screen-card .anno-row").length === bot.length + 1, 10000);
+        const rows = [...d.querySelectorAll("#screen-card .anno-row")].map((r) => [r.querySelector(".anno-who").textContent, r.className.replace("anno-row ", "")]);
+        await shot(rw, "11d-fulltext-annotations.png");
+        // Changing the verdict in the list writes the tag and the colour to the annotation
+        d.querySelector(`#screen-card .anno-row[data-key="${human.key}"] .kind-btn.include`).click();
+        await waitFor(() => Zotero.Items.getByLibraryAndKey(libraryID, human.key).getTags().some((t) => t.tag === "include"), 5000);
+        const changed = Zotero.Items.getByLibraryAndKey(libraryID, human.key);
+        // Clicking an annotation opens the PDF there; the reader has the Review button
+        d.querySelector(`#screen-card .anno-row[data-key="${human.key}"] .anno-main`).click();
+        const reader = await waitFor(() => Zotero.Reader._readers.find((r) => r.itemID === att.id), 20000);
+        const toolbarButton = await waitFor(() => reader._iframeWindow?.document.getElementById("zr-reader-btn"), 20000).catch(() => null);
+        await U.sleep(1500);
+        await shot(win, "11e-reader.png");
+        win.Zotero_Tabs.close(reader.tabID);
+        const res = {
+          order: order.slice(0, 5),
+          status,
+          bot: botView,
+          rows,
+          changed: { tags: changed.getTags().map((t) => t.tag), color: changed.annotationColor },
+          readerOpened: !!reader,
+          toolbarButton: toolbarButton?.textContent || null,
+        };
+        const kinds = botView.map((b) => b.tags[0]).sort().join(",");
+        if (bot.length !== 3 || kinds !== "exclude,include,maybe" || botView.some((b) => b.author !== "Bot" || !b.rects) || rows.filter((r) => r[0] === "👤").length !== 1 || !rows.some((r) => r[1] === "k-exclude" && r[0] === "👤") || changed.annotationColor !== "#5fb236" || !toolbarButton) throw new Error(JSON.stringify(res));
+        return res;
+      });
+
       await step("a quick project converts into a review; projects persist across reopening", async () => {
         const d = rv();
         await pick(d.getElementById("project-select"), "zr-selftest");
@@ -1007,7 +1144,9 @@ ZR.SelfTest = (() => {
       report.localModel = realOllama ? "real Ollama" : "mock";
       await step(`local model: Settings finds the server and model (${report.localModel})`, async () => {
         ZR.Embed._reset();
-        const pw = Zotero.Utilities.Internal.openPreferences("zotero-researcher-prefs");
+        for (const w of Services.wm.getEnumerator("zotero:pref")) w.close(); // a fresh pane checks the server again
+        await U.sleep(300);
+        const pw = await openPrefs();
         const d = await waitFor(() => pw.document?.getElementById("zr-local-status") && pw.document, 30000);
         const status = await waitFor(() => {
           const t = d.getElementById("zr-local-status").textContent;
