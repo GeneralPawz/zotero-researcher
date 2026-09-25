@@ -433,3 +433,16 @@ table.grid { border-collapse: collapse; width: 100%; font-size: 12px; }
 .facet-summary { margin-top: 16px; max-width: 520px; }
 .facet-summary h3 { margin-top: 12px; }
 .method-change { align-self: center; justify-self: start; }
+
+/* ---------- local model ---------- */
+.dup-box { border: 1px dashed var(--mid); border-radius: 10px; padding: 7px 12px; margin: 12px 0 0; background: var(--mid-soft); display: flex; align-items: center; gap: 10px; font-size: 12px; }
+.q-dup { color: var(--mid); font-size: 12px; flex: none; }
+#s1-learn { font-size: 11px; line-height: 1.35; }
+.similar-list { display: flex; flex-direction: column; max-height: 40vh; overflow: auto; }
+.similar-row { display: grid; grid-template-columns: 44px 1fr; gap: 8px; padding: 5px 0; border-top: 1px solid var(--line); }
+.similar-row a { color: var(--fg); font-weight: 600; text-decoration: none; }
+.similar-row a:hover { color: var(--accent); text-decoration: underline; }
+.sim { font-weight: 700; font-size: 12px; text-align: right; padding-top: 1px; }
+.sim.hi { color: var(--good); }
+.sim.md { color: var(--mid); }
+.sim.lo { color: var(--fg-3); }

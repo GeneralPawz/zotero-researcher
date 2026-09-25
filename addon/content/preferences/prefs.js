@@ -32,6 +32,7 @@ var ZRPrefsPane = (() => {
     renderAreas();
     renderLLMList();
     renderS1();
+    renderLocal();
     renderSourcesToolbar();
     renderSources();
     document.getElementById("zr-replay-tour").addEventListener("click", () => {
@@ -425,6 +426,66 @@ var ZRPrefsPane = (() => {
       ])
     );
     current();
+  }
+
+  // --------------------------------------------------------- local models ----
+  function renderLocal() {
+    const E = ZR.Embed;
+    const box = document.getElementById("zr-local");
+    const cfg = E.config();
+    const status = el("span", { class: "zr-status", id: "zr-local-status" });
+    const pullBtn = el("button", { text: "Download model", hidden: true });
+    const enabled = el("input", { type: "checkbox", id: "zr-local-enabled", checked: cfg.enabled, onchange: () => (ZR.Prefs.set("embedEnabled", enabled.checked), check()) });
+    const api = el(
+      "select",
+      { id: "zr-local-api", onchange: () => (ZR.Prefs.set("embedAPI", api.value), ZR.Prefs.set("embedURL", ""), (url.value = E.config().url), check()) },
+      E.APIS.map((a) => el("option", { value: a.id, text: a.name }))
+    );
+    api.value = cfg.api;
+    const url = el("input", { type: "text", size: 30, id: "zr-local-url", value: cfg.url, onchange: () => (ZR.Prefs.set("embedURL", url.value.trim()), check()) });
+    const model = el("input", { type: "text", size: 22, id: "zr-local-model", value: cfg.model, list: "zr-local-models", onchange: () => (ZR.Prefs.set("embedModel", model.value.trim() || "nomic-embed-text"), check()) });
+    const models = el("datalist", { id: "zr-local-models" }, E.MODELS.map((m) => el("option", { value: m.id, label: `${m.size} — ${m.note}` })));
+    const blend = el("input", { type: "checkbox", id: "zr-s1-blend", checked: ZR.Prefs.get("s1Blend", true) !== false, onchange: () => ZR.Prefs.set("s1Blend", blend.checked) });
+
+    async function check() {
+      pullBtn.hidden = true;
+      if (!E.config().enabled) return (status.textContent = "Turned off.");
+      status.textContent = "Checking…";
+      const s = await E.check();
+      if (s.ok) status.textContent = `✓ Ready — ${s.api === "ollama" ? "Ollama " + s.version + ", " : ""}${s.model} (${s.dim} dimensions)`;
+      else {
+        status.textContent = "✗ " + s.error;
+        pullBtn.hidden = !(s.api === "ollama" && s.version && !s.hasModel);
+      }
+    }
+    pullBtn.addEventListener("click", async () => {
+      pullBtn.disabled = true;
+      try {
+        await E.pull((m) => (status.textContent = m + " (this can take a few minutes)"));
+        await check();
+      } catch (e) {
+        status.textContent = "✗ Download failed: " + e.message;
+      } finally {
+        pullBtn.disabled = false;
+      }
+    });
+    const info = E.MODELS.map((m) => `${m.id} (${m.size}): ${m.note}`).join(" · ");
+    box.replaceChildren(
+      el("div", { class: "zr-grid" }, [
+        el("label", { for: "zr-local-enabled", text: "Use local models" }),
+        el("div", {}, [enabled, " ", status, " ", pullBtn]),
+        el("label", { for: "zr-local-api", text: "Server" }),
+        el("div", {}, [api, " ", url, el("div", { class: "zr-help" }, ["Install ", link("Ollama", "https://ollama.com/download"), " (runs natively on Windows on ARM, macOS and Linux) and keep it running. Foundry Local, LM Studio or llama.cpp work through their OpenAI-compatible endpoint."])]),
+        el("label", { for: "zr-local-model", text: "Embedding model" }),
+        el("div", {}, [model, models, el("div", { class: "zr-help", text: info })]),
+        el("label", { for: "zr-s1-blend", text: "Screening" }),
+        el("div", {}, [
+          el("label", {}, [blend, " Combine TypeSafe / AI ratings with what the local model learned from your decisions"]),
+          el("div", { class: "zr-help", text: "Once you have included and excluded a few papers yourself, the local model learns your judgement and re-ranks the pool as you screen." }),
+        ]),
+      ])
+    );
+    check();
   }
 
   function secretInput(secretName, label) {

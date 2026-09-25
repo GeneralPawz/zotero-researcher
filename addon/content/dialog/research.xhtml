@@ -238,6 +238,7 @@
         <div class="toolbar">
           <span id="rv-table-title" class="hint"></span>
           <span class="spacer"></span>
+          <button id="rv-table-cluster" hidden="hidden" title="The local model groups the included papers by topic and adds the groups as a facet">⧉ Topics from clusters</button>
           <button id="rv-table-ai">✦ Fill with AI</button>
           <button id="rv-table-csv">Export CSV</button>
         </div>
@@ -268,10 +269,15 @@
       <button id="find-pdfs">Find PDFs</button>
       <button id="compare-open">Compare with AI</button>
       <button id="find-related" title="Papers these items cite, and related works (OpenAlex)">Find related papers</button>
+      <button id="find-similar" title="Papers in your library with similar content — local model on this computer">Similar in my library</button>
       <span class="spacer"></span>
       <select id="llm-profile-2" title="AI profile"></select>
     </div>
     <div class="statusbar"><progress id="items-progress" hidden="hidden"></progress><span id="items-status"></span></div>
+    <div id="similar-box" class="drawer compare" hidden="hidden">
+      <div class="row-between"><b id="similar-title">Similar papers in your library</b><button id="similar-close" class="link">close</button></div>
+      <div id="similar-list" class="similar-list"></div>
+    </div>
     <div id="compare-box" class="drawer compare" hidden="hidden">
       <label class="field">What should the AI compare? <textarea id="compare-instruction" rows="2">Compare these papers: research question, method, data/case study, key findings, limitations, and how they relate to each other.</textarea></label>
       <div class="actions">
@@ -299,6 +305,7 @@
         <option value="library">Whole library</option>
       </select>
       <label class="check" title="Adds Zotero's native “Related” link between papers that cite each other"><input type="checkbox" id="cite-related" checked="checked"/> Link as “Related” in Zotero</label>
+      <label class="check" id="cite-similar-wrap" title="Dashed lines between papers with very similar content (local model) — useful where citation data is missing"><input type="checkbox" id="cite-similar"/> Show similar papers</label>
       <button id="cite-scan" class="primary">Find citation links</button>
       <span class="spacer"></span>
       <button id="cite-missing" title="Papers cited by several of yours that are not in your library">Suggest missing papers</button>

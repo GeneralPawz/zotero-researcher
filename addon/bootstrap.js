@@ -19,6 +19,7 @@ const LIB_FILES = [
   "lib/llm.js",
   "lib/assist.js",
   "lib/methodologies.js",
+  "lib/embeddings.js",
   "lib/system1.js",
   "lib/prisma.js",
   "lib/projects.js",

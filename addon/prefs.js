@@ -22,3 +22,8 @@ pref("extensions.zotero-researcher.resultClick", "jump");
 pref("extensions.zotero-researcher.selftestCLI", false);
 pref("extensions.zotero-researcher.s1Engine", "");
 pref("extensions.zotero-researcher.s1Model", "jev-latest");
+pref("extensions.zotero-researcher.embedEnabled", true);
+pref("extensions.zotero-researcher.embedAPI", "ollama");
+pref("extensions.zotero-researcher.embedURL", "");
+pref("extensions.zotero-researcher.embedModel", "nomic-embed-text");
+pref("extensions.zotero-researcher.s1Blend", true);

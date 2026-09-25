@@ -28,7 +28,7 @@ App.panels.review = (() => {
   const dstage = () => (step === "fulltext" ? "ft" : "ta"); // decision stage
   const today = () => new Date().toISOString().slice(0, 10);
   const pct = (p) => (p == null ? "–" : Math.round(p * 100) + "%");
-  const ENGINE_NAMES = { typesafe: "TypeSafe Jev", llm: "your AI provider", rules: "keyword rules" };
+  const ENGINE_NAMES = { typesafe: "TypeSafe Jev", local: "the local model", llm: "your AI provider", rules: "keyword rules" };
 
   function init() {
     ZR = App.ZR;
@@ -52,6 +52,7 @@ App.panels.review = (() => {
     $("ai-accept").addEventListener("click", aiAccept);
     $("rv-table-ai").addEventListener("click", tableAI);
     $("rv-table-csv").addEventListener("click", tableCSV);
+    $("rv-table-cluster").addEventListener("click", clusterFacet);
     $("prisma-note").addEventListener("click", saveNote);
     $("prisma-svg").addEventListener("click", exportSVG);
     document.addEventListener("keydown", onKey);
@@ -76,6 +77,7 @@ App.panels.review = (() => {
     $("rv-main").hidden = !p;
     if (!p) return renderStart();
     if (draft && draft.id !== p.id) reset();
+    await ZR.Embed.available().catch(() => false); // local model on this computer? (checked at most once a minute)
     cands = await ZR.Projects.candidates(libraryID(), p);
     if (!step || !method().stages.includes(step)) step = firstOpenStage();
     renderFunnel();
@@ -479,6 +481,7 @@ App.panels.review = (() => {
         el("div", { class: "q-item" + (c.key === currentKey ? " current" : ""), "data-key": c.key, onclick: () => ((currentKey = c.key), renderScreen()) }, [
           el("span", { class: `dot ${d || ""}${!d && sg ? " ai" : ""}`, title: d ? `${d}${c.by === "s1" ? " (System 1)" : c.by === "llm" ? " (AI)" : ""}` : sg ? `AI suggests ${sg.d}` : "not decided" }),
           el("span", { class: "q-t", text: c.title || "(untitled)" }),
+          c.dup && !d && s === "ta" ? el("span", { class: "q-dup", text: "⧉", title: "Possible duplicate" }) : null,
           c.s1 ? el("span", { class: "q-p " + band(c.s1.p), text: pct(c.s1.p), title: "System 1: probability of relevance" }) : null,
         ])
       );
@@ -545,18 +548,147 @@ App.panels.review = (() => {
     const missing = pop.filter((c) => c.itemID && !c.hasPDF && !c.ft).length;
     pdfs.hidden = !ft || !missing;
     pdfs.textContent = `Find PDFs for ${missing} paper(s)`;
+
+    // Local model: duplicates and what it has learned from your decisions
+    const local = ZR.Embed.isAvailable();
+    let dup = $("dup-find");
+    if (!dup) {
+      dup = el("button", { id: "dup-find", onclick: (e) => (openDuplicates().length ? armed(e.target, excludeDuplicates, `Click again to exclude ${openDuplicates().length}`) : findDuplicates()) });
+      $("s1-panel").append(dup);
+    }
+    dup.hidden = ft || !local || !pop.length;
+    if (!dup.classList.contains("armed")) {
+      const n = openDuplicates().length;
+      dup.textContent = n ? `⧉ Exclude ${n} duplicate(s)` : "⧉ Find duplicates";
+      dup.title = n ? "Excludes the less complete version of each pair (reason: Duplicate); the better-documented one stays" : "The local model looks for the same paper under different titles or versions (preprint vs. journal)";
+    }
+    let learn = $("s1-learn");
+    if (!learn) {
+      learn = el("div", { id: "s1-learn", class: "hint" });
+      $("s1-panel").querySelector(".s1-head").after(learn);
+    }
+    learn.hidden = ft || !local || (eng !== "local" && ZR.Prefs.get("s1Blend", true) === false) || eng === "rules";
+    if (!learn.hidden) {
+      const labels = cands.filter(ZR.System1.isLabel);
+      const pos = labels.filter((c) => c.ta === "include").length;
+      const need = ZR.System1.MIN_LABELS;
+      learn.textContent =
+        pos >= need && labels.length - pos >= need
+          ? `Learns from your ${labels.length} decisions and re-ranks as you screen.`
+          : `Learns from your decisions once you have included ${need} and excluded ${need} papers yourself (now ${pos} / ${labels.length - pos}).`;
+    }
+  }
+
+  // ------------------------------------------------ local model: learn, dedupe ----
+  let relearnTimer = null;
+  let relearning = false;
+
+  /** After your own decisions: retrain the local model and re-rank what is left (active learning). */
+  function scheduleRelearn() {
+    clearTimeout(relearnTimer);
+    relearnTimer = setTimeout(relearnNow, 600);
+  }
+
+  async function relearnNow() {
+    const p = project();
+    if (relearning || !p || !ZR.Embed.isAvailable()) return;
+    relearning = true;
+    try {
+      const todo = cands.filter((c) => !c.ta && c.s1);
+      const { results, trained, labels } = await ZR.System1.relearn(todo, p.protocol, cands);
+      const n = Object.keys(results).length;
+      if (!n) return;
+      await ZR.Projects.setScores(libraryID(), p.id, "s1", results);
+      for (const c of todo) if (results[c.key]) c.s1 = results[c.key];
+      if (trained) st(`Re-ranked ${n} paper(s) with what the local model learned from ${labels} of your decisions.`);
+      if (step === "screen" && App.currentTab === "review") renderScreen();
+    } catch (e) {
+      ZR.Util.log("Re-ranking failed", e.message);
+    } finally {
+      relearning = false;
+    }
+  }
+
+  const openDuplicates = () => (dstage() === "ta" ? population().filter((c) => c.dup && !c.ta && cands.some((x) => x.key === c.dup.of)) : []);
+  const dupReason = () => (project().protocol.reasons || []).find((r) => /duplicate/i.test(r)) || "Duplicate";
+
+  /** Of two versions, which one to keep: in the library, not a preprint, with DOI, fuller abstract. */
+  function completeness(c) {
+    return (c.itemID ? 4 : 0) + (c.itemType && c.itemType !== "preprint" ? 2 : 0) + (c.doi ? 1 : 0) + Math.min(1, (c.abstract || "").length / 1500);
+  }
+
+  async function findDuplicates({ quiet = false } = {}) {
+    const p = project();
+    if (!quiet) App.setBusy("review", true);
+    try {
+      const vecs = await ZR.Embed.paperVectors(cands, { onProgress: (d, n) => st(`The local model is reading ${d}/${n} abstract(s) (first time only)…`) });
+      const byKey = new Map(cands.map((c) => [c.key, c]));
+      const dups = {};
+      for (const { a, b, sim } of ZR.Embed.duplicates(cands, vecs)) {
+        const [keep, drop] = completeness(byKey.get(a)) >= completeness(byKey.get(b)) ? [a, b] : [b, a];
+        if (dups[keep] || dups[drop]) continue; // chains: one pair at a time
+        dups[drop] = { of: keep, sim: Math.round(sim * 1000) / 1000 };
+      }
+      const pool = await ZR.Projects.loadPool(libraryID(), p.id);
+      pool.dups = dups;
+      await ZR.Projects.savePool(libraryID(), p.id);
+      for (const c of cands) c.dup = dups[c.key] || null;
+      const n = openDuplicates().length;
+      if (!quiet) st(n ? `Found ${n} possible duplicate(s) — marked ⧉. Check them one by one, or exclude them all (the better-documented version stays).` : "No duplicates found.");
+      return n;
+    } catch (e) {
+      if (!quiet) st("Duplicate check failed: " + e.message);
+      return 0;
+    } finally {
+      if (!quiet) {
+        App.setBusy("review", false);
+        renderScreen();
+      }
+    }
+  }
+
+  async function excludeDuplicates() {
+    const list = openDuplicates();
+    App.setBusy("review", true);
+    try {
+      for (const c of list) await decide(c, "exclude", dupReason(), "dup", { advance: false, render: false });
+      st(`Excluded ${list.length} duplicate(s) — reason “${dupReason()}”, recorded as “duplicate check”.`);
+    } finally {
+      App.setBusy("review", false);
+      renderScreen();
+    }
+  }
+
+  async function notDuplicate(c) {
+    const pool = await ZR.Projects.loadPool(libraryID(), project().id);
+    delete pool.dups[c.key];
+    await ZR.Projects.savePool(libraryID(), project().id);
+    c.dup = null;
+    renderScreen();
+  }
+
+  function dupBox(c, s) {
+    if (!c.dup || c[s] || s !== "ta") return null;
+    const other = cands.find((x) => x.key === c.dup.of);
+    if (!other) return null;
+    return el("div", { class: "dup-box" }, [
+      el("span", {}, [el("b", { text: "⧉ Possible duplicate" }), ` of “${ZR.Util.truncate(other.title, 90)}” (${[other.year, other.venue].filter(Boolean).join(", ") || "n.d."}) — ${pct(c.dup.sim)} similar`]),
+      el("span", { class: "spacer" }),
+      el("button", { text: "Exclude as duplicate", onclick: () => decide(c, "exclude", dupReason(), "dup") }),
+      el("button", { class: "link", text: "not a duplicate", onclick: () => notDuplicate(c) }),
+    ]);
   }
 
   /** Two-click confirmation for bulk actions (no modal dialogs). */
   const arming = new Map();
-  function armed(btn, fn) {
+  function armed(btn, fn, text) {
     if (arming.has(btn)) {
       clearTimeout(arming.get(btn));
       arming.delete(btn);
       btn.classList.remove("armed");
       return fn();
     }
-    btn.textContent = btn.id === "s1-exclude" ? `Click again to exclude ${btn.textContent.replace(/\D+/g, "")}` : `Click again to include ${btn.textContent.replace(/\D+/g, "")}`;
+    btn.textContent = text || `Click again to ${btn.id === "s1-include" ? "include" : "exclude"} ${btn.textContent.replace(/\D+/g, "")}`;
     btn.classList.add("armed");
     arming.set(
       btn,
@@ -593,13 +725,22 @@ App.panels.review = (() => {
       st(`System 1 (${ENGINE_NAMES[eng]}) is rating ${list.length} paper(s)…`);
       const res = await ZR.System1.score(list, p.protocol, {
         engine: eng,
-        onProgress: (d, n) => st(`System 1 (${ENGINE_NAMES[eng]}) rated ${d}/${n}…`),
+        all: cands,
+        onProgress: (d, n, what) => st(what === "embedding" ? `The local model is reading ${d}/${n} abstract(s) (first time only)…` : `System 1 (${ENGINE_NAMES[eng]}) rated ${d}/${n}…`),
         onError: (c, e) => (failed++, (lastError = e.message)),
       });
       await ZR.Projects.setScores(libraryID(), p.id, "s1", res);
       for (const c of list) if (res[c.key]) c.s1 = res[c.key];
       const n = Object.keys(res).length;
-      st(`Rated ${n} paper(s) with ${ENGINE_NAMES[eng]}${failed ? ` — ${failed} failed: ${lastError}` : ""}. Papers are sorted by probability; set the thresholds to settle the clear cases.`);
+      const learned = Object.values(res).find((r) => r.learned != null || r.trained);
+      let dupNote = "";
+      if (ZR.Embed.isAvailable()) {
+        const found = await findDuplicates({ quiet: true });
+        if (found) dupNote = ` Found ${found} possible duplicate(s) — marked ⧉.`;
+      }
+      st(
+        `Rated ${n} paper(s) with ${ENGINE_NAMES[eng]}${learned ? ` (with what the local model learned from ${learned.labels} of your decisions)` : ""}${failed ? ` — ${failed} failed: ${lastError}` : ""}. Papers are sorted by probability; set the thresholds to settle the clear cases.${dupNote}`
+      );
     } catch (e) {
       st("Rating failed: " + e.message);
     } finally {
@@ -633,18 +774,32 @@ App.panels.review = (() => {
     }
   }
 
-  async function fullText(c) {
+  /**
+   * Full text of a paper's attachment. Long texts are cut down to the passages that
+   * matter for `queries` (criteria, checklist, fields) when the local model is available;
+   * otherwise the reader gets the beginning of the text.
+   */
+  async function fullText(c, queries = []) {
     if (!c.itemID) return "";
     const item = Zotero.Items.get(c.itemID);
     const att = item
       ?.getAttachments()
       .map((id) => Zotero.Items.get(id))
       .find((a) => a?.isFileAttachment());
+    let text = "";
     try {
-      return att ? (await att.attachmentText) || "" : "";
+      text = att ? (await att.attachmentText) || "" : "";
     } catch (e) {
       return ""; // not indexed yet
     }
+    if (text.length > 9000 && queries.length && ZR.Embed.isAvailable()) {
+      try {
+        return await ZR.Embed.passages(`att:${att.libraryID}/${att.key}`, text, queries);
+      } catch (e) {
+        ZR.Util.log("Passage retrieval failed", e.message);
+      }
+    }
+    return text;
   }
 
   /** The protocol in the shape Assist.screenCriteria expects. */
@@ -673,7 +828,8 @@ App.panels.review = (() => {
     App.setBusy("review", true);
     try {
       const papers = [];
-      for (const c of todo) papers.push({ title: c.title, year: c.year, venue: c.venue, abstract: c.abstract, fulltext: s === "ft" ? await fullText(c) : "" });
+      const queries = [...(p.protocol.inclusion || []), ...(p.protocol.exclusion || []), ...(p.protocol.questions || [])];
+      for (const c of todo) papers.push({ title: c.title, year: c.year, venue: c.venue, abstract: c.abstract, fulltext: s === "ft" ? await fullText(c, queries) : "" });
       const out = await ZR.Assist.screenCriteria(profile, criteriaOf(p.protocol), papers, s, { onProgress: (d, n) => st(`The AI is reading ${d}/${n}…`) });
       const map = {};
       todo.forEach((c, k) => {
@@ -766,6 +922,7 @@ App.panels.review = (() => {
             : el("span", { class: "tag", text: "in the pool — added to Zotero when included", title: "Pool papers stay outside your library until they pass screening" }),
           s === "ft" && c.itemID ? pdfButton(c) : null,
         ]),
+        dupBox(c, s),
         s1Box(c, s),
         sg
           ? el("div", { class: "ai-box" }, [
@@ -856,6 +1013,7 @@ App.panels.review = (() => {
     c[s] = d;
     c.reason = r;
     c.by = d ? by : "";
+    if (by === "me" && s === "ta" && ZR.Embed.isAvailable() && cands.some((x) => x.s1 && x.s1.engine !== "rules")) scheduleRelearn();
     if (advance && d) {
       const list = filtered();
       const idx = list.findIndex((x) => x.key === c.key);
@@ -916,6 +1074,8 @@ App.panels.review = (() => {
     body.replaceChildren();
     $("rv-table-ai").disabled = App.busy || !spec.cols.length || !rows.length;
     $("rv-table-csv").disabled = !rows.length;
+    $("rv-table-cluster").hidden = step !== "classify" || !ZR.Embed.isAvailable();
+    $("rv-table-cluster").disabled = App.busy || rows.length < 4;
     if (!spec.cols.length) {
       body.append(el("div", { class: "empty-state" }, [el("div", { class: "empty-title", text: `No ${spec.empty} in the protocol yet` }), el("div", {}, el("button", { class: "primary", text: "Edit the protocol", onclick: () => ((protocolMode = "form"), go("protocol")) }))]));
       return;
@@ -981,8 +1141,8 @@ App.panels.review = (() => {
     renderSteps();
   }
 
-  async function paperFor(c) {
-    return { title: c.title, year: c.year, abstract: c.abstract, fulltext: await fullText(c) };
+  async function paperFor(c, queries = []) {
+    return { title: c.title, year: c.year, abstract: c.abstract, fulltext: await fullText(c, queries) };
   }
 
   async function tableAI() {
@@ -1002,7 +1162,7 @@ App.panels.review = (() => {
     try {
       await ZR.Util.mapLimit(rows, 3, async (c) => {
         try {
-          const paper = await paperFor(c);
+          const paper = await paperFor(c, spec.cols);
           if (spec.field === "qa") {
             const answers = await ZR.Assist.assessQuality(profile, spec.cols, paper);
             for (const [i, a] of answers.entries()) if (a && !c.qa?.[i]) await setCell(c, spec, i, a.a, { why: a.why });
@@ -1019,6 +1179,84 @@ App.panels.review = (() => {
         st(`The AI filled ${++done}/${rows.length} paper(s)…`);
       });
       st(`The AI filled ${done - failed} paper(s)${failed ? `, ${failed} failed` : ""}. It used the full text where Zotero has indexed it, otherwise the abstract — check the values.`);
+    } finally {
+      App.setBusy("review", false);
+      renderTable();
+    }
+  }
+
+  const STOP = new Set("a an and are as at based by for from in into is of on or the to using via with towards toward its their this that these we our study analysis approach case new".split(" "));
+
+  /** Fallback cluster name: words frequent in the cluster's titles but not overall. */
+  function keywordName(group, all) {
+    const words = (list) => {
+      const n = new Map();
+      for (const c of list) for (const w of new Set(ZR.Util.normalizeTitle(c.title).split(" "))) if (w.length > 2 && !STOP.has(w) && !/^\d+$/.test(w)) n.set(w, (n.get(w) || 0) + 1);
+      return n;
+    };
+    const g = words(group);
+    const a = words(all);
+    const top = [...g.entries()].map(([w, n]) => [w, n / group.length - (a.get(w) || 0) / all.length]).sort((x, y) => y[1] - x[1]).slice(0, 2).map(([w]) => w);
+    return top.length ? top.map((w) => w[0].toUpperCase() + w.slice(1)).join(" / ") : "Other";
+  }
+
+  /** Mapping studies: group the included papers by topic (local model) into a new facet. */
+  async function clusterFacet() {
+    const p = project();
+    const rows = tableRows();
+    if (rows.length < 4) return st("Topic clusters need at least 4 included papers.");
+    App.setBusy("review", true);
+    try {
+      const vecs = await ZR.Embed.paperVectors(rows, { onProgress: (d, n) => st(`The local model is reading ${d}/${n} abstract(s)…`) });
+      const list = rows.filter((c) => vecs.has(c.key));
+      const k = Math.max(2, Math.min(8, Math.round(Math.sqrt(list.length / 2))));
+      const { assign } = ZR.Embed.kmeans(
+        list.map((c) => vecs.get(c.key)),
+        k
+      );
+      const groups = Array.from({ length: k }, () => []);
+      list.forEach((c, i) => groups[assign[i]].push(c));
+      const clusters = groups.filter((g) => g.length);
+      let names = clusters.map((g) => keywordName(g, list));
+      let profile = null;
+      try {
+        profile = App.profile();
+      } catch (e) {
+        /* keyword names only */
+      }
+      if (profile) {
+        try {
+          st("The AI is naming the topic clusters…");
+          const ai = await ZR.Assist.nameClusters(profile, clusters.map((g) => g.map((c) => c.title)), p.protocol.objective || (p.protocol.questions || []).join(" "));
+          names = names.map((n, i) => ai[i] || n);
+        } catch (e) {
+          ZR.Util.log("Naming clusters failed", e.message);
+        }
+      }
+      // Category names must survive the "Facet: a, b, c" notation and be distinct
+      const seen = new Map();
+      names = names.map((n) => {
+        n = n.replace(/[,;:]+/g, " ").replace(/\s+/g, " ").trim() || "Other";
+        const k2 = (seen.get(n) || 0) + 1;
+        seen.set(n, k2);
+        return k2 > 1 ? `${n} ${k2}` : n;
+      });
+      const facet = "Topic (clusters)";
+      p.protocol.facets = [...(p.protocol.facets || []).filter((f) => !f.startsWith(facet + ":")), `${facet}: ${names.join(", ")}`];
+      await ZR.Projects.save(libraryID(), p);
+      draft = null;
+      const pool = await ZR.Projects.loadPool(libraryID(), p.id);
+      clusters.forEach((g, i) =>
+        g.forEach((c) => {
+          const o = (pool.extract[c.key] = pool.extract[c.key] || {});
+          o[facet] = names[i];
+          c.extract = o;
+        })
+      );
+      await ZR.Projects.savePool(libraryID(), p.id);
+      st(`Grouped ${list.length} papers into ${clusters.length} topic clusters (local model${profile ? ", named by the AI" : ""}) as the facet “${facet}”. Change a paper's topic in the table, or rename the categories in the protocol.`);
+    } catch (e) {
+      st("Clustering failed: " + e.message);
     } finally {
       App.setBusy("review", false);
       renderTable();

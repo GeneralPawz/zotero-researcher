@@ -55,6 +55,8 @@ const prefs = {
   "extensions.zotero-researcher.selftestMode": updateTest ? "update" : "",
   // ZR_E2E_CLI=1 also makes real calls through the installed Claude Code / Codex CLIs
   "extensions.zotero-researcher.selftestCLI": process.env.ZR_E2E_CLI === "1",
+  // ZR_E2E_OLLAMA=1 uses the real local embedding server (Ollama) instead of a mock
+  "extensions.zotero-researcher.selftestOllama": process.env.ZR_E2E_OLLAMA === "1",
 };
 writeFileSync(join(profile, "user.js"), Object.entries(prefs).map(([k, v]) => `user_pref(${js(k)}, ${js(v)});`).join("\n") + "\n");
 
@@ -63,7 +65,7 @@ console.log(`Profile: ${profile}\nOutput:  ${out}\nStarting ${exe} …`);
 // completion is detected by polling the report rather than waiting on the child.
 spawn(exe, ["-profile", profile, "-no-remote"], { stdio: "ignore", detached: true }).unref();
 const reportPath = join(out, "report.json");
-const deadline = Date.now() + 12 * 60 * 1000;
+const deadline = Date.now() + 20 * 60 * 1000;
 const readReport = () => {
   try {
     return JSON.parse(readFileSync(reportPath, "utf8"));
