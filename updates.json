@@ -1,0 +1,19 @@
+{
+  "addons": {
+    "zotero-researcher@zotero-plugin": {
+      "updates": [
+        {
+          "version": "0.2.1",
+          "update_link": "https://github.com/GeneralPawz/zotero-researcher/releases/download/v0.2.1/zotero-researcher-0.2.1.xpi",
+          "update_hash": "sha256:4ba627c421050f3e1e7b8a9c50924a14fa468c72b07bf7bc51985cef85dde1e4",
+          "applications": {
+            "zotero": {
+              "strict_min_version": "7.0",
+              "strict_max_version": "10.*"
+            }
+          }
+        }
+      ]
+    }
+  }
+}
