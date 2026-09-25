@@ -362,6 +362,55 @@ ZR.System1 = (() => {
     return results;
   }
 
+  /**
+   * How strongly each passage supports including its paper (used to check the verdicts
+   * of full-text annotations). passages: [{key, text, comment}] → {key: p}.
+   */
+  async function scorePassages(passages, protocol, { engine: eng = engine(), onProgress = () => {} } = {}) {
+    const out = {};
+    if (!passages.length || eng === "rules") return out;
+    if (eng === "typesafe") {
+      const key = apiKey();
+      const questions = {
+        supports: {
+          type: "noul",
+          instructions: { review: reviewContext(protocol), inclusion_criteria: protocol.inclusion || [], question: "Does the passage in `state`, quoted from a paper, give evidence that the paper meets the review's criteria and answers its questions?" },
+          criteria: { true: "The passage shows the paper studies what the review is about", false: "The passage is unrelated, or shows the paper does not fit the review" },
+        },
+      };
+      let done = 0;
+      await U.mapLimit(passages, 8, async (a) => {
+        try {
+          const res = await ZR.http("POST", ENDPOINT, { headers: { Authorization: `Bearer ${key}` }, body: { state: { passage: U.truncate(a.text, 1500), annotator_comment: U.truncate(a.comment || "", 300) }, model: model(), questions }, timeout: 30000, retryAfterMax: 20000 });
+          const v = res.json().answers?.supports?.noul;
+          if (typeof v === "number") out[a.key] = v;
+        } catch (e) {
+          U.log("Passage rating failed", e.message);
+        }
+        onProgress(++done, passages.length);
+      });
+      return out;
+    }
+    if (eng === "local") {
+      const E = ZR.Embed;
+      const vecs = await E.vectors(passages.map((a) => ({ key: "passage:" + a.key, text: a.text })));
+      const [qv] = await E.embed([protocolQuery(protocol)], "query");
+      const sims = passages.map((a) => [a.key, vecs.get("passage:" + a.key)]).filter(([, v]) => v).map(([k, v]) => [k, E.dot(qv, v)]);
+      const vals = sims.map(([, s]) => s);
+      const mean = vals.reduce((a, b) => a + b, 0) / (vals.length || 1);
+      const sd = Math.sqrt(vals.reduce((a, b) => a + (b - mean) ** 2, 0) / (vals.length || 1)) || 0.05;
+      for (const [k, s] of sims) out[k] = E.sigmoid((1.6 * (s - mean)) / sd);
+      return out;
+    }
+    // Your AI provider: one batch
+    const profile = ZR.Prefs.getActiveLLMProfile();
+    if (!profile) return out;
+    const list = passages.map((a, i) => `[${i}] "${U.truncate(a.text, 400)}"`).join("\n");
+    const res = await ZR.LLM.chatJSON(profile, [{ role: "user", content: `Review questions: ${(protocol.questions || []).join(" | ")}\nInclusion criteria: ${JSON.stringify(protocol.inclusion || [])}\n\nPassages:\n${list}\n\nFor each passage: probability (0–1) that it is evidence the paper fits the review.\nReply with JSON only: [{"i": <index>, "p": <0-1>}, …]` }], { maxTokens: 2000 });
+    for (const row of Array.isArray(res) ? res : []) if (passages[row.i] && Number.isFinite(Number(row.p))) out[passages[row.i].key] = Math.max(0, Math.min(1, Number(row.p)));
+    return out;
+  }
+
   /** Connection test for Settings. */
   async function test(key = apiKey()) {
     const t0 = Date.now();
@@ -375,5 +424,5 @@ ZR.System1 = (() => {
     return { ok: typeof data.answers?.bim?.noul === "number", p: data.answers?.bim?.noul, model: data.model, ms: Date.now() - t0 };
   }
 
-  return { ENGINES, ENDPOINT, keyName, MIN_LABELS, engine, buildQuestions, codeChecks, paperState, combine, score, relearn, learn, protocolQuery, isLabel, test };
+  return { ENGINES, ENDPOINT, keyName, MIN_LABELS, engine, buildQuestions, codeChecks, scorePassages, paperState, combine, score, relearn, learn, protocolQuery, isLabel, test };
 })();

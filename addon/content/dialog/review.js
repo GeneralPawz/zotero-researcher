@@ -1,4 +1,4 @@
-/* global Zotero, App, $, el, document, window, DOMParser, PaperView */
+/* global Zotero, App, $, el, document, window, DOMParser, PaperView, Autopilot */
 "use strict";
 
 // Review tab: a methodology-based pipeline for the current project.
@@ -45,7 +45,7 @@ App.panels.review = (() => {
     });
     $("queue-filter").addEventListener("change", () => renderScreen());
     $("queue-sort").addEventListener("change", () => renderScreen());
-    $("s1-rate").addEventListener("click", rateS1);
+    $("s1-rate").addEventListener("click", () => rateS1());
     $("s1-low").addEventListener("change", saveThresholds);
     $("s1-high").addEventListener("change", saveThresholds);
     $("s1-exclude").addEventListener("click", (e) => armed(e.target, () => bulk("exclude")));
@@ -55,6 +55,7 @@ App.panels.review = (() => {
     $("rv-table-ai").addEventListener("click", tableAI);
     $("rv-table-csv").addEventListener("click", tableCSV);
     $("rv-table-cluster").addEventListener("click", clusterFacet);
+    $("rv-table-full").addEventListener("click", () => (ZR.Prefs.set("tableFullHeaders", !ZR.Prefs.get("tableFullHeaders", false)), renderTable()));
     $("prisma-note").addEventListener("click", saveNote);
     $("prisma-svg").addEventListener("click", exportSVG);
     document.addEventListener("keydown", onKey);
@@ -133,6 +134,16 @@ App.panels.review = (() => {
     });
     const rated = cands.filter((c) => c.s1).length;
     if (cands.length) box.append(el("span", { class: "hint funnel-s1", text: `System 1 rated ${rated}/${cands.length}` }));
+    const ap = p.autopilot;
+    box.append(
+      el("button", {
+        id: "ap-open",
+        class: "ap-open-btn" + (ap?.on ? " on" : ""),
+        title: "An AI runs the review with you, step by step",
+        text: ap?.on ? (Autopilot.isRunning() ? "✦ Autopilot running" : "✦ Autopilot (paused)") : "✦ Autopilot",
+        onclick: () => Autopilot.show(),
+      })
+    );
     renderSteps();
   }
 
@@ -409,7 +420,6 @@ App.panels.review = (() => {
   async function saveProtocol() {
     if (!App.target.editable) return st("This library is read-only.");
     readForm();
-    const p = project();
     const protocol = ZR.Methodologies.normalizeProtocol(draft.methodology, draft.protocol);
     if (protocol.query) {
       try {
@@ -418,19 +428,86 @@ App.panels.review = (() => {
         return st("Search query problem: " + e.message);
       }
     }
-    p.methodology = draft.methodology;
+    await persistProtocol(draft.methodology, protocol, $("rv-description").value.trim());
+    $("rv-save-note").textContent = `Saved ${new Date().toLocaleTimeString()}.`;
+    st(cands.length ? "Protocol saved. Re-rate papers with System 1 if the criteria changed." : "Protocol saved. Next: find papers (step 2) — the search tab is pre-filled from the protocol.");
+  }
+
+  /** Save methodology + protocol; its search settings become the project's search settings. */
+  async function persistProtocol(methodology, protocol, description) {
+    const p = project();
+    protocol = ZR.Methodologies.normalizeProtocol(methodology, protocol);
+    p.methodology = methodology;
     p.protocol = protocol;
-    p.description = $("rv-description").value.trim();
-    // The protocol's search settings become the project's search settings
+    if (description != null) p.description = description;
     p.search = Object.assign({}, p.search, { mode: "structured", query: protocol.query || p.search?.query || "", yearFrom: protocol.yearFrom, yearTo: protocol.yearTo, languages: protocol.languages, types: protocol.types });
     App.project = await ZR.Projects.save(libraryID(), p);
     draft = null;
     App.renderProjects();
     App.panels.search.loadProject();
     await refresh();
-    $("rv-save-note").textContent = `Saved ${new Date().toLocaleTimeString()}.`;
-    st(cands.length ? "Protocol saved. Re-rate papers with System 1 if the criteria changed." : "Protocol saved. Next: find papers (step 2) — the search tab is pre-filled from the protocol.");
+    return App.project;
   }
+
+  // ------------------------------------------------------------ autopilot API ----
+  /** Accept the AI's screening suggestions (any confidence); "maybe" goes on to full text by default. */
+  async function acceptAll({ maybeAs = "include" } = {}) {
+    const s = dstage();
+    const list = population().filter((c) => !c[s] && suggestion(c));
+    for (const c of list) {
+      const d = c.llm.d === "maybe" && s === "ta" ? maybeAs : c.llm.d;
+      await decide(c, d, c.llm.r, "llm", { advance: false, render: false });
+    }
+    renderScreen();
+    return list.length;
+  }
+
+  /** Papers still undecided after thresholds and AI: follow System 1's suggestion (maybe → include). */
+  async function decideRest() {
+    const list = population().filter((c) => !c.ta && c.s1?.suggest);
+    for (const c of list) await decide(c, c.s1.suggest.d === "exclude" ? "exclude" : "include", c.s1.suggest.r, "s1", { advance: false, render: false });
+    renderScreen();
+    return list.length;
+  }
+
+  async function decideByKey(key, stage, d, reason, by = "llm") {
+    const c = cands.find((x) => x.key === key);
+    if (!c) return false;
+    const was = step;
+    step = stage === "ft" ? "fulltext" : "screen";
+    try {
+      await decide(c, d, reason, by, { advance: false, render: false });
+    } finally {
+      step = was;
+    }
+    return true;
+  }
+
+  async function setThresholds({ excludeBelow, includeAbove }) {
+    const p = project();
+    p.funnel = { excludeBelow, includeAbove };
+    await ZR.Projects.save(libraryID(), p);
+  }
+
+  const api = {
+    persistProtocol,
+    rate: (all) => rateS1(all),
+    bulk,
+    aiUncertain,
+    acceptAll,
+    decideRest,
+    decideByKey,
+    setThresholds,
+    thresholds: () => thresholds(),
+    population: () => population(),
+    candidates: () => cands,
+    method: () => method(),
+    findPDFs,
+    annotateAll,
+    tableAI,
+    saveNote,
+    counts: () => counts(),
+  };
 
   // --------------------------------------------------------------- search ----
   function renderSearch() {
@@ -443,27 +520,27 @@ App.panels.review = (() => {
       return;
     }
     const open = (r, label) => App.panels.search.showRun(p, r, label);
+    const stop = (fn) => (e) => (e.preventDefault(), e.stopPropagation(), fn());
     box.append(
-      el("table", { class: "runs" }, [
-        el("tr", {}, ["", "When", "How", "Query", "Found", "Into pool", "Not added"].map((t) => el("th", { text: t }))),
+      el("table", { class: "runs runs-click" }, [
+        el("tr", {}, ["", "When", "How", "Query", "Found", "Not added", "Into pool"].map((t) => el("th", { text: t }))),
         ...ZR.Projects.runTree(runs).map(({ run: x, label, depth }) => {
           const notAdded = x.identified != null && x.imported != null ? Math.max(0, x.identified - x.imported) : null;
-          return el("tr", { "data-run": x.id }, [
+          return el("tr", { "data-run": x.id, title: "Click for every paper of this search and what happened to it", onclick: () => openAudit(x.id) }, [
             el("td", { class: "run-label", style: `padding-left:${6 + depth * 14}px`, title: x.parent ? "Refinement of an earlier search" : "Search" }, [depth ? "↳ " : "", el("b", { text: label })]),
             el("td", { text: x.at || "" }),
             el("td", { text: x.mode === "related" ? "citations" : x.mode }),
             el(
               "td",
               { title: "Open this search in the Search tab (read-only; you can edit and run it again)\n\n" + Object.entries(x.perSource || {}).map(([id, s]) => `${ZR.Sources.get(id)?.name || id}: ${s.error ? "⚠ " + s.error : s.count}`).join("\n") },
-              el("a", { href: "#", class: "run-query", onclick: (e) => (e.preventDefault(), open(x, label)) }, el("code", { text: ZR.Util.truncate(x.query || "(AI request)", 160) }))
+              el("a", { href: "#", class: "run-query", onclick: stop(() => open(x, label)) }, el("code", { text: ZR.Util.truncate(x.query || "(AI request)", 160) }))
             ),
             el("td", { text: String(x.identified ?? "") }),
-            el("td", { text: String(x.imported ?? "") }),
-            el("td", {}, notAdded ? el("a", { href: "#", class: "run-why", text: `${notAdded} — why?`, title: "Every paper this search found and what happened to it", onclick: (e) => (e.preventDefault(), openAudit(x.id)) }) : el("span", { class: "hint", text: notAdded === 0 ? "0" : "" })),
+            el("td", {}, notAdded ? el("a", { href: "#", class: "run-why", text: String(notAdded), title: "Why were these not added? Every paper of this search and what happened to it", onclick: stop(() => openAudit(x.id)) }) : el("span", { class: "hint", text: notAdded === 0 ? "0" : "" })),
+            el("td", {}, x.imported ? el("a", { href: "#", class: "run-pool", text: String(x.imported), title: "Screen them (step 3)", onclick: stop(() => go("screen")) }) : el("span", { text: String(x.imported ?? "") })),
           ]);
         }),
-      ]),
-      el("div", { class: "actions" }, [el("button", { id: "rv-audit", text: "Audit trail — every paper and what happened to it…", onclick: () => openAudit("all") })])
+      ])
     );
   }
 
@@ -917,12 +994,13 @@ App.panels.review = (() => {
     renderScreen();
   }
 
-  async function rateS1() {
+  /** Rate the pool with System 1: the unrated papers, or everything when all is set (or nothing is unrated). */
+  async function rateS1(all = false) {
     const p = project();
     if (!protocolFilled(p.protocol)) return st("Write the protocol first (step 1): System 1 rates each paper against your research questions and criteria.");
     const pop = population();
     const unrated = pop.filter((c) => !c.s1);
-    const list = unrated.length ? unrated : pop;
+    const list = all || !unrated.length ? pop : unrated;
     if (!list.length) return st("The pool is empty — add papers in step 2 first.");
     const eng = ZR.System1.engine();
     App.setBusy("review", true);
@@ -1121,7 +1199,8 @@ App.panels.review = (() => {
     const link = c.doi ? "https://doi.org/" + c.doi : c.record?.url || "";
     const showTerms = ZR.Prefs.get("showQueryTerms", true);
     const terms = showTerms ? termsOfProject() : [];
-    const kw = (text, field) => PaperView.termRanges(text, terms, field).map((r) => ({ start: r.start, end: r.end, cls: "kw", title: `search term: ${r.term}`, attrs: { style: `--kw-h:${termHue(terms, r.term)}` } }));
+    const kw = (text, field) =>
+      PaperView.termRanges(text, terms, field).map((r) => ({ start: r.start, end: r.end, cls: "kw" + (termFocus.has(r.term.toLowerCase()) ? " kw-focus" : ""), title: `search term: ${r.term}`, attrs: { style: `--kw-h:${termHue(terms, r.term)}`, "data-term": r.term.toLowerCase() } }));
 
     const title = el("h2");
     PaperView.render(title, c.title || "(untitled)", kw(c.title, "title"));
@@ -1335,6 +1414,26 @@ App.panels.review = (() => {
     return Math.round((i * 137.508 + 205) % 360);
   }
 
+  // Terms picked in the chips stay marked from paper to paper
+  const termFocus = new Set();
+  const termSpans = (term) => [...$("screen-card").querySelectorAll(".kw")].filter((s) => s.dataset.term === term);
+
+  function termChip(t, fields) {
+    const term = t.text.toLowerCase();
+    const chip = el("button", { class: "kw-chip" + (termFocus.has(term) ? " on" : ""), style: `--kw-h:${termHue(termsOfProject(), t.text)}`, "aria-pressed": String(termFocus.has(term)), title: `Found in ${fields.join(", ")} — hover to see where, click to keep it marked (several at once)` }, [el("b", { text: t.text }), " " + fields.join(", ")]);
+    chip.addEventListener("mouseenter", () => termSpans(term).forEach((s) => s.classList.add("kw-hover")));
+    chip.addEventListener("mouseleave", () => termSpans(term).forEach((s) => s.classList.remove("kw-hover")));
+    chip.addEventListener("click", () => {
+      if (termFocus.has(term)) termFocus.delete(term);
+      else termFocus.add(term);
+      const on = termFocus.has(term);
+      chip.classList.toggle("on", on);
+      chip.setAttribute("aria-pressed", String(on));
+      termSpans(term).forEach((s) => s.classList.toggle("kw-focus", on));
+    });
+    return chip;
+  }
+
   /** Which search terms occur where — "why is this paper here?" */
   function foundBy(c, terms) {
     if (!terms.length) return null;
@@ -1352,7 +1451,7 @@ App.panels.review = (() => {
     const miss = where.filter((w) => !w.fields.length);
     return el("div", { class: "found-by" }, [
       el("span", { class: "hint", text: hit.length ? "Search terms here:" : "No search term in title, authors or abstract" }),
-      ...hit.map((w) => el("span", { class: "kw-chip", style: `--kw-h:${termHue(terms, w.t.text)}`, title: `found in ${w.fields.join(", ")}` }, [el("b", { text: w.t.text }), " " + w.fields.join(", ")])),
+      ...hit.map((w) => termChip(w.t, w.fields)),
       miss.length
         ? el("span", { class: "hint", title: "These terms of your searches do not occur here — the database may have matched keywords or the full text, or the paper came from another alternative of an OR", text: ` · not here: ${miss.map((w) => w.t.text).join(", ")}` })
         : null,
@@ -1397,11 +1496,25 @@ App.panels.review = (() => {
           el("span", { class: `hl hl-${h.kind} hl-quote`, text: `“${ZR.Util.truncate(h.text, 200)}”` }),
           h.note ? el("span", { class: "hl-notetext", text: h.note }) : null,
           el("span", { class: "spacer" }),
-          el("button", { class: "link", text: h.note ? "edit note" : "add note", onclick: (e) => PaperView.editNote(e.clientX - 240, e.clientY + 10, h.note, (note) => updateHighlight(c, h, { note })) }),
-          el("button", { class: "link", text: "remove", onclick: () => removeHighlight(c, h) }),
+          iconButton("note", h.note ? "Edit the note" : "Add a note", (e) => PaperView.editNote(e.clientX - 240, e.clientY + 10, h.note, (note) => updateHighlight(c, h, { note }))),
+          iconButton("trash", "Remove the highlight", () => removeHighlight(c, h), "danger"),
         ])
       ),
     ]);
+  }
+
+  const ICONS = {
+    note: "M3 10h11v2H3v-2zm0-2h11V6H3v2zm0 8h7v-2H3v2zm15.01-3.13.71-.71a1 1 0 0 1 1.41 0l.71.71a1 1 0 0 1 0 1.41l-.71.71-2.12-2.12zm-.71.71-5.3 5.3V21h2.12l5.3-5.3-2.12-2.12z",
+    trash: "M6 19c0 1.1.9 2 2 2h8c1.1 0 2-.9 2-2V7H6v12zM19 4h-3.5l-1-1h-5l-1 1H5v2h14V4z",
+  };
+  function iconButton(name, title, onclick, cls = "") {
+    const svg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    svg.setAttribute("viewBox", "0 0 24 24");
+    svg.setAttribute("aria-hidden", "true");
+    const path = document.createElementNS("http://www.w3.org/2000/svg", "path");
+    path.setAttribute("d", ICONS[name]);
+    svg.append(path);
+    return el("button", { class: `icon-action ${cls}`, title, "aria-label": title, onclick }, svg);
   }
 
   async function saveHighlights(c) {
@@ -1549,16 +1662,21 @@ App.panels.review = (() => {
 
   function tableSpec() {
     const P = project().protocol;
-    if (step === "quality") return { field: "qa", cols: P.quality || [], title: "Answer each checklist question for every included paper: yes / partly / no.", empty: "quality checklist" };
-    if (step === "extract") return { field: "extract", cols: P.extraction || [], title: "Record the data extraction fields for every included paper.", empty: "data extraction fields" };
+    if (step === "quality") return { field: "qa", prefix: "Q", cols: P.quality || [], title: "Answer each checklist question for every included paper: yes / partly / no.", empty: "quality checklist" };
+    if (step === "extract") return { field: "extract", prefix: "E", cols: P.extraction || [], title: "Record the data extraction fields for every included paper.", empty: "data extraction fields" };
     const facets = (P.facets || []).map(facetOf);
-    return { field: "extract", cols: facets.map((f) => f.name), facets, title: "Classify every included paper along the facets of your map.", empty: "classification facets" };
+    return { field: "extract", prefix: "C", cols: facets.map((f) => f.name), facets, title: "Classify every included paper along the facets of your map.", empty: "classification facets" };
   }
 
   const tableRows = () => cands.filter((c) => ZR.Projects.inStage(project(), step, c));
 
+  let fullHeaders = ZR?.Prefs?.get("tableFullHeaders", false) || false;
+
   function renderTable() {
     const spec = tableSpec();
+    fullHeaders = ZR.Prefs.get("tableFullHeaders", false);
+    $("rv-table-full").setAttribute("aria-pressed", String(fullHeaders));
+    $("rv-table-full").textContent = spec.field === "qa" ? "Full questions" : "Full field names";
     const rows = tableRows();
     const body = $("rv-table-body");
     $("rv-table-title").textContent = spec.title;
@@ -1593,7 +1711,7 @@ App.panels.review = (() => {
     };
     body.append(
       el("table", { class: "grid" }, [
-        el("thead", {}, el("tr", {}, [el("th", { text: "Paper" }), ...spec.cols.map((x) => el("th", { text: x, title: x }))])),
+        el("thead", {}, el("tr", {}, [el("th", { text: "Paper" }), ...spec.cols.map((x, i) => el("th", { class: fullHeaders ? "full" : "", title: `${spec.prefix}${i + 1}: ${x}` }, fullHeaders ? [el("b", { text: `${spec.prefix}${i + 1}` }), " " + x] : `${spec.prefix}${i + 1}`))])),
         el(
           "tbody",
           {},
@@ -1839,5 +1957,5 @@ App.panels.review = (() => {
   /** Open this step the next time the tab is shown. */
   const setStep = (s) => (step = s);
 
-  return { init, onShow, refresh, reset, go, setStep, focusItem, get step() { return step; }, get candidates() { return cands; } };
+  return { init, onShow, refresh, reset, go, setStep, focusItem, api, get step() { return step; }, get candidates() { return cands; } };
 })();

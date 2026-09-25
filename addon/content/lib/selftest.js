@@ -140,7 +140,22 @@ ZR.SelfTest = (() => {
       calls.push(prompt.slice(0, 50));
       const n = (prompt.match(/^\[\d+\]/gm) || []).length;
       let content;
-      if (prompt.includes('{"annotations"')) {
+      if (prompt.includes('{"sources"')) content = JSON.stringify({ sources: ["crossref", "doaj", "arxiv"], limit: 5, why: "Multidisciplinary coverage of BIM research." });
+      else if (prompt.includes('"verdict": "ok"|"adjust"|"hopeless"')) {
+        // first check: too strict → propose a change; second: fine
+        mockLLM.assessCalls = (mockLLM.assessCalls || 0) + 1;
+        content = JSON.stringify(
+          mockLLM.assessCalls === 1
+            ? { drilldown: false, verdict: "adjust", explanation: "Almost everything is below the exclude threshold, which looks too strict.", message: "Lower the include threshold and drop the negated exclusion criterion.", changes: { exclusion: [], thresholds: { excludeBelow: 0.1, includeAbove: 0.8 } } }
+            : { drilldown: false, verdict: "ok", explanation: "The spread now looks plausible.", message: "", changes: {} }
+        );
+      } else if (prompt.includes('{"decisions"')) {
+        const n = (prompt.match(/"i": \d+/g) || []).length;
+        content = JSON.stringify({ decisions: Array.from({ length: n }, (_, i) => ({ i, decision: i % 2 ? "exclude" : "include", reason: i % 2 ? "Off topic" : "", why: "from the annotations" })), summary: "Half of the papers fit." });
+      } else if (prompt.includes('{"corrections"')) {
+        const n = (prompt.match(/"i": \d+/g) || []).length;
+        content = JSON.stringify({ corrections: Array.from({ length: n }, (_, i) => ({ i, verdict: i === 0 ? "maybe" : "keep", why: "ambiguous" })) });
+      } else if (prompt.includes('{"annotations"')) {
         const text = (prompt.split('Text:\n"""\n')[1] || "").split('\n"""')[0];
         const sentences = text.split(/(?<=\.)\s+/).map((x) => x.trim()).filter((x) => x.length > 40 && /[.]$/.test(x));
         const pick = (re) => sentences.find((x) => re.test(x));
@@ -1038,7 +1053,7 @@ ZR.SelfTest = (() => {
         await goStep("search", (x) => x.querySelector("#rv-runs table"));
         const labelsBefore = [...d.querySelectorAll("#rv-runs .run-label")].map((t) => t.textContent);
         // audit trail
-        d.getElementById("rv-audit").click();
+        d.querySelector("#rv-runs tr[data-run] td:nth-child(2)").click();
         const layer = await waitFor(() => d.getElementById("audit-layer"), 5000);
         await waitFor(() => layer.querySelectorAll("table.audit tr").length > 1, 5000);
         const outcomes = [...new Set([...layer.querySelectorAll("table.audit td.a-outcome")].map((t) => t.textContent))];
@@ -1155,6 +1170,71 @@ ZR.SelfTest = (() => {
         };
         const kinds = botView.map((b) => b.tags[0]).sort().join(",");
         if (bot.length !== 3 || kinds !== "exclude,include,maybe" || botView.some((b) => b.author !== "Bot" || !b.rects) || rows.filter((r) => r[0] === "👤").length !== 1 || !rows.some((r) => r[1] === "k-exclude" && r[0] === "👤") || changed.annotationColor !== "#5fb236" || !toolbarButton) throw new Error(JSON.stringify(res));
+        return res;
+      });
+
+      await step("autopilot: an AI runs a new review end to end, asking at every decision", async () => {
+        const aw = await openResearch(win, { tab: "find", itemIDs: [] });
+        const d = aw.document;
+        // project wizard with the autopilot switched on
+        await pick(d.getElementById("project-select"), "New project");
+        await waitFor(() => !d.getElementById("np-layer").hidden, 5000);
+        d.getElementById("np-name").value = "Autopilot review";
+        d.querySelector('input[name="np-kind"][value="review"]').click();
+        d.querySelector('input[name="np-col"][value="new"]').checked = true;
+        await waitFor(() => !d.getElementById("np-ap").hidden, 3000);
+        d.getElementById("np-ap-on").click();
+        d.getElementById("np-ap-question").value = "How is IFC used for BIM data exchange between authoring tools, and what problems are reported?";
+        d.getElementById("np-create").click();
+        await waitFor(() => d.getElementById("ap-panel") && !d.getElementById("ap-panel").hidden, 10000);
+        // answer like a user: accept proposals, run the search with a small limit, apply changes
+        const prompts = [];
+        const prefer = ["go", "apply", "yes", "harness", "do", "save", "fulltext"];
+        const t0 = Date.now();
+        let shotTaken = false;
+        while (Date.now() - t0 < 420000) {
+          const p = aw.App.project;
+          if (p?.autopilot?.finished) break;
+          const plan = d.getElementById("ap-search-layer");
+          if (plan) {
+            prompts.push("search plan: " + [...plan.querySelectorAll(".ap-sources input:checked")].map((i) => i.value).join(","));
+            if (!shotTaken) {
+              await shot(aw, "13a-autopilot-search-plan.png");
+              shotTaken = true;
+            }
+            plan.querySelector("#ap-s-limit").value = "5";
+            plan.querySelector("#ap-s-run").click();
+            await U.sleep(300);
+            continue;
+          }
+          const btns = [...d.querySelectorAll("#ap-prompt [data-choice]")];
+          const pickBtn = prefer.map((id) => btns.find((b) => b.dataset.choice === id)).find(Boolean);
+          if (pickBtn) {
+            prompts.push(`${d.querySelector("#ap-prompt .ap-ask-line")?.textContent.slice(0, 70)} → ${pickBtn.dataset.choice}`);
+            if (prompts.length === 4) await shot(aw, "13b-autopilot-conversation.png");
+            pickBtn.click();
+          }
+          await U.sleep(400);
+        }
+        const p = aw.App.project;
+        const log = [...d.querySelectorAll("#ap-log .ap-msg")].map((m) => m.textContent);
+        await shot(aw, "13c-autopilot-done.png");
+        const cands = await ZR.Projects.candidates(libraryID, p);
+        const res = {
+          methodology: p.methodology,
+          finished: !!p.autopilot?.finished,
+          stage: p.autopilot?.stage,
+          runs: p.runs.length,
+          pool: cands.length,
+          screened: cands.filter((c) => c.ta).length,
+          passed: cands.filter((c) => c.ta === "include").length,
+          thresholdsChanged: p.funnel?.includeAbove === 0.8,
+          prompts,
+          log: log.slice(-6).map((t) => t.slice(0, 120)),
+          errors: log.filter((t) => /went wrong/.test(t)),
+        };
+        aw.close();
+        if (!res.finished || res.errors.length || !res.runs || res.screened !== res.pool || !res.thresholdsChanged) throw new Error(JSON.stringify(res));
         return res;
       });
 

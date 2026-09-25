@@ -12,6 +12,7 @@
   <script src="chrome://zotero-researcher/content/dialog/reader.js?v=__ZR_VERSION__"></script>
   <script src="chrome://zotero-researcher/content/dialog/review.js?v=__ZR_VERSION__"></script>
   <script src="chrome://zotero-researcher/content/dialog/citations.js?v=__ZR_VERSION__"></script>
+  <script src="chrome://zotero-researcher/content/dialog/autopilot.js?v=__ZR_VERSION__"></script>
   <script src="chrome://zotero-researcher/content/dialog/tour.js?v=__ZR_VERSION__"></script>
 </head>
 <body data-mode="structured">
@@ -239,6 +240,7 @@
         <div class="toolbar">
           <span id="rv-table-title" class="hint"></span>
           <span class="spacer"></span>
+          <button id="rv-table-full" class="toggle" aria-pressed="false" title="Show the complete questions / field names in the column headers">Full questions</button>
           <button id="rv-table-cluster" hidden="hidden" title="The local model groups the included papers by topic and adds the groups as a facet">⧉ Topics from clusters</button>
           <button id="rv-table-ai">✦ Fill with AI</button>
           <button id="rv-table-csv">Export CSV</button>
@@ -332,6 +334,13 @@
       <div class="field">What kind of project?
         <label class="choice"><input type="radio" name="np-kind" value="quick" checked="checked"/><span><b>Quick search</b><small>Collect papers on a topic. Remembers your search settings and history. Can become a structured review later.</small></span></label>
         <label class="choice"><input type="radio" name="np-kind" value="review"/><span><b>Structured review</b><small>A methodology-based pipeline (PRISMA, scoping review, …) with protocol, screening funnel and report.</small></span></label>
+      </div>
+      <div class="field" id="np-ap" hidden="hidden">
+        <label class="choice"><input type="checkbox" id="np-ap-on"/><span><b>Autopilot</b><small>An AI of your choice runs the review with you: methodology, protocol, search, screening checks, full-text annotation, tables — asking you at every decision.</small></span></label>
+        <div id="np-ap-fields" class="np-ap-fields" hidden="hidden">
+          <label class="field">Harness model <select id="np-ap-profile"></select></label>
+          <label class="field">Research question <textarea id="np-ap-question" rows="3" placeholder="What you want to find out and why, in your own words"></textarea></label>
+        </div>
       </div>
       <div class="field">Collection
         <label class="choice" id="np-use-wrap"><input type="radio" name="np-col" value="use" checked="checked"/><span id="np-use-label"></span></label>
