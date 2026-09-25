@@ -32,6 +32,9 @@ App.panels.review = (() => {
   function init() {
     ZR = App.ZR;
     $("rv-start-btn").addEventListener("click", startReview);
+    const offJobs = ZR.Jobs.subscribe(() => renderJobs());
+    window.addEventListener("unload", offJobs);
+    setInterval(() => ZR.Jobs.running().length && renderJobs(), 1000); // elapsed time and time left
     for (const b of $("rv-protocol-mode").children) {
       b.append(App.icon(b.dataset.mode === "describe" ? "sparkle" : "pencil"));
       b.addEventListener("click", () => setProtocolMode(b.dataset.mode));
@@ -150,9 +153,13 @@ App.panels.review = (() => {
     const p = project();
     const box = $("rv-funnel");
     box.replaceChildren(el("span", { class: "funnel-name", title: method().reference, text: method().name }));
+    const missing = ZR.Projects.incomplete(p);
     ZR.Projects.funnel(p, cands).forEach((s, i) => {
       if (i) box.append(el("span", { class: "funnel-arrow", text: "›" }));
-      box.append(el("span", { class: "funnel-stage" }, [el("b", { text: s.n.toLocaleString() }), " " + s.label]));
+      // "In pool" turns yellow when a database did not deliver every hit
+      if (s.label === "In pool" && missing.length)
+        box.append(el("button", { class: "funnel-stage incomplete", id: "rv-incomplete", title: "Not every result could be fetched. Click for the details, to get the rest, or to see when to try again.", onclick: openIncomplete }, [el("b", { text: s.n.toLocaleString() }), " " + s.label, el("span", { class: "incomplete-mark", text: " !" })]));
+      else box.append(el("span", { class: "funnel-stage" }, [el("b", { text: s.n.toLocaleString() }), " " + s.label]));
     });
     const rated = cands.filter((c) => c.s1).length;
     if (cands.length) box.append(el("span", { class: "hint funnel-s1", text: `System 1 rated ${rated}/${cands.length}` }));
@@ -658,6 +665,99 @@ App.panels.review = (() => {
     return true;
   }
 
+  // ---------------------------------------------- searches that stopped early ----
+  const REASONS = { limit: "your limit per database", cap: "the database's API maximum", error: "an error", stopped: "stopped" };
+
+  /**
+   * Fetch the rest of a logged search for some databases, from where each one stopped.
+   * limit 0: everything that is left.
+   */
+  async function fetchRest(runID, sources, { limit = 0 } = {}) {
+    const p = project();
+    const run = p.runs.find((r) => r.id === runID);
+    if (!run) throw new Error("Search not found");
+    const resume = {};
+    for (const id of sources) if (run.perSource?.[id]?.pos) resume[id] = run.perSource[id].pos;
+    if (!Object.keys(resume).length) return null;
+    const settings = Object.assign({}, run.settings || { mode: "structured", query: run.query }, { limit });
+    const res = await App.panels.search.searchIntoPool(settings, { parent: run.id, resume, continues: run.id });
+    App.showTab("review");
+    await refresh();
+    return res;
+  }
+
+  async function dismissIncomplete(runID, sources) {
+    App.project = await ZR.Projects.markSources(libraryID(), project().id, runID, sources, { dismissed: true });
+    await refresh();
+  }
+
+  /** Which databases did not deliver every hit, why, and when trying again makes sense. */
+  function openIncomplete() {
+    $("inc-layer")?.remove();
+    const p = project();
+    const labels = ZR.Projects.runLabels(p.runs || []);
+    const rows = ZR.Projects.incomplete(p);
+    const when = (r) => (r.retryAt && new Date(r.retryAt) > new Date() ? `${r.retryHint} · ${new Date(r.retryAt).toLocaleString([], { day: "numeric", month: "short", hour: "2-digit", minute: "2-digit" })}` : r.retryHint || "any time");
+    const ready = (r) => r.pos && (!r.retryAt || new Date(r.retryAt) <= new Date() || r.reason !== "error");
+    const busy = (b) => {
+      for (const x of layer.querySelectorAll("button[data-fetch]")) x.disabled = b;
+    };
+    const fetch = async (list) => {
+      const missing = list.reduce((n, r) => n + Math.max(0, (r.total || 0) - r.fetched), 0);
+      if (missing > 5000) {
+        const loose = list.some((r) => r.source === "crossref") ? " Crossref counts every record that shares a word with the query, so most of its count is not relevant." : "";
+        const c = await App.ask(`Fetch ${missing.toLocaleString()} more records?`, `That takes a long time and adds them all to the pool for screening.${loose} Narrowing the query (e.g. by years) is usually better.`, [
+          { id: "cancel", label: "Cancel" },
+          { id: "go", label: "Fetch them", primary: true },
+        ]);
+        if (c !== "go") return;
+      }
+      busy(true);
+      try {
+        const byRun = new Map();
+        for (const r of list) byRun.set(r.runID, [...(byRun.get(r.runID) || []), r.source]);
+        for (const [runID, srcs] of byRun) await fetchRest(runID, srcs);
+        layer.remove();
+        if (ZR.Projects.incomplete(project()).length) openIncomplete();
+      } catch (e) {
+        st("Could not fetch the rest: " + e.message);
+        busy(false);
+      }
+    };
+    const table = el("table", { class: "runs inc-table" }, [
+      el("tr", {}, ["Search", "Database", "Fetched", "Why it stopped", "Try again", ""].map((t) => el("th", { text: t }))),
+      ...rows.map((r) =>
+        el("tr", { "data-run": r.runID, "data-source": r.source }, [
+          el("td", { text: labels.get(r.runID) || "" }),
+          el("td", { text: ZR.Sources.get(r.source)?.name || r.source }),
+          el("td", { class: "inc-count", text: `${r.fetched.toLocaleString()} of ${r.total ? r.total.toLocaleString() : "?"}${r.total ? ` (${(r.total - r.fetched).toLocaleString()} missing)` : ""}` }),
+          el("td", { title: r.error || "", text: REASONS[r.reason] + (r.reason === "error" && r.error ? `: ${ZR.Util.truncate(r.error, 60)}` : "") }),
+          el("td", { text: r.reason === "cap" ? r.retryHint : when(r) }),
+          el("td", { class: "inc-actions" }, [
+            r.pos ? el("button", { "data-fetch": r.source, disabled: !ready(r), title: "Continue where this database stopped: nothing is fetched twice", text: "Get the rest", onclick: () => fetch([r]) }) : null,
+            el("button", { class: "link", text: "Dismiss", title: "I don't need the rest", onclick: () => dismissIncomplete(r.runID, [r.source]).then(() => (layer.remove(), ZR.Projects.incomplete(project()).length && openIncomplete())) }),
+          ]),
+        ])
+      ),
+    ]);
+    const all = rows.filter(ready);
+    const layer = el(
+      "div",
+      { class: "modal-layer", id: "inc-layer" },
+      el("div", { class: "modal inc-modal", role: "dialog" }, [
+        el("h2", { text: "Not every result could be fetched" }),
+        el("p", { class: "hint", text: "Per database: how many hits the search found there and how many came. “Get the rest” continues where the database stopped, so nothing is fetched twice; the new papers go into the pool like any search." }),
+        el("div", { class: "inc-scroll" }, table),
+        el("div", { class: "actions" }, [
+          el("span", { class: "spacer" }),
+          el("button", { text: "Close", onclick: () => layer.remove() }),
+          el("button", { class: "primary", "data-fetch": "all", id: "inc-all", disabled: !all.length, text: `Get the rest now (${all.length})`, onclick: () => fetch(all) }),
+        ]),
+      ])
+    );
+    document.body.append(layer);
+  }
+
   async function setThresholds({ excludeBelow, includeAbove }) {
     const p = project();
     p.funnel = { excludeBelow, includeAbove };
@@ -673,6 +773,8 @@ App.panels.review = (() => {
     decideRest,
     decideByKey,
     machineDecisions: (s) => machineDecisions(s).length,
+    fetchRest,
+    incomplete: () => ZR.Projects.incomplete(project()),
     clearMachineDecisions,
     setThresholds,
     thresholds: () => thresholds(),
@@ -708,7 +810,7 @@ App.panels.review = (() => {
           return el("tr", { "data-run": x.id, title: "Click for every paper of this search and what happened to it", onclick: () => openAudit(x.id) }, [
             el("td", { class: "run-label", style: `padding-left:${6 + depth * 14}px`, title: x.parent ? "Refinement of an earlier search" : "Search" }, [depth ? "↳ " : "", el("b", { text: label })]),
             el("td", { text: x.at || "" }),
-            el("td", { text: x.mode === "related" ? "citations" : x.mode }),
+            el("td", { text: x.continues ? `rest of ${ZR.Projects.runLabels(runs).get(x.continues) || "a search"}` : x.mode === "related" ? "citations" : x.mode }),
             el(
               "td",
               { title: "Open this search in the Search tab (read-only; you can edit and run it again)\n\n" + Object.entries(x.perSource || {}).map(([id, s]) => `${ZR.Sources.get(id)?.name || id}: ${s.error ? "⚠ " + s.error : s.count}`).join("\n") },
@@ -920,7 +1022,7 @@ App.panels.review = (() => {
       const d = c[s];
       const sg = suggestion(c);
       box.append(
-        el("div", { class: "q-item" + (c.key === currentKey ? " current" : ""), "data-key": c.key, onclick: () => ((currentKey = c.key), renderScreen()) }, [
+        el("div", { class: "q-item" + (c.key === currentKey ? " current" : "") + (s === "ft" && !pdfNow(c) ? " no-pdf" : ""), "data-key": c.key, title: s === "ft" && !pdfNow(c) ? "No PDF yet: it cannot be read or annotated. Find missing PDFs looks for it." : null, onclick: () => ((currentKey = c.key), renderScreen()) }, [
           el("span", { class: `dot ${d || ""}${!d && sg ? " ai" : ""}`, title: d ? `${d}${c.by === "s1" ? " (System 1)" : c.by === "llm" ? " (AI)" : ""}` : sg ? `AI suggests ${sg.d}` : "not decided" }),
           el("span", { class: "q-t", text: c.title || "(untitled)" }),
           c.dup && !d && s === "ta" ? el("span", { class: "q-dup", text: "⧉", title: "Possible duplicate" }) : null,
@@ -1336,6 +1438,72 @@ App.panels.review = (() => {
       .then((ok) => ok && (c.hasPDF = true))
       .catch((e) => ZR.Util.log("Background PDF failed", e.message));
   }
+  /** Whether a paper has its PDF right now (changes while PDFs are found). */
+  const pdfNow = (c) => {
+    const item = c.itemID && Zotero.Items.get(c.itemID);
+    return !!item && ZR.PDFHunt.hasPDF(item);
+  };
+  let renderTimer = null;
+  const laterRender = () => {
+    clearTimeout(renderTimer);
+    renderTimer = setTimeout(() => step === "fulltext" && renderScreen(), 250);
+  };
+
+  // ------------------------------------------------------------------ jobs ----
+  /** One job: pulse, label, progress, counts, the paper it works on, pause / resume / stop. */
+  function jobRow(j) {
+    const pct = j.total ? Math.round((j.done / j.total) * 100) : 0;
+    const eta = ZR.Jobs.eta(j);
+    const stateText = { queued: "waiting", running: "running", paused: "paused", stopping: "stopping…", stopped: "stopped", done: "done", skipped: "skipped" }[j.state] || j.state;
+    const live = ["running", "paused", "queued", "stopping"].includes(j.state);
+    return el("div", { class: `job-row s-${j.state}`, "data-job": j.id, "data-kind": j.kind }, [
+      el("span", { class: "job-pulse", title: stateText }),
+      el("div", { class: "job-main" }, [
+        el("div", { class: "job-top" }, [
+          el("b", { text: j.label }),
+          el("span", { class: "hint", text: `${stateText}${j.total ? ` · ${j.done}/${j.total}` : ""}${j.found ? ` · ${j.found} found` : ""}${j.failed ? ` · ${j.failed} failed` : ""}${eta && j.state === "running" ? ` · about ${eta > 90 ? Math.round(eta / 60) + " min" : eta + " s"} left` : ""}` }),
+        ]),
+        j.total ? el("div", { class: "job-bar" }, el("div", { style: `width: ${pct}%` })) : null,
+        j.current && live ? el("div", { class: "hint job-current", text: j.current }) : j.note ? el("div", { class: "hint job-current", text: j.note }) : null,
+      ]),
+      live
+        ? el("span", { class: "job-actions" }, [
+            j.state === "paused"
+              ? el("button", { class: "ap-icon", title: "Resume", onclick: () => ZR.Jobs.resume(j.id) }, App.icon("play"))
+              : el("button", { class: "ap-icon", title: "Pause after the current paper", disabled: j.state === "stopping", onclick: () => ZR.Jobs.pause(j.id) }, App.icon("pause")),
+            el("button", { class: "ap-icon danger", title: "Stop: keep what is found, go on without the rest", disabled: j.state === "stopping", onclick: () => ZR.Jobs.stop(j.id) }, App.icon("stop")),
+          ])
+        : null,
+    ]);
+  }
+
+  /** The jobs in the footer: a pill per running job; a click shows them all. */
+  function renderJobs() {
+    const box = $("rv-jobs");
+    if (!box) return;
+    const running = ZR.Jobs.running();
+    const pills = [
+      ...running.slice(0, 3).map((j) =>
+        el("button", { class: `job-pill s-${j.state}`, "data-job": j.id, title: "Show the running work (pause, stop, details)", onclick: toggleJobs }, [el("span", { class: "job-pulse" }), `${ZR.Util.truncate(j.label, 34)}${j.total ? ` ${j.done}/${j.total}` : ""}`])
+      ),
+      running.length > 3 ? el("button", { class: "job-pill", text: `+${running.length - 3}`, onclick: toggleJobs }) : null,
+      !running.length && ZR.Jobs.list().length ? el("button", { class: "job-pill idle", text: "Jobs", title: "Earlier work in this session", onclick: toggleJobs }) : null,
+    ];
+    box.replaceChildren(...pills.filter(Boolean)); // (null would show as the word "null")
+    if ($("jobs-pop")) $("jobs-pop").querySelector(".jobs-list").replaceChildren(...ZR.Jobs.list().slice().reverse().slice(0, 12).map(jobRow));
+  }
+
+  function toggleJobs() {
+    if ($("jobs-pop")) return $("jobs-pop").remove();
+    const pop = el("div", { id: "jobs-pop", class: "jobs-pop", role: "dialog" }, [
+      el("div", { class: "row-between" }, [el("b", { text: "Work in progress" }), el("button", { class: "icon-btn", text: "×", title: "Close", onclick: () => pop.remove() })]),
+      el("div", { class: "hint", text: "Pause or stop each part on its own. Stopping keeps what is done, and the step goes on without the rest." }),
+      el("div", { class: "jobs-list" }),
+    ]);
+    document.body.append(pop);
+    renderJobs();
+  }
+
   const wantPDFs = () => project()?.search?.attachPDFs ?? ZR.Prefs.get("attachPDFs", true);
 
   async function findPDFs() {
@@ -1343,19 +1511,28 @@ App.panels.review = (() => {
     st("Waiting for PDFs still downloading…");
     await pdfChain;
     const list = population().filter((c) => c.itemID && !c.hasPDF && !c.ft);
+    const job = ZR.Jobs.start({ kind: "pdf", label: "PDFs from open-access sources", total: list.length });
     let found = 0;
     try {
       for (const [i, c] of list.entries()) {
-        if (ZR.Activity.stopping) break;
+        if (!(await job.gate(ZR.Util.truncate(c.title, 80)))) break;
         st(`Looking for PDFs ${i + 1}/${list.length}…`);
         // the links the search found (arXiv, DOAJ, CORE, …) first, then DOI resolvers and Unpaywall
-        if (await ZR.Importer.attachFullText(Zotero.Items.get(c.itemID), c.record)) {
-          c.hasPDF = true;
-          found++;
+        try {
+          if (await ZR.Importer.attachFullText(Zotero.Items.get(c.itemID), c.record)) {
+            c.hasPDF = true;
+            found++;
+            laterRender();
+          }
+        } catch (e) {
+          job.failed++;
+          ZR.Util.log("PDF failed", c.title, e.message);
         }
+        job.progress({ done: i + 1, found });
       }
-      st(`Found ${found} of ${list.length} PDF(s). For the rest, attach the file by hand or exclude with “Full text not available”.`);
+      st(`Found ${found} of ${list.length} PDF(s)${job.state === "stopping" ? " (stopped)" : ""}. For the rest, attach the file by hand or exclude with “Full text not available”.`);
     } finally {
+      job.finish();
       App.setBusy("review", false);
       renderScreen();
     }
@@ -1465,20 +1642,31 @@ App.panels.review = (() => {
     await pdfChain;
     const out = [];
     const labels = new Map(ZR.PDFHunt.strategies().map((s) => [s.id, s.label]));
-    for (const sid of strategyIDs) {
-      if (ZR.Activity.stopping) break;
+    const kindOf = (sid) => (sid.startsWith("crawler:") ? "crawler" : sid.startsWith("ai:") ? "ai" : "pdf");
+    const jobs = strategyIDs.map((sid) => ZR.Jobs.start({ kind: kindOf(sid), label: labels.get(sid) || sid, queued: true }));
+    for (const [k, sid] of strategyIDs.entries()) {
+      const job = jobs[k];
       const list = missingPDFs();
-      if (!list.length) break;
+      if (ZR.Activity.stopping || !list.length || job.state === "stopping") {
+        job.finish(!list.length ? "nothing left to find" : "");
+        continue;
+      }
       const items = list.map((c) => Zotero.Items.get(c.itemID));
       const records = new Map(list.map((c) => [c.itemID, c.record]));
       onLine(`${labels.get(sid) || sid}: ${items.length} paper(s)…`);
-      const r = await ZR.PDFHunt.run(items, sid, { records, onProgress: (n, total, item) => st(`${labels.get(sid)}: ${n}/${total} · ${ZR.Util.truncate(item.getField("title"), 50)}`) });
-      for (const x of r.results) {
-        const c = cands.find((y) => y.itemID === x.itemID);
-        if (c) c.hasPDF = true;
-      }
+      const r = await ZR.PDFHunt.run(items, sid, {
+        records,
+        job,
+        onProgress: (n, total, item) => st(`${labels.get(sid)}: ${n}/${total} · ${ZR.Util.truncate(item.getField("title"), 50)}`),
+        onFound: (itemID) => {
+          const c = cands.find((y) => y.itemID === itemID);
+          if (c) c.hasPDF = true;
+          laterRender(); // the paper is no longer greyed out
+        },
+      });
+      job.finish(r.failed.length ? `${r.failed.length} error(s), e.g. ${ZR.Util.truncate(r.failed[0], 90)}` : "");
       out.push(Object.assign({ strategy: labels.get(sid) || sid }, r));
-      onLine(`${labels.get(sid) || sid}: found ${r.found} of ${r.tried}${r.failed.length ? ` (${r.failed.length} error(s): ${ZR.Util.truncate(r.failed[0], 80)})` : ""}`);
+      onLine(`${labels.get(sid) || sid}: found ${r.found} of ${r.tried}${r.stopped ? " (stopped)" : ""}${r.failed.length ? ` (${r.failed.length} error(s): ${ZR.Util.truncate(r.failed[0], 80)})` : ""}`);
     }
     return out;
   }
@@ -1490,6 +1678,8 @@ App.panels.review = (() => {
     const count = el("div", { class: "hunt-count" });
     const list = el("div", { class: "hunt-strategies" });
     const runBtn = el("button", { class: "primary", id: "hunt-run", text: "Run the selected strategies" });
+    const jobsBox = el("div", { class: "jobs-list", id: "hunt-jobs" });
+    const opened = Date.now();
     const renderCount = () => {
       const n = missingPDFs().length;
       count.textContent = n ? `${n} paper(s) at the full-text step have no PDF: without one they cannot be read or annotated.` : "Every paper at this step has a PDF.";
@@ -1497,7 +1687,7 @@ App.panels.review = (() => {
     };
     const strategies = ZR.PDFHunt.strategies();
     list.replaceChildren(
-      ...strategies.map((s, i) => el("label", { class: "ap-check" }, [el("input", { type: "checkbox", value: s.id, checked: i === 0 }), " " + s.label])),
+      ...strategies.map((s) => el("label", { class: "ap-check" }, [el("input", { type: "checkbox", value: s.id, checked: s.kind !== "ai" }), " " + s.label])),
       ZR.PDFHunt.configuredCrawlers().length ? null : el("div", { class: "hint", text: "Web crawlers (Firecrawl, SerpApi Google Scholar, Tavily, Exa, Brave) appear here once you add a key in ⚙ Settings → Web search & crawlers." })
     );
     runBtn.addEventListener("click", async () => {
@@ -1520,11 +1710,14 @@ App.panels.review = (() => {
         el("p", { class: "hint", text: "Strategies run one after another; papers found by one are skipped by the next. Every file is checked before it is attached: it must be a PDF of exactly that paper. You can run again with other strategies." }),
         list,
         el("div", { class: "actions" }, [el("span", { class: "spacer" }), el("button", { text: "Close", onclick: () => layer.remove() }), runBtn]),
+        jobsBox,
         log,
       ])
     );
     document.body.append(layer);
     renderCount();
+    const drawJobs = () => (document.contains(jobsBox) ? jobsBox.replaceChildren(...ZR.Jobs.list().filter((j) => j.started >= opened || j.state === "queued").map(jobRow)) : off());
+    const off = ZR.Jobs.subscribe(drawJobs);
   }
 
   // ------------------------------------------------ full-text annotations (step 4) ----
@@ -1631,21 +1824,34 @@ App.panels.review = (() => {
     const todo = population().filter((c) => c.itemID && ZR.FullText.pdfOf(Zotero.Items.get(c.itemID)) && !ZR.FullText.annotationsOf(Zotero.Items.get(c.itemID)).some((a) => a.isBot));
     if (!todo.length) return st("Every full text with a PDF has AI annotations already.");
     App.setBusy("review", true);
+    let profileName = "the AI";
+    try {
+      const pr = App.profile();
+      profileName = `${pr.name}${pr.model ? " · " + pr.model : ""}`;
+    } catch (e) {
+      /* reported by annotateAI */
+    }
+    const job = ZR.Jobs.start({ kind: "annotate", label: `Annotating full texts (${profileName})`, total: todo.length });
     let made = 0;
     let failed = 0;
+    let done = 0;
     try {
       for (const [i, c] of todo.entries()) {
-        if (ZR.Activity.stopping) break;
+        if (!(await job.gate(ZR.Util.truncate(c.title, 80)))) break;
         st(`Annotating ${i + 1}/${todo.length}: ${ZR.Util.truncate(c.title, 60)}…`);
         try {
           made += (await annotateAI(c, { quiet: true })).created;
+          done++;
         } catch (e) {
+          if (job.state === "stopping") break;
           failed++;
           ZR.Util.log("Annotating failed", c.title, e.message);
         }
+        job.progress({ done: i + 1, found: made, failed });
       }
-      st(`The AI added ${made} annotation(s) to ${todo.length - failed} full text(s)${failed ? `; ${failed} failed (see Log)` : ""}.`);
+      st(`The AI added ${made} annotation(s) to ${done} full text(s)${failed ? `; ${failed} failed (see Log)` : ""}${job.state === "stopping" ? " (stopped, the rest stays open)" : ""}.`);
     } finally {
+      job.finish(`${made} annotation(s)`);
       App.setBusy("review", false);
       renderScreen();
     }

@@ -61,14 +61,15 @@ const Autopilot = (window.Autopilot = (() => {
     renderHead();
   }
 
-  function profileFor(id, model) {
+  /** A provider with the autopilot's model and reasoning effort (empty: as set up in Settings). */
+  function profileFor(id, model, effort) {
     const base = App.profiles().find((p) => p.id === id);
     if (!base) return null;
-    return model ? Object.assign({}, base, { model }) : base;
+    return Object.assign({}, base, model ? { model } : {}, effort ? { effort } : {});
   }
   const harness = () => {
     const s = state();
-    const p = profileFor(s?.profileID, s?.model);
+    const p = profileFor(s?.profileID, s?.model, s?.effort);
     if (!p) throw new Error("The autopilot's AI provider is gone. Choose another one (Settings → AI providers)");
     return p;
   };
@@ -76,7 +77,7 @@ const Autopilot = (window.Autopilot = (() => {
     const s = state();
     return profileFor(s?.ftProfileID || s?.profileID, s?.ftProfileID ? s.ftModel : s?.model) || harness();
   };
-  const modelName = (p) => `${p.name}${p.model ? " · " + p.model : ""}`;
+  const modelName = (p) => `${p.name}${p.model ? " · " + p.model : ""}${p.effort ? " · " + p.effort : ""}`;
   const stageLabel = (s) => ZR().Methodologies.STAGES[s]?.label || s;
   const stageNum = (s) => {
     const i = (API().method()?.stages || []).indexOf(s);
@@ -109,6 +110,7 @@ const Autopilot = (window.Autopilot = (() => {
         el("button", { id: "ap-collapse", class: "ap-icon", onclick: () => ($("ap-panel").classList.contains("collapsed") ? show() : collapse()) }, App.icon("collapse")),
       ]),
       el("div", { class: "ap-log", id: "ap-log" }),
+      el("div", { class: "ap-working", id: "ap-working", hidden: true }),
       el("div", { class: "ap-prompt", id: "ap-prompt" }),
     ]);
     document.body.append(p);
@@ -205,11 +207,12 @@ const Autopilot = (window.Autopilot = (() => {
     const fact = (k, v) => v && facts.push(el("span", { class: "ap-fk", text: k }), el("span", { class: "ap-fv", text: v }));
     fact("Status", statusText() || "not started");
     if (s.stage) fact("Step", `${stageNum(s.stage)}. ${stageLabel(s.stage)}${s.stage === "screen" && s.attempt ? ` (attempt ${s.attempt + 1} of 3)` : ""}`);
-    const h = profileFor(s.profileID, s.model);
+    const h = profileFor(s.profileID, s.model, s.effort);
     if (h) {
       fact("Harness", h.name);
       fact("Provider", ZR().LLM.getProvider(h.provider)?.name || h.provider);
       fact("Model", h.model || "the provider's default");
+      fact("Reasoning effort", h.effort || "as set up");
     } else if (s.profileID) fact("Harness", "(AI provider missing)");
     if (s.ftProfileID) {
       const f = profileFor(s.ftProfileID, s.ftModel);
@@ -219,7 +222,10 @@ const Autopilot = (window.Autopilot = (() => {
     popover("info", [
       el("div", { class: "ap-pop-title", text: "Autopilot" }),
       el("div", { class: "ap-facts" }, facts),
-      running ? null : el("div", { class: "actions" }, [el("button", { id: "ap-setup", text: s.profileID ? "Change model or question…" : "Set up…", onclick: () => ($("ap-pop")?.remove(), expand(), renderSetup({ stage: s.stage })) })]),
+      el("div", { class: "actions" }, [
+        running ? null : el("button", { id: "ap-setup", text: s.profileID ? "Change model or question…" : "Set up…", onclick: () => ($("ap-pop")?.remove(), expand(), renderSetup({ stage: s.stage })) }),
+        el("button", { id: "ap-analytics", text: "Analytics of this session", onclick: () => ($("ap-pop")?.remove(), showAnalytics("current")) }),
+      ]),
     ]);
   }
 
@@ -229,13 +235,74 @@ const Autopilot = (window.Autopilot = (() => {
     const sessions = pool.autopilotSessions || [];
     const cur = pool.autopilotLog;
     const row = (id, title, sub) =>
-      el("button", { class: "ap-sess" + ((viewing || "current") === id ? " on" : ""), "data-session": id, onclick: () => ($("ap-pop")?.remove(), viewSession(id === "current" ? null : id)) }, [el("b", { text: title }), el("span", { class: "hint", text: sub })]);
+      el("div", { class: "ap-sess-row" }, [
+        el("button", { class: "ap-sess" + ((viewing || "current") === id ? " on" : ""), "data-session": id, onclick: () => ($("ap-pop")?.remove(), viewSession(id === "current" ? null : id)) }, [el("b", { text: title }), el("span", { class: "hint", text: sub })]),
+        el("button", { class: "ap-icon ap-sess-info", "data-analytics": id, title: "Analytics: tokens and time per model and step", onclick: () => ($("ap-pop")?.remove(), showAnalytics(id)) }, App.icon("info")),
+      ]);
     popover("history", [
       el("div", { class: "ap-pop-title", text: "Sessions" }),
       row("current", "Current session", cur.length ? `since ${when(cur[0].at)} · ${cur.length} messages` : "empty"),
       ...sessions.map((s) => row(s.id, when(s.started), `from “${stageLabel(s.from)}”${s.model ? " · " + s.model : ""} · ${s.count} messages`)),
       sessions.length ? null : el("div", { class: "hint ap-pop-note", text: "Starting the autopilot again, from the start or from any step, begins a new session. Earlier ones are kept here." }),
     ]);
+  }
+
+  // ------------------------------------------------------------- analytics ----
+  const sessionKey = (log) => "s" + String(log?.[0]?.at || new Date().toISOString().slice(0, 19)).replace(/\D/g, "");
+  let usageSave = null;
+  function pushUsage(pool, r) {
+    pool.autopilotUsage = pool.autopilotUsage || [];
+    pool.autopilotUsage.push(r);
+    if (pool.autopilotUsage.length > 5000) pool.autopilotUsage.splice(0, pool.autopilotUsage.length - 5000);
+    clearTimeout(usageSave);
+    usageSave = setTimeout(() => ZR().Projects.savePool(App.target.libraryID, App.project.id).catch(() => {}), 1500);
+  }
+
+  const tok = (n) => (n >= 10000 ? Math.round(n / 1000).toLocaleString() + "k" : Math.round(n).toLocaleString());
+  const dur = (ms) => (ms >= 90000 ? `${Math.round(ms / 60000)} min` : `${Math.round(ms / 1000)} s`);
+
+  /** Tokens and time of a session: in total, per model, per step, and the slowest calls. */
+  async function showAnalytics(id) {
+    $("ap-analytics-layer")?.remove();
+    const pool = await logStore();
+    const past = id !== "current" && (pool.autopilotSessions || []).find((x) => x.id === id);
+    const key = past ? past.id : sessionKey(pool.autopilotLog);
+    const recs = (pool.autopilotUsage || []).filter((r) => r.session === key);
+    const sum = ZR().Usage.summarize(recs);
+    const t = sum.total;
+    const log = past ? past.log : pool.autopilotLog;
+    const span = log.length ? new Date(log.at(-1).at + "Z") - new Date(log[0].at + "Z") : 0;
+    const table = (head, rows) => el("table", { class: "runs ap-an-table" }, [el("tr", {}, head.map((h) => el("th", { text: h }))), ...rows]);
+    const tr = (cells) => el("tr", {}, cells.map((c) => el("td", { text: String(c) })));
+    const layer = el(
+      "div",
+      { class: "modal-layer", id: "ap-analytics-layer" },
+      el("div", { class: "modal ap-an-modal", role: "dialog" }, [
+        el("div", { class: "row-between" }, [el("h2", { text: "Session analytics" }), el("button", { class: "icon-btn", text: "×", title: "Close", onclick: () => layer.remove() })]),
+        el("div", { class: "ap-facts" }, [
+          ...[
+            ["Session", log.length ? `${when(log[0].at)} to ${when(log.at(-1).at)} (${dur(span)})` : "empty"],
+            ["AI calls", `${t.calls}${t.failed ? ` (${t.failed} failed)` : ""}`],
+            ["Tokens in", `${tok(t.input)}${t.cached ? ` (of those cached: ${tok(t.cached)})` : ""}`],
+            ["Tokens out", `${tok(t.output)}${t.reasoning ? ` (of those reasoning: ${tok(t.reasoning)})` : ""}`],
+            ["Time waiting for AI", dur(t.ms)],
+            ...(t.cost ? [["Cost reported", `$${t.cost.toFixed(4)}`]] : []),
+          ].flatMap(([k, v]) => [el("span", { class: "ap-fk", text: k }), el("span", { class: "ap-fv", text: v })]),
+        ]),
+        recs.length
+          ? el("div", { class: "ap-an-body" }, [
+              el("h3", { text: "Per model" }),
+              table(["Model", "Calls", "In", "cached", "Out", "reasoning", "Time", "Cost"], sum.byModel.map((m) => tr([m.key, m.calls, tok(m.input), tok(m.cached), tok(m.output), tok(m.reasoning), dur(m.ms), m.cost ? "$" + m.cost.toFixed(4) : "-"]))),
+              el("h3", { text: "Per step" }),
+              table(["Step", "Calls", "In", "Out", "Time"], sum.byStage.map((m) => tr([m.key === "(outside a step)" ? m.key : `${stageNum(m.key)}. ${stageLabel(m.key)}`, m.calls, tok(m.input), tok(m.output), dur(m.ms)]))),
+              el("h3", { text: "Slowest calls" }),
+              table(["Step", "Model", "Time", "Tokens in / out", "Asked"], sum.slowest.map((r) => tr([stageLabel(r.stage || "") || "-", [r.model, r.effort].filter(Boolean).join(" · ") || r.label, dur(r.ms), `${tok(r.input)} / ${tok(r.output)}`, ZR().Util.truncate(r.what || "", 70)]))),
+            ])
+          : el("p", { class: "hint", text: "No AI calls were recorded for this session (sessions before version 0.13 have no analytics)." }),
+        el("p", { class: "hint", text: "Codex and Claude Code run on your subscription: their tokens are shown, a cost only where the provider reports one. “In” includes the provider's own instructions and tools (Codex adds about 14k tokens to every call), of which much is usually cached." }),
+      ])
+    );
+    document.body.append(layer);
   }
 
   async function viewSession(id) {
@@ -436,11 +503,24 @@ const Autopilot = (window.Autopilot = (() => {
     const current = stage && stages.includes(stage) ? stage : R().step && stages.includes(R().step) ? R().step : protocolReady ? (p.runs?.length ? "screen" : "search") : "protocol";
     const profileSel = el("select", { id: "ap-profile" }, profiles.map((o) => el("option", { value: o.value, text: o.label, selected: o.value === s.profileID })));
     const modelSel = el("select", { id: "ap-model-select" });
+    const effortSel = el("select", { id: "ap-effort" });
+    const effortRow = el("label", { class: "ap-field" }, [el("span", { text: "Reasoning effort" }), effortSel, el("span", { class: "hint", text: "Lower answers faster and more to the point; higher thinks longer before each step." })]);
+    const fillEfforts = async () => {
+      const base = App.profiles().find((x) => x.id === profileSel.value);
+      const e = base ? await ZR().LLM.effortLevels(Object.assign({}, base, modelSel.value ? { model: modelSel.value } : {})) : { levels: [] };
+      const was = effortSel.value || (profileSel.value === s.profileID ? s.effort : "") || "";
+      const setUp = base?.effort || e.def;
+      effortSel.replaceChildren(el("option", { value: "", text: setUp ? `as set up (${setUp})` : "as set up (the provider's default)" }), ...e.levels.map((l) => el("option", { value: l, text: l + (e.hints?.[l] ? " · " + e.hints[l] : "") })));
+      effortSel.value = e.levels.includes(was) ? was : "";
+      effortRow.hidden = !e.levels.length;
+    };
     const fillModels = async () => {
       modelSel.replaceChildren(...(await modelOptions(profileSel.value)).map((o) => el("option", { value: o.value, text: o.label })));
       if (profileSel.value === s.profileID && s.model) modelSel.value = s.model;
+      await fillEfforts();
     };
     profileSel.addEventListener("change", fillModels);
+    modelSel.addEventListener("change", fillEfforts);
     await fillModels();
     const question = el("textarea", { id: "ap-question", rows: "4", placeholder: "Your research question in your own words: what you want to find out and why." });
     question.value = s.question || p.description || (p.protocol?.questions || []).join("\n");
@@ -450,6 +530,7 @@ const Autopilot = (window.Autopilot = (() => {
         el("div", { class: "ap-ask-line", text: "An AI of your choice runs the review with you: it sets up the protocol, plans the search, checks the screening, reads the full texts and fills in the tables, and asks you at every decision." }),
         el("label", { class: "ap-field" }, [el("span", { text: "Harness model" }), profileSel]),
         el("label", { class: "ap-field" }, [el("span", { text: "Model" }), modelSel]),
+        effortRow,
         el("label", { class: "ap-field" }, [el("span", { text: "Research question" }), question]),
         el("label", { class: "ap-field" }, [el("span", { text: "Where to start" }), startAt]),
         el("div", { class: "actions" }, [
@@ -459,7 +540,7 @@ const Autopilot = (window.Autopilot = (() => {
             text: "Start the autopilot",
             onclick: () => {
               if (!question.value.trim()) return question.focus();
-              start({ profileID: profileSel.value, model: modelSel.value, question: question.value.trim(), stage: startAt.value });
+              start({ profileID: profileSel.value, model: modelSel.value, effort: effortSel.value, question: question.value.trim(), stage: startAt.value });
             },
           }),
         ]),
@@ -468,12 +549,12 @@ const Autopilot = (window.Autopilot = (() => {
   }
 
   /** Start (or restart) the autopilot for the current review project: a new session. */
-  async function start({ profileID, model = "", question, stage = "protocol" }) {
+  async function start({ profileID, model = "", effort = "", question, stage = "protocol" }) {
     const pool = await logStore();
     ZR().Autopilot.archiveSession(pool);
     await ZR().Projects.savePool(App.target.libraryID, App.project.id);
     viewing = null;
-    await saveState({ on: true, profileID, model, question, stage, attempt: 0, finished: false });
+    await saveState({ on: true, profileID, model, effort, question, stage, attempt: 0, finished: false });
     await show();
     $("ap-prompt").replaceChildren();
     const name = modelName(harness());
@@ -487,7 +568,7 @@ const Autopilot = (window.Autopilot = (() => {
     if (running) await stopAndWait();
     const s = state() || {};
     const question = s.question || App.project.description || (App.project.protocol?.questions || []).join("\n");
-    if (s.profileID && profileFor(s.profileID, s.model) && question) return start({ profileID: s.profileID, model: s.model || "", question, stage });
+    if (s.profileID && profileFor(s.profileID, s.model) && question) return start({ profileID: s.profileID, model: s.model || "", effort: s.effort || "", question, stage });
     await show();
     await renderSetup({ stage });
   }
@@ -530,11 +611,16 @@ const Autopilot = (window.Autopilot = (() => {
     stopRequested = false;
     ZR().Activity.resume();
     renderHead();
+    const pool = await logStore();
+    const key = sessionKey(pool.autopilotLog);
+    ZR().Usage.setSink((r) => pushUsage(pool, r));
+    const ticker = setInterval(showWorking, 1000);
     try {
       while (state()?.on && !pauseRequested) {
         const s = state().stage;
         const fn = STAGES[s];
         if (!fn) break;
+        ZR().Usage.setContext({ session: key, stage: s });
         App.showTab("review");
         await R().refresh(); // fresh candidates before the step works with them
         const next = await fn();
@@ -553,6 +639,9 @@ const Autopilot = (window.Autopilot = (() => {
         await say("Something went wrong: " + e.message + ". Fix it and press ▶ to retry this step.", "warn");
       }
     } finally {
+      clearInterval(ticker);
+      ZR().Usage.setContext(null);
+      if ($("ap-working")) $("ap-working").hidden = true;
       running = false;
       if (stopRequested) {
         stopRequested = false;
@@ -561,6 +650,16 @@ const Autopilot = (window.Autopilot = (() => {
       App.setBusy("review", false);
       renderHead();
     }
+  }
+
+  /** What the AI is doing right now, and for how long (so a long step does not look stuck). */
+  function showWorking() {
+    const box = $("ap-working");
+    if (!box) return;
+    const e = ZR().Activity.running().filter((x) => ["ai", "cli", "crawler"].includes(x.kind)).at(-1);
+    box.hidden = !e;
+    if (!e) return;
+    box.replaceChildren(el("span", { class: "ap-working-dot" }), el("span", { class: "ap-working-label", text: ZR().Util.truncate(e.label, 90) }), el("span", { class: "ap-working-time", text: dur(Date.now() - e.started) }));
   }
 
   const protocol = () => App.project.protocol;
@@ -651,6 +750,8 @@ const Autopilot = (window.Autopilot = (() => {
       const setSources = (pred) => srcBox.querySelectorAll("input").forEach((i) => (i.checked = pred(Z.Sources.get(i.value), i.value)));
       const num = (id, value, attrs = {}) => el("input", Object.assign({ type: "number", id, value: value ?? "" }, attrs));
       const limit = num("ap-s-limit", plan.limit, { min: "5", max: "500" });
+      const noLimit = el("input", { type: "checkbox", id: "ap-s-nolimit", checked: prev.limit === 0, onchange: () => (limit.disabled = noLimit.checked) });
+      limit.disabled = noLimit.checked;
       const yFrom = num("ap-s-from", P.yearFrom ?? prev.yearFrom, { placeholder: "from" });
       const yTo = num("ap-s-to", P.yearTo ?? prev.yearTo, { placeholder: "to" });
       const minCites = num("ap-s-cites", prev.minCitations || "", { min: "0", placeholder: "0" });
@@ -701,7 +802,7 @@ const Autopilot = (window.Autopilot = (() => {
               ]),
               srcBox,
             ]),
-            section("Results", [el("div", { class: "ap-row" }, [el("label", { class: "ap-inline" }, ["Per database ", limit]), el("label", { class: "ap-inline" }, ["Years ", yFrom, " to ", yTo]), el("label", { class: "ap-inline" }, ["Min. citations ", minCites])])]),
+            section("Results", [el("div", { class: "ap-row" }, [el("label", { class: "ap-inline" }, ["Per database ", limit]), el("label", { class: "ap-inline", title: "Every result each database returns, up to what its API hands out" }, [noLimit, " no limit"]), el("label", { class: "ap-inline" }, ["Years ", yFrom, " to ", yTo]), el("label", { class: "ap-inline" }, ["Min. citations ", minCites])])]),
             section("Languages (none = any)", [langs]),
             section("Publication types (none = any)", [types]),
             section("Filters", [opts.hasAbstract.row, opts.hasDOI.row, opts.oaOnly.row, opts.fulltextOnly.row, opts.strict.row]),
@@ -721,7 +822,7 @@ const Autopilot = (window.Autopilot = (() => {
                   mode: "structured",
                   query: q.value.trim(),
                   sources: sourcesChosen,
-                  limit: parseInt(limit.value, 10) || plan.limit,
+                  limit: noLimit.checked ? 0 : parseInt(limit.value, 10) || plan.limit,
                   yearFrom: parseInt(yFrom.value, 10) || null,
                   yearTo: parseInt(yTo.value, 10) || null,
                   minCitations: Math.max(0, parseInt(minCites.value, 10) || 0),
@@ -1018,5 +1119,5 @@ const Autopilot = (window.Autopilot = (() => {
     report: doReport,
   };
 
-  return { show, hide, dock, collapse, expand, start, runFrom, run, pause, stop, stopAndWait, isRunning: () => running, isStopping: () => stopRequested, state, say, ask, viewSession };
+  return { showAnalytics, show, hide, dock, collapse, expand, start, runFrom, run, pause, stop, stopAndWait, isRunning: () => running, isStopping: () => stopRequested, state, say, ask, viewSession };
 })());

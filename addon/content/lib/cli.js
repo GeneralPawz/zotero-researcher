@@ -157,8 +157,11 @@ ZR.CLI = (() => {
       const dir = env("CODEX_HOME") || PathUtils.join(home(), ".codex");
       const cache = await readJSON(PathUtils.join(dir, "models_cache.json"));
       let def = "";
+      let configEffort = "";
       try {
-        def = ((await IOUtils.readUTF8(PathUtils.join(dir, "config.toml"))).match(/^\s*model\s*=\s*"([^"]+)"/m) || [])[1] || "";
+        const toml = await IOUtils.readUTF8(PathUtils.join(dir, "config.toml"));
+        def = (toml.match(/^\s*model\s*=\s*"([^"]+)"/m) || [])[1] || "";
+        configEffort = (toml.match(/^\s*model_reasoning_effort\s*=\s*"([^"]+)"/m) || [])[1] || "";
       } catch (e) {
         /* no config */
       }
@@ -169,6 +172,10 @@ ZR.CLI = (() => {
         name: m.display_name || m.slug,
         detail: [m.description, m.supported_reasoning_levels?.length ? "reasoning: " + m.supported_reasoning_levels.map((l) => l.effort).join(", ") : ""].filter(Boolean).join(" · "),
         isDefault: m.slug === def,
+        efforts: (m.supported_reasoning_levels || []).map((l) => l.effort),
+        effortHints: Object.fromEntries((m.supported_reasoning_levels || []).map((l) => [l.effort, l.description || ""])),
+        defaultEffort: configEffort || m.default_reasoning_level || "",
+        effortFrom: configEffort ? "your Codex settings" : "the model's default",
       }));
     }
     if (kind === "claude-cli") {
@@ -224,7 +231,18 @@ ZR.CLI = (() => {
   /** Chat through a CLI; returns the reply text. */
   /** web: allow web search for this call (finding PDFs) - Claude: WebSearch/WebFetch tools; Codex: --search */
   /** images: [{mediaType, data: base64}] - Codex gets them with -i, Claude Code reads them from its folder */
-  async function chat(profile, messages, { system, timeout = 180000, web = false, images = [] } = {}) {
+  /** The model and effort set in Codex's config.toml (used when the config itself is skipped). */
+  async function codexDefaults() {
+    try {
+      const toml = await IOUtils.readUTF8(PathUtils.join(env("CODEX_HOME") || PathUtils.join(home(), ".codex"), "config.toml"));
+      return { model: (toml.match(/^\s*model\s*=\s*"([^"]+)"/m) || [])[1] || "", effort: (toml.match(/^\s*model_reasoning_effort\s*=\s*"([^"]+)"/m) || [])[1] || "" };
+    } catch (e) {
+      return { model: "", effort: "" };
+    }
+  }
+  let codexLean = true; // start Codex without the user's config (plugins, MCP servers, hooks) while that works
+
+  async function chat(profile, messages, { system, timeout = 180000, web = false, images = [], onUsage = () => {} } = {}) {
     const kind = profile.provider;
     const path = profile.baseURL || (await detect(kind));
     if (!path) throw new Error(`${TOOLS[kind].label} CLI not found. Install it or set its path in the AI provider settings`);
@@ -244,6 +262,7 @@ ZR.CLI = (() => {
 
 The example image${files.length > 1 ? "s are" : " is"} at: ${files.join(", ")} (read ${files.length > 1 ? "them" : "it"} with the Read tool).` }];
         if (profile.model) args.push("--model", profile.model);
+        if (profile.effort) args.push("--effort", profile.effort);
         if (system) args.push("--system-prompt", system);
         const r = await exec(path, args, transcript(messages, system, false), { timeout, workdir: dir });
         let data;
@@ -253,19 +272,36 @@ The example image${files.length > 1 ? "s are" : " is"} at: ${files.join(", ")} (
           throw new Error(`Claude Code returned no result (exit ${r.exitCode}): ${U.truncate(r.stderr || r.stdout, 300)}`);
         }
         if (data.is_error || data.subtype?.startsWith("error")) throw new Error(`Claude Code: ${U.truncate(data.result || data.subtype, 300)}`);
+        onUsage(ZR.Usage?.parse.claude(data, profile.model) || {});
         return String(data.result ?? "");
       }
       if (kind === "codex-cli") {
         const outFile = PathUtils.join(dir, "reply.txt");
-        const args = ["exec", "--skip-git-repo-check", "--ephemeral", "--sandbox", "read-only", "--color", "never", "-C", dir, "-o", outFile];
-        if (web) args.push("--search");
-        for (const file of files) args.push("-i", file);
-        if (profile.model) args.push("-m", profile.model);
-        args.push("-");
-        const r = await exec(path, args, transcript(messages, system, true), { timeout, workdir: dir });
-        const reply = (await IOUtils.exists(outFile)) ? await IOUtils.readUTF8(outFile) : "";
-        if (!reply.trim()) throw new Error(`Codex returned no answer (exit ${r.exitCode}): ${U.truncate(r.stderr || r.stdout, 300)}`);
-        return reply.trim();
+        // Lean start: without the user's config, Codex skips its plugins, MCP servers and hooks
+        // (seconds per call); the model and effort from that config are passed on explicitly.
+        const run = async (lean) => {
+          const def = lean ? await codexDefaults() : {};
+          const model = profile.model || def.model;
+          const effort = profile.effort || def.effort;
+          const args = ["exec", ...(lean ? ["--ignore-user-config"] : []), "--skip-git-repo-check", "--ephemeral", "--sandbox", "read-only", "--color", "never", "--json", "-C", dir, "-o", outFile];
+          if (web) args.push("--search");
+          for (const file of files) args.push("-i", file);
+          if (model) args.push("-m", model);
+          if (effort) args.push("-c", `model_reasoning_effort=${effort}`); // a bare word: taken as the string
+          args.push("-");
+          const r = await exec(path, args, transcript(messages, system, true), { timeout, workdir: dir });
+          const reply = (await IOUtils.exists(outFile)) ? await IOUtils.readUTF8(outFile) : "";
+          return { r, reply, model };
+        };
+        let got = await run(codexLean);
+        if (!got.reply.trim() && codexLean && !ZR.Activity?.stopping) {
+          U.log("Codex without the user config gave no answer, trying with it", U.truncate(got.r.stderr, 200));
+          codexLean = false; // this setup needs the config (e.g. a custom model provider)
+          got = await run(false);
+        }
+        if (!got.reply.trim()) throw new Error(`Codex returned no answer (exit ${got.r.exitCode}): ${U.truncate(got.r.stderr || got.r.stdout, 300)}`);
+        onUsage(ZR.Usage?.parse.codex(got.r.stdout, got.model) || {});
+        return got.reply.trim();
       }
       throw new Error("Unknown CLI provider " + kind);
     } finally {

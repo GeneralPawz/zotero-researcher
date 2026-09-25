@@ -89,6 +89,7 @@
             <div class="opt-title">Results</div>
             <label class="inline">Years <input type="number" id="year-from" placeholder="from" min="1500" max="2100"/> to <input type="number" id="year-to" placeholder="to" min="1500" max="2100"/></label>
             <label class="inline">Max per source <input type="number" id="limit" min="1" max="500"/></label>
+            <label class="check" title="Every result each database returns for the query, page by page, up to what its API hands out (e.g. Scopus 5,000). Can take a while; Stop in the Log ends it and keeps what came."><input type="checkbox" id="no-limit"/> No limit (all results)</label>
             <label class="check" title="Keep only results with an open PDF link; imported items without a downloadable PDF are removed again"><input type="checkbox" id="fulltext-only"/> Only papers with full text (PDF)</label>
             <label class="check"><input type="checkbox" id="oa-only"/> Open access only</label>
             <label class="check" title="Title, abstract or keywords must satisfy the query exactly"><input type="checkbox" id="strict"/> Strict match on title/abstract</label>
@@ -278,7 +279,7 @@
         </div>
       </div>
     </div>
-    <div class="statusbar"><progress id="review-progress" hidden="hidden"></progress><span id="review-status"></span><span class="spacer"></span><button class="log-btn" title="What is happening behind the scenes">Log<span class="log-count" hidden="hidden"></span></button></div>
+    <div class="statusbar"><progress id="review-progress" hidden="hidden"></progress><span id="review-status"></span><span id="rv-jobs" class="jobs-strip"></span><span class="spacer"></span><button class="log-btn" title="What is happening behind the scenes">Log<span class="log-count" hidden="hidden"></span></button></div>
   </section>
 
   <!-- ============================== ITEMS =============================== -->

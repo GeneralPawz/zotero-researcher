@@ -197,6 +197,22 @@ var ZRPrefsPane = (() => {
     const model = el("input", { type: "text", class: "zr-field zr-mono", value: editing.model, placeholder: "model id" });
     const temp = el("input", { type: "number", min: "0", max: "2", step: "0.1", value: editing.temperature ?? "", placeholder: "default", style: "width: 7em" });
     const status = el("span", { class: "zr-status" });
+    // Reasoning effort: the levels the chosen model offers (none for providers without it)
+    const effort = el("select", { id: "zr-llm-effort", class: "zr-field" });
+    const effortLabel = el("label", { text: "Reasoning effort" });
+    const effortHelp = el("div", { class: "zr-help" });
+    const effortCell = el("div", {}, [effort, effortHelp]);
+    let effortSeq = 0;
+    const loadEfforts = async () => {
+      const seq = ++effortSeq;
+      const e = await ZR.LLM.effortLevels(current(), models.length ? models : null);
+      if (seq !== effortSeq) return;
+      const want = effort.value || editing.effort || "";
+      effort.replaceChildren(el("option", { value: "", text: e.def ? `as set up (${e.def}, from ${e.from})` : "as set up (the provider's default)" }), ...e.levels.map((l) => el("option", { value: l, text: l + (e.hints[l] ? " · " + e.hints[l] : "") })));
+      effort.value = e.levels.includes(want) ? want : "";
+      effortLabel.hidden = effortCell.hidden = !e.levels.length;
+      effortHelp.textContent = "Lower answers faster and more to the point; higher thinks longer. Used wherever this AI works; the autopilot can set its own.";
+    };
 
     // Rows that differ between API providers and local CLIs (Claude Code / Codex)
     const urlLabel = el("label", { text: "Base URL" });
@@ -243,6 +259,8 @@ var ZRPrefsPane = (() => {
     };
     filter.addEventListener("input", renderModels);
     model.addEventListener("input", renderModels);
+    model.addEventListener("change", loadEfforts);
+    list.addEventListener("click", () => setTimeout(loadEfforts, 0));
 
     let loadSeq = 0;
     const loadModels = async (resolve) => {
@@ -264,6 +282,7 @@ var ZRPrefsPane = (() => {
               ? `${models.length} models available on your ChatGPT plan (from Codex). Leave the field empty to use your Codex default.`
               : `${models.length} models available${prov.id === "openrouter" ? " (prices per million tokens)" : ""}. Click one to use it.`;
         renderModels();
+        loadEfforts();
       } catch (e) {
         if (seq !== loadSeq) return;
         models = [];
@@ -298,6 +317,7 @@ var ZRPrefsPane = (() => {
       models = [];
       filter.value = "";
       renderModels();
+      loadEfforts();
       modelStatus.textContent = "";
       if (cli && !baseURL.value) detectBtn.click();
       // Load the real list right away where that costs nothing
@@ -318,6 +338,7 @@ var ZRPrefsPane = (() => {
       baseURL: baseURL.value.trim() === ZR.LLM.getProvider(providerSel.value).baseURL ? "" : baseURL.value.trim(),
       model: model.value.trim(),
       temperature: temp.value === "" ? "" : Number(temp.value),
+      effort: effort.value || "",
     });
 
     const save = async () => {
@@ -355,6 +376,8 @@ var ZRPrefsPane = (() => {
           el("div", {}, [el("div", { class: "zr-row" }, [model, fetchBtn]), modelStatus, filter, list]),
           tempLabel,
           tempCell,
+          effortLabel,
+          effortCell,
         ]),
         el("div", { class: "zr-actions" }, [
           el("button", { text: "Save", class: "zr-primary", onclick: save }),

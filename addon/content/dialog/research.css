@@ -868,3 +868,62 @@ body.ap-open.ap-collapsed #panel-review > .statusbar { padding-right: max(2px, c
 .choice select { margin-top: 4px; max-width: 100%; }
 .choice small:empty { display: none; }
 .np-reuse { margin: 2px 0 6px; }
+
+.log-kind.k-crawler { color: #8b5cf6; }
+
+/* ---------- jobs: long work you can watch, pause and stop ---------- */
+#review-status { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.jobs-strip { display: inline-flex; gap: 6px; align-items: center; flex: none; }
+.job-pill { font-size: 11px; padding: 1px 9px; border-radius: 10px; display: inline-flex; gap: 6px; align-items: center; white-space: nowrap; }
+.job-pill.idle { color: var(--fg-3); }
+.job-pulse { width: 8px; height: 8px; border-radius: 50%; background: var(--fg-3); flex: none; }
+.s-running > .job-pulse, .job-pill.s-running .job-pulse { background: var(--accent); animation: zr-pulse 1s infinite; }
+.s-paused > .job-pulse, .job-pill.s-paused .job-pulse { background: var(--mid); }
+.s-stopping > .job-pulse, .job-pill.s-stopping .job-pulse { background: var(--bad); animation: zr-pulse 0.5s infinite; }
+.s-queued > .job-pulse, .job-pill.s-queued .job-pulse { background: transparent; border: 1.5px solid var(--fg-3); }
+.s-done > .job-pulse { background: var(--good); }
+.s-stopped > .job-pulse, .s-skipped > .job-pulse { background: var(--bad); }
+.jobs-pop { position: fixed; left: 14px; bottom: calc(var(--statusbar-h, 30px) + 8px); width: min(560px, calc(100vw - 28px)); max-height: min(460px, calc(100vh - 140px)); overflow: auto; z-index: 1500; background: var(--bg); border: 1px solid var(--line); border-radius: 12px; box-shadow: var(--shadow); padding: 10px 12px; display: flex; flex-direction: column; gap: 8px; }
+.jobs-list { display: flex; flex-direction: column; gap: 6px; }
+.job-row { display: grid; grid-template-columns: 10px minmax(0, 1fr) auto; gap: 10px; align-items: center; padding: 6px 8px; border-radius: 8px; background: var(--bg-2); }
+.job-top { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; font-size: 12.5px; }
+.job-bar { height: 5px; border-radius: 3px; background: var(--bg-3); overflow: hidden; margin-top: 4px; }
+.job-bar > div { height: 100%; background: var(--accent); transition: width 0.3s; }
+.s-done .job-bar > div { background: var(--good); }
+.s-stopped .job-bar > div, .s-stopping .job-bar > div { background: var(--bad); }
+.job-current { margin-top: 2px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.job-actions { display: inline-flex; gap: 4px; }
+.job-actions .ap-icon { width: 26px; height: 24px; }
+.job-actions .ap-icon svg { width: 15px; height: 15px; }
+/* full text: papers without a PDF */
+.queue-list .q-item.no-pdf .q-t { opacity: 0.45; }
+.queue-list .q-item.no-pdf .q-t::before { content: "no PDF · "; font-size: 10.5px; font-weight: 600; color: var(--fg-3); }
+
+/* the red button keeps its colour on hover */
+button.danger-solid:hover:not(:disabled) { background: var(--bad); border-color: var(--bad); color: #fff; filter: brightness(1.08); }
+
+/* a search that did not deliver every hit */
+.funnel-stage.incomplete { background: var(--mid-soft); border-color: var(--mid); color: var(--fg); cursor: pointer; font: inherit; font-size: 12px; padding: 1px 9px; border-radius: 12px; }
+.funnel-stage.incomplete:hover:not(:disabled) { background: var(--mid-soft); filter: brightness(0.97); }
+.incomplete-mark { color: var(--mid); font-weight: 700; }
+.inc-modal { width: min(880px, calc(100vw - 40px)); max-height: calc(100vh - 60px); display: flex; flex-direction: column; gap: 8px; }
+.inc-scroll { overflow: auto; }
+.inc-table td { vertical-align: middle; }
+.inc-count { white-space: nowrap; font-variant-numeric: tabular-nums; }
+.inc-actions { white-space: nowrap; display: flex; gap: 8px; align-items: center; }
+/* protocol: room between the description and its button */
+#rv-describe .actions { margin-top: 12px; }
+
+/* autopilot: what the AI is doing now; session analytics */
+.ap-working { display: flex; align-items: center; gap: 8px; padding: 5px 12px; border-top: 1px solid var(--line); font-size: 12px; color: var(--fg-2); background: var(--bg-2); }
+.ap-working-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--accent); animation: zr-pulse 1s infinite; flex: none; }
+.ap-working-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-family: ui-monospace, Consolas, monospace; font-size: 11.5px; }
+.ap-working-time { font-variant-numeric: tabular-nums; flex: none; }
+.ap-sess-row { display: flex; align-items: center; gap: 4px; }
+.ap-sess-row .ap-sess { flex: 1; min-width: 0; }
+.ap-sess-info { width: 28px; height: 26px; }
+.ap-sess-info svg { width: 16px; height: 16px; }
+.ap-an-modal { width: min(820px, calc(100vw - 40px)); max-height: calc(100vh - 60px); display: flex; flex-direction: column; gap: 8px; overflow: auto; }
+.ap-an-modal h3 { margin: 10px 0 4px; }
+.ap-an-table td { font-variant-numeric: tabular-nums; }
+.ap-an-table td:first-child { font-weight: 600; }

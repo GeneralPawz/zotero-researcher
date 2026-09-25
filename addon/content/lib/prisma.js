@@ -213,10 +213,19 @@ ZR.Prisma = (() => {
   /** Compact run record for the review log. */
   function runRecord(runInfo) {
     const perSource = {};
-    for (const [id, s] of Object.entries(runInfo.perSource || {})) perSource[id] = { count: s.count || 0, ...(s.error ? { error: U.truncate(s.error, 120) } : {}) };
+    for (const [id, s] of Object.entries(runInfo.perSource || {}))
+      perSource[id] = {
+        count: s.count || 0,
+        ...(s.total ? { total: s.total } : {}),
+        ...(s.error ? { error: U.truncate(s.error, 120) } : {}),
+        ...(s.note ? { note: U.truncate(s.note, 160) } : {}),
+        // not every hit came: why, where to continue, when trying again makes sense
+        ...(s.reason ? { reason: s.reason, pos: s.pos || null, retryAt: s.retryAt || null, retryHint: s.retryHint || "" } : {}),
+      };
     return {
       id: runInfo.id || "r" + Date.now().toString(36),
       parent: runInfo.parent || null, // the search this one refines
+      continues: runInfo.continues || null, // the search this one fetched the rest of
       settings: runInfo.settings || null, // to reopen it in the Search tab
       removed: (runInfo.dropped || []).length,
       at: runInfo.started,

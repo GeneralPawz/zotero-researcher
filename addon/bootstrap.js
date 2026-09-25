@@ -8,6 +8,8 @@ var ZR;
 const LIB_FILES = [
   "lib/util.js",
   "lib/activity.js",
+  "lib/jobs.js",
+  "lib/usage.js",
   "lib/prefs.js",
   "lib/secrets.js",
   "lib/store.js",

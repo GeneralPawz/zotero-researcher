@@ -169,6 +169,31 @@ ZR.Projects = (() => {
     await save(libraryID, p);
   }
 
+  /**
+   * Databases that did not deliver every hit in a logged search, not yet fetched later
+   * or set aside: [{runID, source, fetched, total, reason, pos, retryAt, retryHint, error}]
+   */
+  function incomplete(project) {
+    const out = [];
+    for (const run of project?.runs || []) {
+      for (const [source, s] of Object.entries(run.perSource || {})) {
+        if (!s.reason || s.done || s.dismissed) continue;
+        const fetched = s.pos?.offset ?? (s.pos?.branches ? s.pos.branches.reduce((n, b) => n + (b?.offset || 0), 0) : s.count || 0);
+        out.push({ runID: run.id, source, fetched, total: s.total || 0, reason: s.reason, pos: s.pos || null, retryAt: s.retryAt || null, retryHint: s.retryHint || "", error: s.error || s.note || "" });
+      }
+    }
+    return out;
+  }
+
+  /** Change the completeness entry of databases in a logged search (done by a later search, dismissed). */
+  async function markSources(libraryID, projectID, runID, sources, patch) {
+    const p = await get(libraryID, projectID);
+    const run = p?.runs?.find((r) => r.id === runID);
+    if (!run) return null;
+    for (const id of sources) if (run.perSource?.[id]) Object.assign(run.perSource[id], patch);
+    return save(libraryID, p);
+  }
+
   async function addRun(libraryID, id, run) {
     const p = await get(libraryID, id);
     if (!p) return;
@@ -422,6 +447,8 @@ ZR.Projects = (() => {
     list,
     get,
     byCollection,
+    incomplete,
+    markSources,
     reviewKey,
     slug,
     tagFor,
