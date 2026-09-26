@@ -3,9 +3,9 @@
     "zotero-researcher@zotero-plugin": {
       "updates": [
         {
-          "version": "0.13.1",
-          "update_link": "https://github.com/GeneralPawz/zotero-researcher/releases/download/v0.13.1/zotero-researcher-0.13.1.xpi",
-          "update_hash": "sha256:aef27a902e71458f4cad1b1c60f4cc97bce85d5a1e77da230fa46a5b1b8dec7d",
+          "version": "0.13.2",
+          "update_link": "https://github.com/GeneralPawz/zotero-researcher/releases/download/v0.13.2/zotero-researcher-0.13.2.xpi",
+          "update_hash": "sha256:ffeb9acc3d5ff1c7214784dadbd68fffa2bc0e7b50d0b776f2d1cf166d28a850",
           "applications": {
             "zotero": {
               "strict_min_version": "7.0",
