@@ -58,3 +58,17 @@ test("verdict tags are read case-insensitively and in common spellings", () => {
   eq(["include", "Exclude", "#maybe", "zr:include", "review:exclude", "important"].map(F.kindOfTag), ["include", "exclude", "maybe", "include", "exclude", null]);
   eq(Object.fromEntries(Object.entries(F.KINDS).map(([k, v]) => [k, v.color])), { include: "#5fb236", maybe: "#ffd400", exclude: "#ff6666" }, "Zotero's green / yellow / red");
 });
+
+test("the AI does not read the reference list", () => {
+  const ZR = load();
+  const body = "Introduction\n" + "We study BIM on site. ".repeat(40) + "\nMethods\nA survey.\n";
+  const refs = "\n7. References\n[1] Someone (2020) A paper.\n[2] Other (2021) Another.\n";
+  const out = ZR.FullText.withoutReferences(body + refs);
+  assert.equal(out.text.trim(), body.trim());
+  assert.ok(out.dropped > 40);
+  // a "References" heading early on (in a table of contents) is kept
+  const early = "Contents\nReferences\n" + body;
+  assert.equal(ZR.FullText.withoutReferences(early).dropped, 0);
+  // German heading
+  assert.ok(ZR.FullText.withoutReferences(body + "\nLiteraturverzeichnis\nMüller (2019).\n").dropped > 0);
+});

@@ -83,7 +83,22 @@ App.panels.review = (() => {
     cands = [];
   }
 
-  async function refresh() {
+  // A refresh replaces the papers (cands) with fresh objects from the pool file. Steps that
+  // work on the papers (rating, bulk decisions, …) wait for a running refresh first, so they
+  // never write into objects that are about to be thrown away.
+  let refreshing = null;
+  function refresh() {
+    const run = doRefresh();
+    refreshing = run;
+    const clear = () => refreshing === run && (refreshing = null);
+    run.then(clear, clear);
+    return run;
+  }
+  const settled = async () => {
+    while (refreshing) await refreshing.catch(() => {});
+  };
+
+  async function doRefresh() {
     const p = project();
     $("rv-start").hidden = !!p;
     $("rv-main").hidden = !p;
@@ -765,6 +780,7 @@ App.panels.review = (() => {
   }
 
   const api = {
+    settled,
     persistProtocol,
     rate: (all) => rateS1(all),
     bulk,
@@ -1071,13 +1087,19 @@ App.panels.review = (() => {
     $("s1-hist").hidden = ft || !rated.length;
     $("s1-thresholds").hidden = ft || !rated.length;
     if (!ft && rated.length) {
-      // Histogram of the undecided papers' probabilities, coloured by threshold band
+      // Histogram of the probabilities, coloured by threshold band: the undecided papers solid,
+      // the decided ones faded on top (so it still shows the pool once everything is decided)
       const bins = new Array(10).fill(0);
-      for (const c of todo) if (c.s1) bins[Math.min(9, Math.floor(c.s1.p * 10))]++;
-      const max = Math.max(1, ...bins);
+      const decided = new Array(10).fill(0);
+      for (const c of rated) (c[s] ? decided : bins)[Math.min(9, Math.floor(c.s1.p * 10))]++;
+      const max = Math.max(1, ...bins.map((n, i) => n + decided[i]));
+      const h = (n) => `height:${Math.round((n / max) * 100)}%`;
       $("s1-hist").replaceChildren(
         ...bins.map((n, i) =>
-          el("div", { class: "bin " + band((i + 0.5) / 10), title: `${i * 10}-${i * 10 + 10}%: ${n} undecided paper(s)` }, el("div", { class: "bar", style: `height:${Math.round((n / max) * 100)}%` }))
+          el("div", { class: "bin " + band((i + 0.5) / 10), title: `${i * 10}-${i * 10 + 10}%: ${n} undecided, ${decided[i]} decided` }, [
+            el("div", { class: "bar done", style: h(decided[i]) }),
+            el("div", { class: "bar", style: h(n) }),
+          ])
         ),
         el("div", { class: "axis" }, [el("span", { text: "0%" }), el("span", { text: "not relevant ← → relevant" }), el("span", { text: "100%" })])
       );
@@ -1276,17 +1298,21 @@ App.panels.review = (() => {
   }
 
   /** Rate the pool with System 1: the unrated papers, or everything when all is set (or nothing is unrated). */
+  /** @returns {Promise<{total, rated, failed, error}>} what came back (the autopilot checks it) */
   async function rateS1(all = false) {
+    await settled();
     const p = project();
-    if (!protocolFilled(p.protocol)) return st("Write the protocol first (step 1): System 1 rates each paper against your research questions and criteria.");
+    const fail = (error) => (st(error), { total: 0, rated: 0, failed: 0, error });
+    if (!protocolFilled(p.protocol)) return fail("Write the protocol first (step 1): System 1 rates each paper against your research questions and criteria.");
     const pop = population();
     const unrated = pop.filter((c) => !c.s1);
     const list = all || !unrated.length ? pop : unrated;
-    if (!list.length) return st("The pool is empty. Add papers in step 2 first.");
+    if (!list.length) return fail("The pool is empty. Add papers in step 2 first.");
     const eng = ZR.System1.engine();
     App.setBusy("review", true);
     let failed = 0;
     let lastError = "";
+    let rated = 0;
     try {
       st(`System 1 (${ENGINE_NAMES[eng]}) is rating ${list.length} paper(s)…`);
       const res = await ZR.System1.score(list, p.protocol, {
@@ -1296,8 +1322,16 @@ App.panels.review = (() => {
         onError: (c, e) => (failed++, (lastError = e.message)),
       });
       await ZR.Projects.setScores(libraryID(), p.id, "s1", res);
+      // into the papers shown now (a refresh may have replaced the list while rating)
+      const apply = () => {
+        for (const c of cands) if (res[c.key]) c.s1 = res[c.key];
+      };
       for (const c of list) if (res[c.key]) c.s1 = res[c.key];
+      apply();
+      await settled();
+      apply();
       const n = Object.keys(res).length;
+      rated = n;
       const learned = Object.values(res).find((r) => r.learned != null || r.trained);
       let dupNote = "";
       if (ZR.Embed.isAvailable()) {
@@ -1308,11 +1342,13 @@ App.panels.review = (() => {
         `Rated ${n} paper(s) with ${ENGINE_NAMES[eng]}${learned ? ` (with what the local model learned from ${learned.labels} of your decisions)` : ""}${failed ? `; ${failed} failed (${lastError})` : ""}. Papers are sorted by probability; set the thresholds to settle the clear cases.${dupNote}`
       );
     } catch (e) {
+      lastError = e.message;
       st("Rating failed: " + e.message);
     } finally {
       App.setBusy("review", false);
       renderScreen();
     }
+    return { total: list.length, rated, failed: rated ? failed : list.length, error: lastError };
   }
 
   async function bulk(kind) {
@@ -1865,24 +1901,30 @@ App.panels.review = (() => {
     } catch (e) {
       /* reported by annotateAI */
     }
-    const job = ZR.Jobs.start({ kind: "annotate", label: `Annotating full texts (${profileName})`, total: todo.length });
+    // Each paper is one AI call (its text and the criteria, no conversation); a few run at once
+    const parallel = Math.max(1, Math.min(6, ZR.Prefs.get("annoParallel", 3)));
+    const job = ZR.Jobs.start({ kind: "annotate", label: `Annotating full texts (${profileName}${parallel > 1 ? `, ${parallel} at a time` : ""})`, total: todo.length, parallel: parallel > 1 });
     let made = 0;
     let failed = 0;
     let done = 0;
+    let finished = 0;
     try {
-      for (const [i, c] of todo.entries()) {
-        if (!(await job.gate(ZR.Util.truncate(c.title, 80)))) break;
-        st(`Annotating ${i + 1}/${todo.length}: ${ZR.Util.truncate(c.title, 60)}…`);
+      await ZR.Util.mapLimit(todo, parallel, async (c) => {
+        if (!(await job.gate(ZR.Util.truncate(c.title, 80)))) return;
         try {
           made += (await annotateAI(c, { quiet: true })).created;
           done++;
         } catch (e) {
-          if (job.state === "stopping") break;
-          failed++;
-          ZR.Util.log("Annotating failed", c.title, e.message);
+          if (job.state !== "stopping") {
+            failed++;
+            ZR.Util.log("Annotating failed", c.title, e.message);
+          }
+        } finally {
+          job.release();
         }
-        job.progress({ done: i + 1, found: made, failed });
-      }
+        job.progress({ done: ++finished, found: made, failed });
+        st(`Annotated ${finished}/${todo.length}: ${ZR.Util.truncate(c.title, 60)}`);
+      });
       st(`The AI added ${made} annotation(s) to ${done} full text(s)${failed ? `; ${failed} failed (see Log)` : ""}${job.state === "stopping" ? " (stopped, the rest stays open)" : ""}.`);
     } finally {
       job.finish(`${made} annotation(s)`);
@@ -2102,10 +2144,15 @@ App.panels.review = (() => {
       text: "Find PDF",
       onclick: async (e) => {
         e.target.disabled = true;
-        st("Looking for a PDF…");
-        const ok = await ZR.Importer.attachFullText(item);
-        c.hasPDF = !!ok;
-        st(ok ? "PDF attached." : "No legally accessible PDF found. Attach one by hand, or exclude with “Full text not available”.");
+        st("Looking for a PDF… (under Work in progress in the footer)");
+        let ok = null;
+        try {
+          ok = await ZR.Jobs.run({ kind: "pdf", label: `Find PDF: ${ZR.Util.truncate(c.title, 50)}`, current: ZR.Util.truncate(c.title, 80), note: (r) => (r ? "PDF attached" : "no PDF found") }, () => ZR.Importer.attachFullText(item));
+          st(ok ? "PDF attached." : "No legally accessible PDF found. Attach one by hand, or exclude with “Full text not available”.");
+        } catch (err) {
+          st("Finding the PDF failed: " + err.message);
+        }
+        c.hasPDF = !!ok || c.hasPDF;
         renderScreen();
       },
     });

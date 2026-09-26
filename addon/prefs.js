@@ -32,3 +32,4 @@ pref("extensions.zotero-researcher.abstractSentences", false);
 pref("extensions.zotero-researcher.showQueryTerms", true);
 pref("extensions.zotero-researcher.botName", "Bot");
 pref("extensions.zotero-researcher.annoMax", 10);
+pref("extensions.zotero-researcher.annoParallel", 3);

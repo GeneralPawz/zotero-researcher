@@ -40,6 +40,8 @@
       <html:div><html:input id="zr-bot-name" type="text" size="16" preference="extensions.zotero-researcher.botName"/><html:div class="zr-help">Full-text annotations written by the AI carry this author name, so they are told apart from yours.</html:div></html:div>
       <html:label for="zr-anno-max">AI annotations per paper</html:label>
       <html:input id="zr-anno-max" type="number" min="1" max="40" preference="extensions.zotero-researcher.annoMax"/>
+      <html:label for="zr-anno-parallel">Papers annotated at once</html:label>
+      <html:div><html:input id="zr-anno-parallel" type="number" min="1" max="6" preference="extensions.zotero-researcher.annoParallel"/><html:div class="zr-help">Each paper is one AI call with its text and the criteria. More at once is faster; lower it if your provider limits requests per minute.</html:div></html:div>
     </html:div>
     <html:p class="zr-help">Abstracts are justified and hyphenated. Select text in an abstract and right-click to highlight it as evidence for include, maybe or exclude, or to add a note; your highlights are kept with the paper as a note in Zotero.</html:p>
   </groupbox>

@@ -46,6 +46,7 @@ const Autopilot = (window.Autopilot = (() => {
         if (typeof v !== "function" || !ASYNC_OPS.has(name)) return v;
         return async (...args) => {
           checkStop();
+          await target.settled?.(); // a review refresh still loading the papers
           const r = await v(...args);
           checkStop();
           return r;
@@ -892,12 +893,13 @@ const Autopilot = (window.Autopilot = (() => {
   }
 
   async function doScreen() {
-    App.showTab("review");
+    await App.showTab("review");
     await R().go("screen");
     let attempt = state().attempt || 0;
     for (;;) {
       await say("System 1 is rating the pool…", "info");
-      await API().rate(true);
+      const rating = await API().rate(true);
+      await API().settled();
       const cands = API().population();
       if (!cands.length) {
         await say("The pool is empty, so there is nothing to screen. Let's adjust the search.", "warn");
@@ -905,7 +907,16 @@ const Autopilot = (window.Autopilot = (() => {
         return "search";
       }
       const summary = ZR().Autopilot.screeningSummary(cands, API().thresholds());
-      await say(`System 1 rated **${summary.pool}** papers.`, "info", {
+      // No ratings: nothing to judge. Say why instead of asking the AI about empty numbers.
+      if (!summary.rated) {
+        const c = await ask(`System 1 did not rate any of the **${summary.pool}** papers${rating?.error ? `: ${rating.error}` : "."} Without ratings the screening cannot be judged.`, [
+          { id: "retry", label: "Try again", primary: true },
+          { id: "pause", label: "Pause, I'll check the System 1 settings" },
+        ]);
+        if (c.choice === "pause") return "pause";
+        continue;
+      }
+      await say(`System 1 rated **${summary.rated}** of ${summary.pool} papers.`, "info", {
         blocks: [
           {
             type: "split",
@@ -915,7 +926,13 @@ const Autopilot = (window.Autopilot = (() => {
               { kind: "inc", label: "above the include threshold", n: summary.aboveInclude },
             ],
           },
-          { type: "facts", rows: [["Its suggestions", `${summary.suggest.include} include, ${summary.suggest.maybe} maybe, ${summary.suggest.exclude} exclude`]] },
+          {
+            type: "facts",
+            rows: [
+              ["Its suggestions", `${summary.suggest.include} include, ${summary.suggest.maybe} maybe, ${summary.suggest.exclude} exclude`],
+              ...(summary.rated < summary.pool ? [["Not rated", `${summary.pool - summary.rated}${rating?.error ? ` (${rating.error})` : ""}; the AI reads these with the uncertain ones`]] : []),
+            ],
+          },
         ],
       });
       await say("Checking whether that is plausible…", "info");

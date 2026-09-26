@@ -21,7 +21,7 @@ ZR.Jobs = (() => {
   };
 
   /**
-   * @param {{kind: string, label: string, total?: number, queued?: boolean}} o
+   * @param {{kind: string, label: string, total?: number, queued?: boolean, parallel?: boolean}} o
    * kind: "pdf" | "crawler" | "ai" | "annotate" | … (only for the icon and the grouping)
    */
   function start(o) {
@@ -38,6 +38,8 @@ ZR.Jobs = (() => {
       started: o.queued ? 0 : now(),
       ended: 0,
       itemStarted: 0,
+      parallel: !!o.parallel,
+      active: 0,
       note: "",
       _wake: null,
       /** Before each paper: waits while paused; false when the job should stop. */
@@ -47,9 +49,15 @@ ZR.Jobs = (() => {
         while (job.state === "paused") await new Promise((r) => (job._wake = r));
         if (job.state === "stopping" || job.state === "stopped") return false;
         job.current = current;
-        job.itemStarted = now();
+        // several papers at once (parallel): stopping cancels everything started since the
+        // oldest paper still in work; each paper calls release() when it is done
+        if (!job.parallel || !job.active) job.itemStarted = now();
+        if (job.parallel) job.active++;
         emit();
         return true;
+      },
+      release() {
+        job.active = Math.max(0, job.active - 1);
       },
       begin() {
         if (job.state !== "queued") return;
@@ -74,6 +82,29 @@ ZR.Jobs = (() => {
     if (jobs.length > 40) jobs.splice(0, jobs.length - 40);
     emit();
     return job;
+  }
+
+  /**
+   * One task (a single paper) as a job, so it shows under Work in progress and can be
+   * stopped. fn(job) returns the result; a truthy result counts as found.
+   * note(result) is the line shown when it is done.
+   */
+  async function run(o, fn) {
+    const job = start(Object.assign({ total: 1 }, o));
+    try {
+      if (!(await job.gate(o.current || ""))) {
+        job.finish();
+        return null;
+      }
+      const r = await fn(job);
+      job.progress({ done: 1, found: r ? 1 : 0 });
+      job.finish(o.note ? o.note(r) : "");
+      return r;
+    } catch (e) {
+      job.progress({ done: 1, failed: job.state === "stopping" ? 0 : 1 });
+      job.finish(job.state === "stopping" ? "" : e.message);
+      throw e;
+    }
   }
 
   const get = (id) => jobs.find((j) => j.id === id);
@@ -112,6 +143,7 @@ ZR.Jobs = (() => {
 
   return {
     start,
+    run,
     get,
     pause,
     resume,

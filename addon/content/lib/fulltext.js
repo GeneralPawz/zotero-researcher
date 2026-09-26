@@ -297,6 +297,16 @@ ZR.FullText = (() => {
     return Zotero.Reader.open(annotation.attachmentID, { annotationID: annotation.key });
   }
 
+  // The reference list says nothing about eligibility but is often a fifth of a paper
+  const BACK = /\n[ \t]*(?:\d{1,2}\.?|[IVX]{1,4}\.)?[ \t]*(references|bibliography|literature cited|works cited|reference list|literatur|literaturverzeichnis|quellen|quellenverzeichnis|références|bibliographie|referencias|bibliografía|riferimenti bibliografici)[ \t]*:?[ \t]*\n/gi;
+
+  /** The text without its reference list (cut at the last such heading in the second half). */
+  function withoutReferences(text) {
+    let cut = -1;
+    for (const m of String(text).matchAll(BACK)) if (m.index > text.length * 0.5) cut = m.index;
+    return cut > 0 ? { text: text.slice(0, cut), dropped: text.length - cut } : { text, dropped: 0 };
+  }
+
   /**
    * Let the AI annotate a paper's full text for a review. Writes Zotero annotations and
    * returns {created, notFound, total, summary}.
@@ -308,7 +318,8 @@ ZR.FullText = (() => {
     const doc = await documentOf(att, { onProgress: (p) => onStatus(`Zotero is analysing the PDF… ${Math.round(p)}%`) });
     // Long texts: the passages that matter for the criteria (local model), else the beginning
     const budget = 45000;
-    let text = doc.text.replace(/\n{3,}/g, "\n\n");
+    // quotes are still found in the whole document; the AI just does not read the references
+    let text = withoutReferences(doc.text.replace(/\n{3,}/g, "\n\n")).text;
     if (text.length > budget) {
       const queries = [...(protocol.inclusion || []), ...(protocol.exclusion || []), ...(protocol.questions || [])];
       text = ZR.Embed?.isAvailable() && queries.length ? await ZR.Embed.passages(`sdt:${att.libraryID}/${att.key}`, text, queries, { budget }) : text.slice(0, budget);
@@ -340,5 +351,5 @@ ZR.FullText = (() => {
     docs.clear();
   }
 
-  return { KINDS, kindOfTag, botName, runRects, buildDocument, locate, position, pdfOf, documentOf, saveAnnotation, annotationsOf, setKind, open, annotateWithAI, projectsFor, _reset };
+  return { KINDS, kindOfTag, botName, runRects, buildDocument, locate, position, pdfOf, documentOf, saveAnnotation, annotationsOf, setKind, open, annotateWithAI, withoutReferences, projectsFor, _reset };
 })();

@@ -393,8 +393,9 @@ textarea.mono { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace;
 .queue-ai > button { align-self: flex-start; }
 .s1-head { font-size: 12px; }
 .s1-hist { display: grid; grid-template-columns: repeat(10, 1fr); gap: 2px; height: 58px; align-items: end; position: relative; padding-bottom: 14px; }
-.s1-hist .bin { height: 44px; display: flex; align-items: flex-end; }
-.s1-hist .bar { width: 100%; min-height: 1px; border-radius: 2px 2px 0 0; }
+.s1-hist .bin { height: 44px; display: flex; flex-direction: column; justify-content: flex-end; border-bottom: 1px solid var(--line); overflow: hidden; border-radius: 2px 2px 0 0; }
+.s1-hist .bar { width: 100%; flex: none; }
+.s1-hist .bar.done { opacity: 0.3; }
 .s1-hist .lo .bar { background: var(--bad); }
 .s1-hist .md .bar { background: var(--mid); }
 .s1-hist .hi .bar { background: var(--good); }
