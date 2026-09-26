@@ -534,7 +534,8 @@ ZR.UI = (() => {
     rerender(body, item);
     try {
       if (kind === "pdf") {
-        const att = await ZR.Importer.attachFullText(item);
+        const title = item.getField("title") || "";
+        const att = await ZR.Jobs.run({ kind: "pdf", label: `Find PDF: ${U.truncate(title, 50)}`, current: U.truncate(title, 80), note: (r) => (r ? "PDF attached" : "no PDF found") }, () => ZR.Importer.attachFullText(item));
         state.section.set(item.id, { message: att ? "PDF attached." : "No accessible PDF found.", error: !att });
       } else {
         const p = kind === "llm" ? await ZR.Enrich.llmAssisted(item, ZR.Prefs.getActiveLLMProfile()) : await ZR.Enrich.deterministic(item);

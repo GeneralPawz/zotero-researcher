@@ -170,22 +170,34 @@ App.panels.items = (() => {
     let got = 0;
     let had = 0;
     let done = 0;
-    await ZR.Util.mapLimit(items, 2, async (item) => {
-      if (ZR.Importer.hasFile(item)) {
-        had++;
-        selState.set(item.id, { ok: true, message: "already has a PDF" });
-      } else {
-        selState.set(item.id, { status: "running" });
+    const job = ZR.Jobs.start({ kind: "pdf", label: `Find PDFs (${items.length} selected)`, total: items.length });
+    try {
+      await ZR.Util.mapLimit(items, 2, async (item) => {
+        if (ZR.Importer.hasFile(item)) {
+          had++;
+          selState.set(item.id, { ok: true, message: "already has a PDF" });
+        } else {
+          if (!(await job.gate(ZR.Util.truncate(item.getField("title"), 80)))) return;
+          selState.set(item.id, { status: "running" });
+          render();
+          let att = null;
+          try {
+            att = await ZR.Importer.attachFullText(item);
+          } catch (e) {
+            job.failed++;
+          }
+          if (att) got++;
+          selState.set(item.id, att ? { ok: true, message: "PDF attached" } : { error: true, message: "no legally accessible PDF found" });
+        }
+        done++;
+        job.progress({ done, found: got });
+        st(`Checked ${done} of ${items.length}…`);
         render();
-        const att = await ZR.Importer.attachFullText(item);
-        if (att) got++;
-        selState.set(item.id, att ? { ok: true, message: "PDF attached" } : { error: true, message: "no legally accessible PDF found" });
-      }
-      done++;
-      st(`Checked ${done} of ${items.length}…`);
-      render();
-    });
-    App.setBusy("items", false);
+      });
+    } finally {
+      job.finish(`${got} found, ${had} had one`);
+      App.setBusy("items", false);
+    }
     st(`PDFs added: ${got} · already had one: ${had} · not found: ${items.length - got - had}`);
   }
 
